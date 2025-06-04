@@ -1,0 +1,27 @@
+{
+  "name": "wish-broad",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "deploy": "wrangler deploy --minify"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.0.12",
+    "@cloudflare/workers-types": "^4.20250429.0",
+    "@openapitools/openapi-generator-cli": "^2.20.0",
+    "prettier": "^3.5.3",
+    "typescript": "5.8.3",
+    "vite": "^6.3.1",
+    "wrangler": "^4.13.2"
+  },
+  "dependencies": {
+    "@eyevinn/webrtc-player": "^0.13.0",
+    "@hono/oauth-providers": "^0.7.1",
+    "hono": "^4.7.8"
+  }
+}
