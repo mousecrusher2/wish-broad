@@ -13,7 +13,6 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.0.12",
     "@cloudflare/workers-types": "^4.20250429.0",
-    "@openapitools/openapi-generator-cli": "^2.20.0",
     "prettier": "^3.5.3",
     "typescript": "5.8.3",
     "vite": "^6.3.1",
@@ -21,7 +20,7 @@
   },
   "dependencies": {
     "@eyevinn/webrtc-player": "^0.13.0",
-    "@hono/oauth-providers": "^0.7.1",
+    "@hono/oauth-providers": "^0.8.1",
     "hono": "^4.7.8"
   }
 }
