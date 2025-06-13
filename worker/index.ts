@@ -1,14 +1,15 @@
 import { Hono } from "hono";
-import {
-  NewSessionResponse,
-  NewTracksResponse,
-  TrackLocator,
-  JWTPayload,
-  Bindings,
-} from "./types";
+import { JWTPayload, Bindings } from "./types";
 import * as db from "./database";
 import { getGuildMember } from "./discord";
 import { calculateJwtTimestamps, JWT_DURATION_SECONDS } from "./jwt-utils";
+import {
+  CallsClient,
+  startIngest,
+  startPlay,
+  CallsApiError,
+  LiveNotFoundError,
+} from "./calls";
 import { StatusCode } from "hono/utils/http-status";
 import { logger } from "hono/logger";
 import { bearerAuth } from "hono/bearer-auth";
@@ -48,47 +49,46 @@ app.options("/ingest/:liveId/:settionId?", async () => {
 app
   .post("/ingest/:liveId", async (c) => {
     const { liveId } = c.req.param();
-    const CallsEndpoint = `https://rtc.live.cloudflare.com/v1/apps/${c.env.CALLS_APP_ID}`;
-    const CallsEndpointHeaders = {
-      Authorization: `Bearer ${c.env.CALLS_APP_SECRET}`,
-    };
-    const newSessionResult = (await (
-      await fetch(`${CallsEndpoint}/sessions/new`, {
-        method: "POST",
-        headers: CallsEndpointHeaders,
-      })
-    ).json()) as NewSessionResponse;
-    const newTracksBody = {
-      sessionDescription: {
-        type: "offer",
-        sdp: await c.req.text(),
-      },
-      autoDiscover: true,
-    };
-    const newTracksResult = (await (
-      await fetch(
-        `${CallsEndpoint}/sessions/${newSessionResult.sessionId}/tracks/new`,
-        {
-          method: "POST",
-          headers: CallsEndpointHeaders,
-          body: JSON.stringify(newTracksBody),
-        }
-      )
-    ).json()) as NewTracksResponse;
-    const tracks = newTracksResult.tracks.map((track) => {
-      return {
-        location: "remote",
-        sessionId: newSessionResult.sessionId,
-        trackName: track.trackName,
-      };
-    }) as TrackLocator[];
-    await db.setTracks(c.env.LIVE_DB, liveId, tracks);
-    return c.body(newTracksResult.sessionDescription.sdp, 201, {
-      "content-type": "application/sdp",
-      "protocol-version": "draft-ietf-wish-whip-06",
-      etag: `"${newSessionResult.sessionId}"`,
-      location: `/ingest/${liveId}/${newSessionResult.sessionId}`,
+
+    // Calls APIクライアントを初期化
+    const callsClient = new CallsClient({
+      appId: c.env.CALLS_APP_ID,
+      appSecret: c.env.CALLS_APP_SECRET,
     });
+    try {
+      const sdpOffer = await c.req.text();
+      if (!sdpOffer || sdpOffer.trim().length === 0) {
+        return c.body("SDP offer is required", 400);
+      }
+      const result = await startIngest(callsClient, liveId, sdpOffer);
+
+      // トラック情報をデータベースに保存（session_idも含める）
+      await db.setTracks(
+        c.env.LIVE_DB,
+        liveId,
+        result.sessionId,
+        result.tracks
+      );
+
+      return c.body(result.sdpAnswer, 201, {
+        "content-type": "application/sdp",
+        "protocol-version": "draft-ietf-wish-whip-06",
+        etag: `"${result.sessionId}"`,
+        location: `/ingest/${liveId}/${result.sessionId}`,
+      });
+    } catch (error) {
+      console.error(`Failed to start ingest for live ${liveId}:`, error);
+
+      if (error instanceof CallsApiError) {
+        return c.body(`Calls API error: ${error.message}`, 500);
+      }
+
+      if (error instanceof Error) {
+        return c.body(`Failed to start ingest: ${error.message}`, 500);
+      }
+
+      return c.body("Failed to start ingest: Unknown error", 500);
+    }
   })
   .all(async (c) => {
     return c.body("Not supported", 400);
@@ -118,11 +118,17 @@ app.use("/login", async (c, next) => {
     throw new HTTPException(401, { message: "Unauthorized" });
   }
   await next();
-  await revokeToken(
-    c.env.DISCORD_CLIENT_ID,
-    c.env.DISCORD_CLIENT_SECRET,
-    oauthToken.token
-  );
+
+  try {
+    await revokeToken(
+      c.env.DISCORD_CLIENT_ID,
+      c.env.DISCORD_CLIENT_SECRET,
+      oauthToken.token
+    );
+  } catch (error) {
+    // トークン取り消しの失敗は致命的ではないので、ログのみ出力
+    console.warn("Failed to revoke OAuth token:", error);
+  }
 });
 
 // Discord認証とJWT発行エンドポイント
@@ -133,35 +139,45 @@ app.get("/login", async (c) => {
   if (!user || !oauthToken) {
     throw new HTTPException(401, { message: "Unauthorized" });
   }
-
   // ユーザーが認証済みギルドのメンバーかどうかをチェック
   let member;
   try {
     member = await getGuildMember(oauthToken.token, c.env.AUTHORIZED_GUILD_ID);
   } catch (error) {
-    console.error("Error fetching guild member:", error);
+    console.error(`Error fetching guild member for user ${user.id}:`, error);
+
+    if (error instanceof Error) {
+      return c.body(`Unauthorized: ${error.message}`, 401);
+    }
+
     return c.body("Unauthorized: Failed to fetch guild member", 401);
   }
 
-  const { iat, exp } = calculateJwtTimestamps(JWT_DURATION_SECONDS.ONE_DAY);
-  const payload: JWTPayload = {
-    iat,
-    exp,
-    userId: member.user.id,
-    displayName: member.nick || member.user.global_name || member.user.username,
-  };
-  const jwtToken = await sign(payload, c.env.JWT_SECRET, "HS256");
+  try {
+    const { iat, exp } = calculateJwtTimestamps(JWT_DURATION_SECONDS.ONE_DAY);
+    const payload: JWTPayload = {
+      iat,
+      exp,
+      userId: member.user.id,
+      displayName:
+        member.nick || member.user.global_name || member.user.username,
+    };
+    const jwtToken = await sign(payload, c.env.JWT_SECRET, "HS256");
 
-  // 本番環境ではsecure: true、ローカル開発ではsecure: false
-  const isProduction = c.env.ENVIRONMENT === "production";
+    // 本番環境ではsecure: true、ローカル開発ではsecure: false
+    const isProduction = c.env.ENVIRONMENT === "production";
 
-  setCookie(c, "authtoken", jwtToken, {
-    expires: new Date(Date.now() + JWT_DURATION_SECONDS.ONE_DAY * 1000),
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: "Strict",
-  });
-  return c.redirect("/");
+    setCookie(c, "authtoken", jwtToken, {
+      expires: new Date(Date.now() + JWT_DURATION_SECONDS.ONE_DAY * 1000),
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: "Strict",
+    });
+    return c.redirect("/");
+  } catch (error) {
+    console.error(`Failed to generate JWT for user ${member.user.id}:`, error);
+    return c.body("Failed to generate authentication token", 500);
+  }
 });
 
 // ライブ視聴用エンドポイントの認証ミドルウェア
@@ -184,49 +200,45 @@ app
     console.log(
       `User ${jwtPayload.displayName} (${jwtPayload.userId}) is trying to play live: ${liveId}`
     );
-    const CallsEndpoint = `https://rtc.live.cloudflare.com/v1/apps/${c.env.CALLS_APP_ID}`;
-    const CallsEndpointHeaders = {
-      Authorization: `Bearer ${c.env.CALLS_APP_SECRET}`,
-    };
-    const tracks = await db.getTracks(c.env.LIVE_DB, liveId);
-    if (tracks.length === 0) {
-      return c.body("Live not started yet", 404);
-    }
-    const newSessionResult = (await (
-      await fetch(`${CallsEndpoint}/sessions/new`, {
-        method: "POST",
-        headers: CallsEndpointHeaders,
-      })
-    ).json()) as NewSessionResponse;
-    const remoteOffer = await c.req.text();
-    const newTracksBody = {
-      tracks: tracks,
-      ...(remoteOffer.length > 0
-        ? {
-            sessionDescription: {
-              type: "offer",
-              sdp: remoteOffer,
-            },
-          }
-        : {}),
-    };
-    const newTracksResult = (await (
-      await fetch(
-        `${CallsEndpoint}/sessions/${newSessionResult.sessionId}/tracks/new`,
-        {
-          method: "POST",
-          headers: CallsEndpointHeaders,
-          body: JSON.stringify(newTracksBody),
-        }
-      )
-    ).json()) as NewTracksResponse;
-    return c.body(newTracksResult.sessionDescription.sdp, 201, {
-      "access-control-expose-headers": "location",
-      "content-type": "application/sdp",
-      "protocol-version": "draft-ietf-wish-whep-00",
-      etag: `"${newSessionResult.sessionId}"`,
-      location: `/play/${liveId}/${newSessionResult.sessionId}`,
+
+    // Calls APIクライアントを初期化
+    const callsClient = new CallsClient({
+      appId: c.env.CALLS_APP_ID,
+      appSecret: c.env.CALLS_APP_SECRET,
     });
+    try {
+      const tracks = await db.getTracks(c.env.LIVE_DB, liveId);
+      const sdpOffer = await c.req.text();
+
+      const result = await startPlay(callsClient, liveId, tracks, sdpOffer);
+
+      return c.body(result.sdpAnswer, 201, {
+        "access-control-expose-headers": "location",
+        "content-type": "application/sdp",
+        "protocol-version": "draft-ietf-wish-whep-00",
+        etag: `"${result.sessionId}"`,
+        location: `/play/${liveId}/${result.sessionId}`,
+      });
+    } catch (error) {
+      console.error(
+        `Failed to start play for live ${liveId} by user ${jwtPayload.userId}:`,
+        error
+      );
+
+      if (error instanceof LiveNotFoundError) {
+        return c.body(`Live stream not found: ${liveId}`, 404);
+      }
+
+      if (error instanceof CallsApiError) {
+        return c.body(`Calls API error: ${error.message}`, 500);
+      }
+
+      if (error instanceof Error) {
+        return c.body(`Failed to start play: ${error.message}`, 500);
+      }
+
+      return c.body("Failed to start play: Unknown error", 500);
+    }
   })
   .all(async (c) => {
     return c.body("Not supported", 404);
@@ -236,29 +248,45 @@ app
 app
   .delete("/play/:liveId/:sessionId", async (c) => {
     return c.body("OK", 200);
-  })
-  // ICE候補やセッション再交渉用のPATCHエンドポイント
+  }) // ICE候補やセッション再交渉用のPATCHエンドポイント
   .patch(async (c) => {
-    const CallsEndpoint = `https://rtc.live.cloudflare.com/v1/apps/${c.env.CALLS_APP_ID}`;
-    const CallsEndpointHeaders = {
-      Authorization: `Bearer ${c.env.CALLS_APP_SECRET}`,
-    };
     const { sessionId } = c.req.param();
-    const renegotiateBody = {
-      sessionDescription: {
-        type: "answer",
-        sdp: await c.req.text(),
-      },
-    };
-    const renegotiateResponse = await fetch(
-      `${CallsEndpoint}/sessions/${sessionId}/renegotiate`,
-      {
-        method: "PUT",
-        headers: CallsEndpointHeaders,
-        body: JSON.stringify(renegotiateBody),
+
+    // Calls APIクライアントを初期化
+    const callsClient = new CallsClient({
+      appId: c.env.CALLS_APP_ID,
+      appSecret: c.env.CALLS_APP_SECRET,
+    });
+
+    try {
+      const sdpAnswer = await c.req.text();
+      if (!sdpAnswer || sdpAnswer.trim().length === 0) {
+        return c.body("SDP answer is required", 400);
       }
-    );
-    return c.body(null, renegotiateResponse.status as StatusCode);
+
+      const response = await callsClient.renegotiateSession(
+        sessionId,
+        sdpAnswer
+      );
+      return c.body(null, response.status as StatusCode);
+    } catch (error) {
+      console.error(`Failed to renegotiate session ${sessionId}:`, error);
+      if (error instanceof CallsApiError) {
+        console.error(`Calls API error details:`, {
+          statusCode: error.statusCode,
+          statusText: error.statusText,
+          endpoint: error.endpoint,
+          responseBody: error.responseBody,
+        });
+        return c.text(`Calls API error: ${error.message}`, 500);
+      }
+
+      if (error instanceof Error) {
+        return c.body(`Failed to renegotiate session: ${error.message}`, 500);
+      }
+
+      return c.body("Failed to renegotiate session: Unknown error", 500);
+    }
   });
 
 // API routes用の認証ミドルウェア
@@ -286,23 +314,29 @@ app.get("/api/me", async (c) => {
 // トークンは作成時にのみ表示される
 app.post("/api/me/livetoken", async (c) => {
   const jwtPayload = c.get("jwtPayload") as JWTPayload;
-  const userId = jwtPayload.userId;  // ランダムなトークンを生成（32バイト）
+  const userId = jwtPayload.userId; // ランダムなトークンを生成（32バイト）
   const randomBytes = new Uint8Array(32);
   crypto.getRandomValues(randomBytes);
-  const token = Array.from(randomBytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  const token = Array.from(randomBytes, (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
 
   try {
     // データベースに保存（既存があれば上書き）
-    await db.setLiveToken(c.env.LIVE_DB, userId, token);    return c.json({
+    await db.setLiveToken(c.env.LIVE_DB, userId, token);
+    return c.json({
       success: true,
       token: token,
     });
   } catch (error) {
     console.error("Failed to save live token:", error);
-    return c.json({
-      success: false,
-      error: "トークンの保存に失敗しました。",
-    }, 500);
+    return c.json(
+      {
+        success: false,
+        error: "トークンの保存に失敗しました。",
+      },
+      500
+    );
   }
 });
 
@@ -312,10 +346,20 @@ app.get("/api/me/livetoken", async (c) => {
   const jwtPayload = c.get("jwtPayload") as JWTPayload;
   const userId = jwtPayload.userId;
 
-  const hasToken = await db.hasLiveToken(c.env.LIVE_DB, userId);
-  return c.json({
-    hasToken: hasToken,
-  });
+  try {
+    const hasToken = await db.hasLiveToken(c.env.LIVE_DB, userId);
+    return c.json({
+      hasToken: hasToken,
+    });
+  } catch (error) {
+    console.error(`Failed to check live token for user ${userId}:`, error);
+    return c.json(
+      {
+        error: "トークン状況の確認に失敗しました。",
+      },
+      500
+    );
+  }
 });
 
 export default app;
