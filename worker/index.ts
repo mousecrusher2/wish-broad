@@ -7,7 +7,6 @@ import {
   CallsClient,
   startIngest,
   startPlay,
-  CallsApiError,
   LiveNotFoundError,
 } from "./calls";
 import { StatusCode } from "hono/utils/http-status";
@@ -58,7 +57,7 @@ app
     try {
       const sdpOffer = await c.req.text();
       if (!sdpOffer || sdpOffer.trim().length === 0) {
-        return c.body("SDP offer is required", 400);
+        throw new HTTPException(400, { message: "SDP offer is required" });
       }
       const result = await startIngest(callsClient, liveId, sdpOffer);
 
@@ -79,27 +78,29 @@ app
     } catch (error) {
       console.error(`Failed to start ingest for live ${liveId}:`, error);
 
-      if (error instanceof CallsApiError) {
-        return c.body(`Calls API error: ${error.message}`, 500);
+      if (error instanceof HTTPException) {
+        throw error;
       }
 
-      if (error instanceof Error) {
-        return c.body(`Failed to start ingest: ${error.message}`, 500);
-      }
-
-      return c.body("Failed to start ingest: Unknown error", 500);
+      // サーバーエラーはそのまま例外を素通りさせる
+      throw error;
     }
   })
-  .all(async (c) => {
-    return c.body("Not supported", 400);
+  .all(async (_c) => {
+    throw new HTTPException(400, { message: "Not supported" });
   });
 
 // ライブ配信終了エンドポイント
 // 配信セッションを削除し、関連データを清理
 app.delete("/ingest/:liveId/:sessionId", async (c) => {
   const { liveId } = c.req.param();
-  await db.deleteTracks(c.env.LIVE_DB, liveId);
-  return c.text("OK", 200);
+  try {
+    await db.deleteTracks(c.env.LIVE_DB, liveId);
+    return c.text("OK", 200);
+  } catch (error) {
+    console.error(`Failed to delete tracks for live ${liveId}:`, error);
+    throw error;
+  }
 });
 
 // Discord OAuth認証設定
@@ -138,8 +139,7 @@ app.get("/login", async (c) => {
   const oauthToken = c.get("token");
   if (!user || !oauthToken) {
     throw new HTTPException(401, { message: "Unauthorized" });
-  }
-  // ユーザーが認証済みギルドのメンバーかどうかをチェック
+  } // ユーザーが認証済みギルドのメンバーかどうかをチェック
   let member;
   try {
     member = await getGuildMember(oauthToken.token, c.env.AUTHORIZED_GUILD_ID);
@@ -147,10 +147,14 @@ app.get("/login", async (c) => {
     console.error(`Error fetching guild member for user ${user.id}:`, error);
 
     if (error instanceof Error) {
-      return c.body(`Unauthorized: ${error.message}`, 401);
+      throw new HTTPException(401, {
+        message: `Unauthorized: ${error.message}`,
+      });
     }
 
-    return c.body("Unauthorized: Failed to fetch guild member", 401);
+    throw new HTTPException(401, {
+      message: "Unauthorized: Failed to fetch guild member",
+    });
   }
 
   try {
@@ -176,7 +180,7 @@ app.get("/login", async (c) => {
     return c.redirect("/");
   } catch (error) {
     console.error(`Failed to generate JWT for user ${member.user.id}:`, error);
-    return c.body("Failed to generate authentication token", 500);
+    throw error;
   }
 });
 
@@ -246,24 +250,22 @@ app
         `Failed to start play for live ${liveId} by user ${jwtPayload.userId}:`,
         error
       );
+      if (error instanceof HTTPException) {
+        throw error;
+      }
 
       if (error instanceof LiveNotFoundError) {
-        return c.body(`Live stream not found: ${liveId}`, 404);
+        throw new HTTPException(404, {
+          message: `Live stream not found: ${liveId}`,
+        });
       }
 
-      if (error instanceof CallsApiError) {
-        return c.body(`Calls API error: ${error.message}`, 500);
-      }
-
-      if (error instanceof Error) {
-        return c.body(`Failed to start play: ${error.message}`, 500);
-      }
-
-      return c.body("Failed to start play: Unknown error", 500);
+      // サーバーエラーはそのまま例外を素通りさせる
+      throw error;
     }
   })
-  .all(async (c) => {
-    return c.body("Not supported", 404);
+  .all(async (_c) => {
+    throw new HTTPException(404, { message: "Not supported" });
   });
 
 // ライブ視聴セッション管理エンドポイント
@@ -283,7 +285,7 @@ app
     try {
       const sdpAnswer = await c.req.text();
       if (!sdpAnswer || sdpAnswer.trim().length === 0) {
-        return c.body("SDP answer is required", 400);
+        throw new HTTPException(400, { message: "SDP answer is required" });
       }
 
       const response = await callsClient.renegotiateSession(
@@ -293,21 +295,12 @@ app
       return c.body(null, response.status as StatusCode);
     } catch (error) {
       console.error(`Failed to renegotiate session ${sessionId}:`, error);
-      if (error instanceof CallsApiError) {
-        console.error(`Calls API error details:`, {
-          statusCode: error.statusCode,
-          statusText: error.statusText,
-          endpoint: error.endpoint,
-          responseBody: error.responseBody,
-        });
-        return c.text(`Calls API error: ${error.message}`, 500);
+      if (error instanceof HTTPException) {
+        throw error;
       }
 
-      if (error instanceof Error) {
-        return c.body(`Failed to renegotiate session: ${error.message}`, 500);
-      }
-
-      return c.body("Failed to renegotiate session: Unknown error", 500);
+      // サーバーエラーはそのまま例外を素通りさせる
+      throw error;
     }
   });
 
@@ -342,7 +335,6 @@ app.post("/api/me/livetoken", async (c) => {
   const token = Array.from(randomBytes, (byte) =>
     byte.toString(16).padStart(2, "0")
   ).join("");
-
   try {
     // データベースに保存（既存があれば上書き）
     await db.setLiveToken(c.env.LIVE_DB, userId, token);
@@ -352,13 +344,7 @@ app.post("/api/me/livetoken", async (c) => {
     });
   } catch (error) {
     console.error("Failed to save live token:", error);
-    return c.json(
-      {
-        success: false,
-        error: "トークンの保存に失敗しました。",
-      },
-      500
-    );
+    throw error;
   }
 });
 
@@ -367,7 +353,6 @@ app.post("/api/me/livetoken", async (c) => {
 app.get("/api/me/livetoken", async (c) => {
   const jwtPayload = c.get("jwtPayload") as JWTPayload;
   const userId = jwtPayload.userId;
-
   try {
     const hasToken = await db.hasLiveToken(c.env.LIVE_DB, userId);
     return c.json({
@@ -375,12 +360,7 @@ app.get("/api/me/livetoken", async (c) => {
     });
   } catch (error) {
     console.error(`Failed to check live token for user ${userId}:`, error);
-    return c.json(
-      {
-        error: "トークン状況の確認に失敗しました。",
-      },
-      500
-    );
+    throw error;
   }
 });
 
