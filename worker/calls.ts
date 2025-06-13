@@ -21,7 +21,10 @@ export class LiveNotFoundError extends Error {
 }
 
 // レスポンスチェック用ユーティリティ
-async function checkCallsApiResponse(response: Response, endpoint: string): Promise<void> {
+async function checkCallsApiResponse(
+  response: Response,
+  endpoint: string
+): Promise<void> {
   if (!response.ok) {
     let responseBody;
     try {
@@ -35,7 +38,12 @@ async function checkCallsApiResponse(response: Response, endpoint: string): Prom
       }
     }
 
-    throw new CallsApiError(response.status, response.statusText, endpoint, responseBody);
+    throw new CallsApiError(
+      response.status,
+      response.statusText,
+      endpoint,
+      responseBody
+    );
   }
 }
 
@@ -70,7 +78,10 @@ export class CallsClient {
   /**
    * 配信者用：新しいトラックを作成（WHIP）
    */
-  async createIngestTracks(sessionId: string, sdpOffer: string): Promise<NewTracksResponse> {
+  async createIngestTracks(
+    sessionId: string,
+    sdpOffer: string
+  ): Promise<NewTracksResponse> {
     const body = {
       sessionDescription: {
         type: "offer",
@@ -127,7 +138,10 @@ export class CallsClient {
   /**
    * セッション再交渉（ICE候補やセッション再交渉用）
    */
-  async renegotiateSession(sessionId: string, sdpAnswer: string): Promise<Response> {
+  async renegotiateSession(
+    sessionId: string,
+    sdpAnswer: string
+  ): Promise<Response> {
     const body = {
       sessionDescription: {
         type: "answer",
@@ -144,8 +158,27 @@ export class CallsClient {
       },
       body: JSON.stringify(body),
     });
-      await checkCallsApiResponse(response, endpoint);
+    await checkCallsApiResponse(response, endpoint);
     return response;
+  } /**
+   * セッションが継続しているか確認
+   */
+  async isSessionActive(sessionId: string): Promise<boolean> {
+    const endpoint = `${this.endpoint}/sessions/${sessionId}`;
+    const response = await fetch(endpoint, {
+      method: "GET",
+      headers: this.headers,
+    });
+
+    try {
+      await checkCallsApiResponse(response, endpoint);
+      return true; // ステータスコード200ならセッションはアクティブ
+    } catch (error) {
+      if (error instanceof CallsApiError && error.statusCode === 404) {
+        return false; // セッションが見つからない場合は非アクティブ
+      }
+      throw error; // その他のエラーは再スロー
+    }
   }
 }
 
@@ -165,7 +198,10 @@ export async function startIngest(
   const sessionResult = await callsClient.createSession();
 
   // 配信者からのSDP Offerを使ってトラックを作成
-  const tracksResult = await callsClient.createIngestTracks(sessionResult.sessionId, sdpOffer);
+  const tracksResult = await callsClient.createIngestTracks(
+    sessionResult.sessionId,
+    sdpOffer
+  );
 
   // トラック情報を整理
   const tracks = tracksResult.tracks.map((track) => ({
@@ -206,7 +242,6 @@ export async function startPlay(
     tracks,
     sdpOffer
   );
-
   return {
     sessionId: sessionResult.sessionId,
     sdpAnswer: tracksResult.sessionDescription.sdp,

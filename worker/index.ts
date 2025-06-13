@@ -208,8 +208,30 @@ app
     });
     try {
       const tracks = await db.getTracks(c.env.LIVE_DB, liveId);
-      const sdpOffer = await c.req.text();
 
+      // トラックが存在し、セッションチェックが必要な場合のみチェック実行
+      if (tracks.length > 0) {
+        const shouldCheck = await db.shouldCheckSession(c.env.LIVE_DB, liveId);
+
+        if (shouldCheck) {
+          // セッションアクティブチェック
+          const ingestSessionId = tracks[0]?.sessionId;
+          if (ingestSessionId) {
+            const isActive = await callsClient.isSessionActive(ingestSessionId);
+
+            if (!isActive) {
+              // セッションが終了している場合、データベースからレコードを削除
+              await db.deleteInactiveSession(c.env.LIVE_DB, liveId);
+              throw new LiveNotFoundError(liveId);
+            }
+
+            // セッションチェック時刻を更新
+            await db.updateSessionCheckTime(c.env.LIVE_DB, liveId);
+          }
+        }
+      }
+
+      const sdpOffer = await c.req.text();
       const result = await startPlay(callsClient, liveId, tracks, sdpOffer);
 
       return c.body(result.sdpAnswer, 201, {

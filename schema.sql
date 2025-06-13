@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS live_tracks (
     live_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     tracks_json TEXT NOT NULL,
+    last_session_check DATETIME DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
