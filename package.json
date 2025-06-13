@@ -2,9 +2,10 @@
   "name": "wish-broad",
   "private": true,
   "version": "0.0.0",
-  "type": "module",
-  "scripts": {
+  "type": "module",  "scripts": {
     "dev": "vite",
+    "dev:worker": "wrangler dev --local",
+    "dev:full": "wrangler dev",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",

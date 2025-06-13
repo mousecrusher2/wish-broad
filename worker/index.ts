@@ -1,48 +1,21 @@
 import { Hono } from "hono";
-import { NewSessionResponse, NewTracksResponse, TrackLocator } from "./types";
+import {
+  NewSessionResponse,
+  NewTracksResponse,
+  TrackLocator,
+  JWTPayload,
+  Bindings,
+} from "./types";
+import * as db from "./database";
+import { getGuildMember } from "./discord";
+import { calculateJwtTimestamps, JWT_DURATION_SECONDS } from "./jwt-utils";
 import { StatusCode } from "hono/utils/http-status";
-import { DurableObject } from "cloudflare:workers";
 import { logger } from "hono/logger";
 import { bearerAuth } from "hono/bearer-auth";
 import { setCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { discordAuth, revokeToken } from "@hono/oauth-providers/discord";
 import { jwt, sign } from "hono/jwt";
-
-interface Env {
-  CALLS_API: string;
-  CALLS_APP_ID: string;
-  CALLS_APP_SECRET: string;
-  LIVE_STORE: DurableObjectNamespace<LiveStore>;
-}
-
-export class LiveStore extends DurableObject {
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-  }
-
-  async setTracks(tracks: TrackLocator[]): Promise<void> {
-    await this.ctx.storage.put("tracks", tracks);
-  }
-
-  async getTracks(): Promise<TrackLocator[]> {
-    return (await this.ctx.storage.get("tracks")) || [];
-  }
-
-  async deleteTracks(): Promise<void> {
-    await this.ctx.storage.delete("tracks");
-  }
-}
-
-export type Bindings = {
-  CALLS_APP_ID: string;
-  CALLS_APP_SECRET: string;
-  INGEST_BEARER_TOKEN: string;
-  JWT_SECRET: string;
-  DISCORD_CLIENT_ID: string;
-  DISCORD_CLIENT_SECRET: string;
-  LIVE_STORE: DurableObjectNamespace<LiveStore>;
-};
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -71,7 +44,6 @@ app.options("/ingest/:liveId/:settionId?", async () => {
 app
   .post("/ingest/:liveId", async (c) => {
     const { liveId } = c.req.param();
-    let stub = c.env.LIVE_STORE.get(c.env.LIVE_STORE.idFromName(liveId));
     const CallsEndpoint = `https://rtc.live.cloudflare.com/v1/apps/${c.env.CALLS_APP_ID}`;
     const CallsEndpointHeaders = {
       Authorization: `Bearer ${c.env.CALLS_APP_SECRET}`,
@@ -106,7 +78,7 @@ app
         trackName: track.trackName,
       };
     }) as TrackLocator[];
-    await stub.setTracks(tracks);
+    await db.setTracks(c.env.LIVE_DB, liveId, tracks);
     return c.body(newTracksResult.sessionDescription.sdp, 201, {
       "content-type": "application/sdp",
       "protocol-version": "draft-ietf-wish-whip-06",
@@ -120,8 +92,7 @@ app
 
 app.delete("/ingest/:liveId/:sessionId", async (c) => {
   const { liveId } = c.req.param();
-  let stub = c.env.LIVE_STORE.get(c.env.LIVE_STORE.idFromName(liveId));
-  stub.deleteTracks();
+  await db.deleteTracks(c.env.LIVE_DB, liveId);
   return c.text("OK", 200);
 });
 
@@ -129,40 +100,55 @@ app.use("/login", async (c, next) => {
   return discordAuth({
     client_id: c.env.DISCORD_CLIENT_ID,
     client_secret: c.env.DISCORD_CLIENT_SECRET,
-    scope: ["identify", "guilds"],
+    scope: ["identify", "guilds", "guilds.members.read"],
   })(c, next);
 });
 
 app.use("/login", async (c, next) => {
-  const token = c.get("token");
-  if (!token) {
+  const oauthToken = c.get("token");
+  if (!oauthToken) {
     throw new HTTPException(401, { message: "Unauthorized" });
   }
   await next();
   await revokeToken(
     c.env.DISCORD_CLIENT_ID,
     c.env.DISCORD_CLIENT_SECRET,
-    token.token
+    oauthToken.token
   );
 });
 
 app.get("/login", async (c) => {
   const user = c.get("user-discord");
-  if (!user) {
+  const oauthToken = c.get("token");
+  if (!user || !oauthToken) {
     throw new HTTPException(401, { message: "Unauthorized" });
   }
-  if (user.id !== "890371776893292574") {
-    return c.body("Unauthorized", 401);
+
+  // ユーザーが認証済みギルドのメンバーかどうかをチェック
+  let member;
+  try {
+    member = await getGuildMember(oauthToken.token, c.env.AUTHORIZED_GUILD_ID);
+  } catch (error) {
+    console.error("Error fetching guild member:", error);
+    return c.body("Unauthorized: Failed to fetch guild member", 401);
   }
-  const payload = {
-    iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24,
+
+  const { iat, exp } = calculateJwtTimestamps(JWT_DURATION_SECONDS.ONE_DAY);
+  const payload: JWTPayload = {
+    iat,
+    exp,
+    userId: member.user.id,
+    displayName: member.nick || member.user.global_name || member.user.username,
   };
-  const token = await sign(payload, c.env.JWT_SECRET, "HS256");
-  setCookie(c, "authtoken", token, {
-    expires: new Date(Date.now() + 60 * 60 * 24 * 1000),
+  const jwtToken = await sign(payload, c.env.JWT_SECRET, "HS256");
+
+  // 本番環境ではsecure: true、ローカル開発ではsecure: false
+  const isProduction = c.env.ENVIRONMENT === "production";
+
+  setCookie(c, "authtoken", jwtToken, {
+    expires: new Date(Date.now() + JWT_DURATION_SECONDS.ONE_DAY * 1000),
     httpOnly: true,
-    // secure: true,
+    secure: isProduction,
     sameSite: "Strict",
   });
   return c.redirect("/");
@@ -176,15 +162,42 @@ app.use("/play/*", async (c, next) => {
   })(c, next);
 });
 
+// API routes用の認証ミドルウェア
+app.use("/api/*", async (c, next) => {
+  return jwt({
+    secret: c.env.JWT_SECRET,
+    cookie: "authtoken",
+    alg: "HS256",
+  })(c, next);
+});
+
+// ユーザー情報を取得するAPIエンドポイント
+app.get("/api/user", async (c) => {
+  const jwtPayload = c.get("jwtPayload") as JWTPayload;
+
+  return c.json({
+    success: true,
+    user: {
+      userId: jwtPayload.userId,
+      displayName: jwtPayload.displayName,
+    },
+  });
+});
+
 app
   .post("/play/:liveId", async (c) => {
     const { liveId } = c.req.param();
+
+    // JWTペイロードからユーザー情報を取得してログ出力
+    const jwtPayload = c.get("jwtPayload") as JWTPayload;
+    console.log(
+      `User ${jwtPayload.displayName} (${jwtPayload.userId}) is trying to play live: ${liveId}`
+    );
     const CallsEndpoint = `https://rtc.live.cloudflare.com/v1/apps/${c.env.CALLS_APP_ID}`;
     const CallsEndpointHeaders = {
       Authorization: `Bearer ${c.env.CALLS_APP_SECRET}`,
     };
-    let stub = c.env.LIVE_STORE.get(c.env.LIVE_STORE.idFromName(liveId));
-    const tracks = (await stub.getTracks()) as TrackLocator[];
+    const tracks = await db.getTracks(c.env.LIVE_DB, liveId);
     if (tracks.length === 0) {
       return c.body("Live not started yet", 404);
     }
