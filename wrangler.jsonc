@@ -2,9 +2,11 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "whip-worker",
   "main": "worker/index.ts",
-  "compatibility_date": "2025-04-27",  // "compatibility_flags": [
+  "compatibility_date": "2025-04-27",
+  // "compatibility_flags": [
   //   "nodejs_compat"
-  // ],  // "vars": {
+  // ],
+  // "vars": {
   //   "AUTHORIZED_GUILD_ID": "your-discord-guild-id-here",
   //   "ENVIRONMENT": "development"
   // },
@@ -12,11 +14,11 @@
     {
       "binding": "LIVE_DB",
       "database_name": "live-database",
-      "database_id": "your-database-id-here"
-    }
+      "database_id": "your-database-id-here",
+    },
   ],
   "assets": {
     "not_found_handling": "none",
-    "run_worker_first": false
-  }
+    "run_worker_first": false,
+  },
 }

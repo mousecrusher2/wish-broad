@@ -1,11 +1,6 @@
 async function load(resource: string) {
   const resourceUrl = new URL(`/play/${resource}`, location.origin);
   const pc = new RTCPeerConnection({
-    // iceServers: [
-    //   {
-    //     urls: "stun:stun.cloudflare.com:3478",
-    //   },
-    // ],
     bundlePolicy: "max-bundle",
   });
 
