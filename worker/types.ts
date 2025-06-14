@@ -51,3 +51,12 @@ export type DiscordGuildMember = {
   user: DiscordUser;
   nick?: string;
 }
+
+export type User = {
+  userId: string;
+  displayName: string;
+}
+
+export type Live = {
+  owner: User;
+}

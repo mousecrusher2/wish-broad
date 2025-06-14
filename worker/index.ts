@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { JWTPayload, Bindings } from "./types";
+import { JWTPayload, Bindings, DiscordGuildMember } from "./types";
 import * as db from "./database";
 import { getGuildMember } from "./discord";
 import { calculateJwtTimestamps, JWT_DURATION_SECONDS } from "./jwt-utils";
@@ -150,7 +150,7 @@ app.get("/login", async (c) => {
   if (!user || !oauthToken) {
     throw new HTTPException(401, { message: "Unauthorized" });
   } // ユーザーが認証済みギルドのメンバーかどうかをチェック
-  let member;
+  let member: DiscordGuildMember;
   try {
     member = await getGuildMember(oauthToken.token, c.env.AUTHORIZED_GUILD_ID);
   } catch (error) {
@@ -167,31 +167,33 @@ app.get("/login", async (c) => {
     });
   }
 
-  try {
-    const { iat, exp } = calculateJwtTimestamps(JWT_DURATION_SECONDS.ONE_DAY);
-    const payload: JWTPayload = {
-      iat,
-      exp,
-      userId: member.user.id,
-      displayName:
-        member.nick || member.user.global_name || member.user.username,
-    };
-    const jwtToken = await sign(payload, c.env.JWT_SECRET, "HS256");
+  const displayName =
+    member.nick || member.user.global_name || member.user.username;
 
-    // 本番環境ではsecure: true、ローカル開発ではsecure: false
-    const isProduction = c.env.ENVIRONMENT === "production";
+  await db.setUser(c.env.LIVE_DB, {
+    userId: member.user.id,
+    displayName,
+  });
 
-    setCookie(c, "authtoken", jwtToken, {
-      expires: new Date(Date.now() + JWT_DURATION_SECONDS.ONE_DAY * 1000),
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: "Strict",
-    });
-    return c.redirect("/");
-  } catch (error) {
-    console.error(`Failed to generate JWT for user ${member.user.id}:`, error);
-    throw error;
-  }
+  const { iat, exp } = calculateJwtTimestamps(JWT_DURATION_SECONDS.ONE_DAY);
+  const payload: JWTPayload = {
+    iat,
+    exp,
+    userId: member.user.id,
+    displayName,
+  };
+  const jwtToken = await sign(payload, c.env.JWT_SECRET, "HS256");
+
+  // 本番環境ではsecure: true、ローカル開発ではsecure: false
+  const isProduction = c.env.ENVIRONMENT === "production";
+
+  setCookie(c, "authtoken", jwtToken, {
+    expires: new Date(Date.now() + JWT_DURATION_SECONDS.ONE_DAY * 1000),
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: "Strict",
+  });
+  return c.redirect("/");
 });
 
 // ライブ視聴用エンドポイントの認証ミドルウェア
@@ -370,6 +372,11 @@ app.get("/api/me/livetoken", async (c) => {
     console.error(`Failed to check live token for user ${userId}:`, error);
     throw error;
   }
+});
+
+app.get("/api/lives", async (c) => {
+  const lives = await db.getAllLives(c.env.LIVE_DB);
+  return c.json(lives);
 });
 
 export default app;

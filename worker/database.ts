@@ -1,4 +1,4 @@
-import { TrackLocator } from "./types";
+import { Live, TrackLocator, User } from "./types";
 
 // D1データベースでTrackLocatorを管理する関数群
 export async function setTracks(
@@ -130,4 +130,47 @@ export async function hasLiveToken(
     .first();
 
   return !!result;
+}
+
+export async function setUser(database: D1Database, user: User): Promise<void> {
+  await database
+    .prepare(
+      "INSERT OR REPLACE INTO users (user_id, display_name) VALUES (?, ?)"
+    )
+    .bind(user.userId, user.displayName)
+    .run();
+}
+
+export async function getUser(
+  database: D1Database,
+  userId: string
+): Promise<User | null> {
+  const result = await database
+    .prepare("SELECT user_id, display_name FROM users WHERE user_id = ?")
+    .bind(userId)
+    .first();
+
+  if (!result) {
+    return null;
+  }
+
+  return {
+    userId: result.user_id as string,
+    displayName: result.display_name as string,
+  };
+}
+
+export async function getAllLives(database: D1Database): Promise<Live[]> {
+  const results = await database
+    .prepare(
+      "SELECT user_id, display_name FROM live_tracks JOIN users ON live_tracks.user_id = users.user_id"
+    )
+    .all();
+
+  return results.results.map((row) => ({
+    owner: {
+      userId: row.user_id as string,
+      displayName: row.display_name as string,
+    },
+  }));
 }
