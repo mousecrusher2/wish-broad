@@ -135,3 +135,89 @@ video {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* 認証関連のスタイル */
+.loading-container, .login-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 50vh;
+  padding: 2rem;
+  text-align: center;
+}
+
+.login-button {
+  margin-top: 1rem;
+  padding: 0.8rem 1.5rem;
+  font-size: 1.1rem;
+  background-color: #646cff;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.25s;
+}
+
+.login-button:hover {
+  background-color: #535bf2;
+}
+
+.login-button:disabled {
+  background-color: #888;
+  cursor: not-allowed;
+}
+
+.user-info {
+  grid-column: 1 / -1;
+  padding: 0.5rem;
+  background-color: rgba(100, 108, 255, 0.1);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+}
+
+.user-info p {
+  margin: 0;
+  color: #646cff;
+  font-weight: 500;
+}
+
+/* 配信選択のスタイル */
+.stream-selection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.stream-selection label {
+  font-weight: 500;
+  color: #646cff;
+}
+
+.stream-selection select {
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background-color: #1a1a1a;
+  color: rgba(255, 255, 255, 0.87);
+  cursor: pointer;
+}
+
+.stream-selection select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.stream-selection select:focus {
+  outline: 2px solid #646cff;
+  outline-offset: 2px;
+}
+
+@media (prefers-color-scheme: light) {
+  .stream-selection select {
+    background-color: #f9f9f9;
+    color: #213547;
+    border-color: #ddd;
+  }
+}

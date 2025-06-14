@@ -163,7 +163,7 @@ export async function getUser(
 export async function getAllLives(database: D1Database): Promise<Live[]> {
   const results = await database
     .prepare(
-      "SELECT user_id, display_name FROM live_tracks JOIN users ON live_tracks.user_id = users.user_id"
+      "SELECT users.user_id, display_name FROM live_tracks JOIN users ON live_tracks.user_id = users.user_id"
     )
     .all();
 
