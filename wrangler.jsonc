@@ -13,8 +13,8 @@
   "d1_databases": [
     {
       "binding": "LIVE_DB",
-      "database_name": "live-database",
-      "database_id": "your-database-id-here",
+      "database_name": "broad-db",
+      "database_id": "2d57ee62-6f7c-490a-974f-5df3b194a860",
     },
   ],
   "assets": {
