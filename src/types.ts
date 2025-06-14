@@ -1,22 +1,22 @@
 // 共通の型定義
 
 export interface User {
-  userId: string
-  displayName: string
+  userId: string;
+  displayName: string;
 }
 
 export interface AuthState {
-  user: User | null
-  isLoading: boolean
-  isAuthenticated: boolean
+  user: User | null;
+  isLoading: boolean;
+  isAuthenticated: boolean;
 }
 
 export interface WHEPPlayerProps {
-  user: User
+  user: User;
 }
 
 export interface LoginPromptProps {
-  onLogin: () => void
+  onLogin: () => void;
 }
 
 export type Live = {

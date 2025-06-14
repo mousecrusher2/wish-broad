@@ -1,223 +1,424 @@
 :root {
-  line-height: 1.5;
-  font-weight: 400;
+    line-height: 1.5;
+    font-weight: 400;
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
+    color-scheme: light dark;
+    color: rgba(255, 255, 255, 0.87);
+    background-color: #242424;
 
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
 a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+    font-weight: 500;
+    color: #646cff;
+    text-decoration: inherit;
 }
+
 a:hover {
-  color: #535bf2;
+    color: #535bf2;
 }
 
 body {
-  margin: 0;
+    margin: 0;
 }
 
 h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+    font-size: 3.2em;
+    line-height: 1.1;
 }
 
 #app {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 2rem;
+    text-align: center;
 }
 
 .logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
+    height: 6em;
+    padding: 1.5em;
+    will-change: filter;
+    transition: filter 300ms;
 }
+
 .logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
+    filter: drop-shadow(0 0 2em #646cffaa);
 }
+
 .logo.vanilla:hover {
-  filter: drop-shadow(0 0 2em #3178c6aa);
+    filter: drop-shadow(0 0 2em #3178c6aa);
 }
 
 .card {
-  padding: 2em;
+    padding: 2em;
 }
 
 .read-the-docs {
-  color: #888;
+    color: #888;
 }
 
 button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    padding: 0.6em 1.2em;
+    font-size: 1em;
+    font-weight: 500;
+    font-family: inherit;
+    background-color: #1a1a1a;
+    cursor: pointer;
+    transition: border-color 0.25s;
 }
+
 button:hover {
-  border-color: #646cff;
+    border-color: #646cff;
 }
+
 button:focus,
 button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+    outline: 4px auto -webkit-focus-ring-color;
 }
 
 @media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+    :root {
+        color: #213547;
+        background-color: #ffffff;
+    }
+
+    a:hover {
+        color: #747bff;
+    }
+
+    button {
+        background-color: #f9f9f9;
+    }
 }
 
 /* Styles are safe to ignore, just here for demo */
 html {
-  color-scheme: light dark;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
-  background: white;
-  color: black;
+    color-scheme: light dark;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+    background: white;
+    color: black;
 }
 
 body,
 h1,
 h2 {
-  margin: 0;
+    margin: 0;
 }
 
 h1,
 h2 {
-  font-weight: 400;
+    font-weight: 400;
 }
 
 h1 {
-  font-size: 1.5rem;
-  grid-column: 1 / -1;
+    font-size: 1.5rem;
+    grid-column: 1 / -1;
 }
 
 h2 {
-  font-size: 1rem;
-  margin-bottom: 0.5rem;
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
 }
 
 video {
-  width: 100%;
+    width: 100%;
 }
 
 .grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 1rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 1rem;
 }
 
 @media (max-width: 500px) {
-  .grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+    .grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 
 /* 認証関連のスタイル */
-.loading-container, .login-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 50vh;
-  padding: 2rem;
-  text-align: center;
+.loading-container,
+.login-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 50vh;
+    padding: 2rem;
+    text-align: center;
 }
 
 .login-button {
-  margin-top: 1rem;
-  padding: 0.8rem 1.5rem;
-  font-size: 1.1rem;
-  background-color: #646cff;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: background-color 0.25s;
+    margin-top: 1rem;
+    padding: 0.8rem 1.5rem;
+    font-size: 1.1rem;
+    background-color: #646cff;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.25s;
 }
 
 .login-button:hover {
-  background-color: #535bf2;
+    background-color: #535bf2;
 }
 
 .login-button:disabled {
-  background-color: #888;
-  cursor: not-allowed;
+    background-color: #888;
+    cursor: not-allowed;
 }
 
 .user-info {
-  grid-column: 1 / -1;
-  padding: 0.5rem;
-  background-color: rgba(100, 108, 255, 0.1);
-  border-radius: 8px;
-  margin-bottom: 1rem;
+    grid-column: 1 / -1;
+    padding: 0.5rem;
+    background-color: rgba(100, 108, 255, 0.1);
+    border-radius: 8px;
+    margin-bottom: 1rem;
 }
 
 .user-info p {
-  margin: 0;
-  color: #646cff;
-  font-weight: 500;
+    margin: 0;
+    color: #646cff;
+    font-weight: 500;
 }
 
 /* 配信選択のスタイル */
 .stream-selection {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
 }
 
 .stream-selection label {
-  font-weight: 500;
-  color: #646cff;
+    font-weight: 500;
+    color: #646cff;
 }
 
 .stream-selection select {
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  border: 1px solid #ccc;
-  border-radius: 8px;
-  background-color: #1a1a1a;
-  color: rgba(255, 255, 255, 0.87);
-  cursor: pointer;
+    padding: 0.6em 1.2em;
+    font-size: 1em;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    background-color: #1a1a1a;
+    color: rgba(255, 255, 255, 0.87);
+    cursor: pointer;
 }
 
 .stream-selection select:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+    opacity: 0.6;
+    cursor: not-allowed;
 }
 
 .stream-selection select:focus {
-  outline: 2px solid #646cff;
-  outline-offset: 2px;
+    outline: 2px solid #646cff;
+    outline-offset: 2px;
+}
+
+.selected-stream-info {
+    margin-top: 0.5rem;
+    padding: 0.8rem;
+    background-color: rgba(100, 108, 255, 0.1);
+    border-radius: 8px;
+    border-left: 3px solid #646cff;
+}
+
+.selected-stream-info p {
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+.stream-owner {
+    font-weight: 600;
+    color: #646cff;
+}
+
+.stream-text {
+    color: rgba(255, 255, 255, 0.7);
+    font-style: italic;
+}
+
+.stream-id {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.85rem;
+}
+
+/* 接続状態表示 */
+.connection-status {
+  margin-top: 0.5rem;
+  padding: 0.6rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.connection-status.connecting {
+  background-color: rgba(255, 193, 7, 0.1);
+  border-left: 3px solid #ffc107;
+}
+
+.connection-status.connected {
+  background-color: rgba(40, 167, 69, 0.1);
+  border-left: 3px solid #28a745;
+}
+
+.connection-status.reconnecting {
+  background-color: rgba(255, 193, 7, 0.1);
+  border-left: 3px solid #ffc107;
+}
+
+.connection-status.failed {
+  background-color: rgba(220, 53, 69, 0.1);
+  border-left: 3px solid #dc3545;
+}
+
+.connection-status p {
+  margin: 0 0 0.5rem 0;
+}
+
+.status-text {
+  margin-left: 0.5rem;
+  font-weight: 500;
+}
+
+.reconnect-button {
+  background-color: #dc3545;
+  color: white;
+  border: none;
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background-color 0.25s;
+}
+
+.reconnect-button:hover {
+  background-color: #c82333;
 }
 
 @media (prefers-color-scheme: light) {
-  .stream-selection select {
-    background-color: #f9f9f9;
-    color: #213547;
-    border-color: #ddd;
+    .stream-selection select {
+        background-color: #f9f9f9;
+        color: #213547;
+        border-color: #ddd;
+    }
+
+    .selected-stream-info {
+        background-color: rgba(100, 108, 255, 0.05);
+    }
+
+    .stream-text {
+        color: rgba(33, 53, 71, 0.7);
+    }
+
+    .stream-id {
+        color: rgba(33, 53, 71, 0.5);
+    }
+
+    .connection-status.connecting {
+    background-color: rgba(255, 193, 7, 0.05);
+  }
+
+  .connection-status.connected {
+    background-color: rgba(40, 167, 69, 0.05);
+  }
+
+  .connection-status.reconnecting {
+    background-color: rgba(255, 193, 7, 0.05);
+  }
+
+  .connection-status.failed {
+    background-color: rgba(220, 53, 69, 0.05);
+  }
+}
+
+/* プレイヤープレースホルダー */
+.no-stream-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 2px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  margin: 1rem 0;
+}
+
+.no-stream-placeholder p {
+  color: rgba(255, 255, 255, 0.6);
+  font-style: italic;
+  margin: 0;
+}
+
+@media (prefers-color-scheme: light) {
+  .no-stream-placeholder {
+    background-color: rgba(0, 0, 0, 0.02);
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+
+  .no-stream-placeholder p {
+    color: rgba(0, 0, 0, 0.6);
+  }
+}
+
+/* スタイリッシュなビデオプレイヤー */
+.video-player-container {
+  position: relative;
+  max-width: 800px;
+  margin: 1rem auto;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  background: linear-gradient(145deg, #2a2a2a, #1a1a1a);
+}
+
+.styled-video-player {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 12px;
+  background-color: #000;
+}
+
+.styled-video-player::-webkit-media-controls-panel {
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+}
+
+.styled-video-player::-webkit-media-controls-play-button,
+.styled-video-player::-webkit-media-controls-fullscreen-button,
+.styled-video-player::-webkit-media-controls-volume-slider,
+.styled-video-player::-webkit-media-controls-timeline {
+  filter: brightness(1.2) contrast(1.1);
+}
+
+/* カスタムコントロールオーバーレイ */
+.video-player-container::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #646cff, #535bf2);
+  z-index: 1;
+  opacity: 0.8;
+}
+
+@media (prefers-color-scheme: light) {
+  .video-player-container {
+    background: linear-gradient(145deg, #f8f9fa, #e9ecef);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  }
+}
+
+@media (max-width: 768px) {
+  .video-player-container {
+    margin: 1rem;
   }
 }
