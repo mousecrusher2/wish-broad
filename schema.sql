@@ -1,6 +1,6 @@
 -- D1データベースのスキーマ
 -- liveidにつき1行で、TrackLocator配列のJSONを保存する
-
+-- liveidはuser_id
 CREATE TABLE IF NOT EXISTS live_tracks (
     live_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,

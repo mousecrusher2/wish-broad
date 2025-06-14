@@ -22,8 +22,16 @@ const app = new Hono<{ Bindings: Bindings }>();
 app.use(logger());
 
 // 配信取り込み用エンドポイントの認証ミドルウェア
-app.use("/ingest/*", async (c, next) => {
-  return bearerAuth({ token: c.env.INGEST_BEARER_TOKEN })(c, next);
+app.use("/ingest/:liveId/*", async (c, next) => {
+  const { liveId } = c.req.param();
+
+  // liveIdでデータベースからトークンを取得
+  const expectedToken = await db.getLiveToken(c.env.LIVE_DB, liveId);
+  if (!expectedToken) {
+    throw new HTTPException(401, { message: "No token found for this live ID" });
+  }
+
+  return bearerAuth({ token: expectedToken })(c, next);
 });
 
 // WHIP配信用のCORSプリフライトリクエスト処理
