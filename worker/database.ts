@@ -3,26 +3,26 @@ import { TrackLocator } from "./types";
 // D1データベースでTrackLocatorを管理する関数群
 export async function setTracks(
   database: D1Database,
-  liveId: string,
+  userId: string,
   sessionId: string,
   tracks: TrackLocator[]
 ): Promise<void> {
   const tracksJson = JSON.stringify(tracks);
   await database
     .prepare(
-      "INSERT OR REPLACE INTO live_tracks (live_id, session_id, tracks_json, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)"
+      "INSERT OR REPLACE INTO live_tracks (user_id, session_id, tracks_json) VALUES (?, ?, ?)"
     )
-    .bind(liveId, sessionId, tracksJson)
+    .bind(userId, sessionId, tracksJson)
     .run();
 }
 
 export async function getTracks(
   database: D1Database,
-  liveId: string
+  userId: string
 ): Promise<TrackLocator[]> {
   const result = await database
-    .prepare("SELECT tracks_json FROM live_tracks WHERE live_id = ?")
-    .bind(liveId)
+    .prepare("SELECT tracks_json FROM live_tracks WHERE user_id = ?")
+    .bind(userId)
     .first();
 
   if (!result) {
@@ -34,11 +34,11 @@ export async function getTracks(
 
 export async function deleteTracks(
   database: D1Database,
-  liveId: string
+  userId: string
 ): Promise<void> {
   await database
-    .prepare("DELETE FROM live_tracks WHERE live_id = ?")
-    .bind(liveId)
+    .prepare("DELETE FROM live_tracks WHERE user_id = ?")
+    .bind(userId)
     .run();
 }
 
@@ -48,11 +48,11 @@ export async function deleteTracks(
  */
 export async function shouldCheckSession(
   database: D1Database,
-  liveId: string
+  userId: string
 ): Promise<boolean> {
   const result = await database
-    .prepare("SELECT last_session_check FROM live_tracks WHERE live_id = ?")
-    .bind(liveId)
+    .prepare("SELECT last_session_check FROM live_tracks WHERE user_id = ?")
+    .bind(userId)
     .first();
 
   if (!result || !result.last_session_check) {
@@ -71,13 +71,13 @@ export async function shouldCheckSession(
  */
 export async function updateSessionCheckTime(
   database: D1Database,
-  liveId: string
+  userId: string
 ): Promise<void> {
   await database
     .prepare(
-      "UPDATE live_tracks SET last_session_check = CURRENT_TIMESTAMP WHERE live_id = ?"
+      "UPDATE live_tracks SET last_session_check = CURRENT_TIMESTAMP WHERE user_id = ?"
     )
-    .bind(liveId)
+    .bind(userId)
     .run();
 }
 
@@ -86,11 +86,11 @@ export async function updateSessionCheckTime(
  */
 export async function deleteInactiveSession(
   database: D1Database,
-  liveId: string
+  userId: string
 ): Promise<void> {
   await database
-    .prepare("DELETE FROM live_tracks WHERE live_id = ?")
-    .bind(liveId)
+    .prepare("DELETE FROM live_tracks WHERE user_id = ?")
+    .bind(userId)
     .run();
 }
 
@@ -102,7 +102,7 @@ export async function setLiveToken(
 ): Promise<void> {
   await database
     .prepare(
-      "INSERT OR REPLACE INTO live_tokens (user_id, token, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)"
+      "INSERT OR REPLACE INTO live_tokens (user_id, token) VALUES (?, ?)"
     )
     .bind(userId, token)
     .run();

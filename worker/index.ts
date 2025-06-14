@@ -22,20 +22,22 @@ const app = new Hono<{ Bindings: Bindings }>();
 app.use(logger());
 
 // 配信取り込み用エンドポイントの認証ミドルウェア
-app.use("/ingest/:liveId/*", async (c, next) => {
-  const { liveId } = c.req.param();
+app.use("/ingest/:userId/*", async (c, next) => {
+  const { userId } = c.req.param();
 
-  // liveIdでデータベースからトークンを取得
-  const expectedToken = await db.getLiveToken(c.env.LIVE_DB, liveId);
+  // userIdでデータベースからトークンを取得
+  const expectedToken = await db.getLiveToken(c.env.LIVE_DB, userId);
   if (!expectedToken) {
-    throw new HTTPException(401, { message: "No token found for this live ID" });
+    throw new HTTPException(401, {
+      message: "No token found for this user ID",
+    });
   }
 
   return bearerAuth({ token: expectedToken })(c, next);
 });
 
 // WHIP配信用のCORSプリフライトリクエスト処理
-app.options("/ingest/:liveId/:settionId?", async () => {
+app.options("/ingest/:userId/:settionId?", async () => {
   return new Response(null, {
     status: 204,
     headers: {
@@ -54,8 +56,8 @@ app.options("/ingest/:liveId/:settionId?", async () => {
 // ライブ配信開始エンドポイント（WHIP）
 // 配信者からのSDP Offerを受け取り、Cloudflareセッションを作成
 app
-  .post("/ingest/:liveId", async (c) => {
-    const { liveId } = c.req.param();
+  .post("/ingest/:userId", async (c) => {
+    const { userId } = c.req.param();
 
     // Calls APIクライアントを初期化
     const callsClient = new CallsClient({
@@ -67,12 +69,12 @@ app
       if (!sdpOffer || sdpOffer.trim().length === 0) {
         throw new HTTPException(400, { message: "SDP offer is required" });
       }
-      const result = await startIngest(callsClient, liveId, sdpOffer);
+      const result = await startIngest(callsClient, userId, sdpOffer);
 
       // トラック情報をデータベースに保存（session_idも含める）
       await db.setTracks(
         c.env.LIVE_DB,
-        liveId,
+        userId,
         result.sessionId,
         result.tracks
       );
@@ -81,10 +83,10 @@ app
         "content-type": "application/sdp",
         "protocol-version": "draft-ietf-wish-whip-06",
         etag: `"${result.sessionId}"`,
-        location: `/ingest/${liveId}/${result.sessionId}`,
+        location: `/ingest/${userId}/${result.sessionId}`,
       });
     } catch (error) {
-      console.error(`Failed to start ingest for live ${liveId}:`, error);
+      console.error(`Failed to start ingest for user ${userId}:`, error);
 
       if (error instanceof HTTPException) {
         throw error;
@@ -100,13 +102,13 @@ app
 
 // ライブ配信終了エンドポイント
 // 配信セッションを削除し、関連データを清理
-app.delete("/ingest/:liveId/:sessionId", async (c) => {
-  const { liveId } = c.req.param();
+app.delete("/ingest/:userId/:sessionId", async (c) => {
+  const { userId } = c.req.param();
   try {
-    await db.deleteTracks(c.env.LIVE_DB, liveId);
+    await db.deleteTracks(c.env.LIVE_DB, userId);
     return c.text("OK", 200);
   } catch (error) {
-    console.error(`Failed to delete tracks for live ${liveId}:`, error);
+    console.error(`Failed to delete tracks for user ${userId}:`, error);
     throw error;
   }
 });
@@ -204,13 +206,13 @@ app.use("/play/*", async (c, next) => {
 // ライブ視聴開始エンドポイント（WHEP）
 // 視聴者からのSDP Offerを受け取り、配信されているトラックへの接続セッションを作成
 app
-  .post("/play/:liveId", async (c) => {
-    const { liveId } = c.req.param();
+  .post("/play/:userId", async (c) => {
+    const { userId } = c.req.param();
 
     // JWTペイロードからユーザー情報を取得してログ出力
     const jwtPayload = c.get("jwtPayload") as JWTPayload;
     console.log(
-      `User ${jwtPayload.displayName} (${jwtPayload.userId}) is trying to play live: ${liveId}`
+      `User ${jwtPayload.displayName} (${jwtPayload.userId}) is trying to play user: ${userId}`
     );
 
     // Calls APIクライアントを初期化
@@ -219,52 +221,50 @@ app
       appSecret: c.env.CALLS_APP_SECRET,
     });
     try {
-      const tracks = await db.getTracks(c.env.LIVE_DB, liveId);
+      const tracks = await db.getTracks(c.env.LIVE_DB, userId);
 
       // トラックが存在し、セッションチェックが必要な場合のみチェック実行
       if (tracks.length > 0) {
-        const shouldCheck = await db.shouldCheckSession(c.env.LIVE_DB, liveId);
+        const shouldCheck = await db.shouldCheckSession(c.env.LIVE_DB, userId);
 
         if (shouldCheck) {
           // セッションアクティブチェック
           const ingestSessionId = tracks[0]?.sessionId;
           if (ingestSessionId) {
             const isActive = await callsClient.isSessionActive(ingestSessionId);
-
             if (!isActive) {
               // セッションが終了している場合、データベースからレコードを削除
-              await db.deleteInactiveSession(c.env.LIVE_DB, liveId);
-              throw new LiveNotFoundError(liveId);
+              await db.deleteInactiveSession(c.env.LIVE_DB, userId);
+              throw new LiveNotFoundError(userId);
             }
 
             // セッションチェック時刻を更新
-            await db.updateSessionCheckTime(c.env.LIVE_DB, liveId);
+            await db.updateSessionCheckTime(c.env.LIVE_DB, userId);
           }
         }
       }
 
       const sdpOffer = await c.req.text();
-      const result = await startPlay(callsClient, liveId, tracks, sdpOffer);
+      const result = await startPlay(callsClient, userId, tracks, sdpOffer);
 
       return c.body(result.sdpAnswer, 201, {
         "access-control-expose-headers": "location",
         "content-type": "application/sdp",
         "protocol-version": "draft-ietf-wish-whep-00",
         etag: `"${result.sessionId}"`,
-        location: `/play/${liveId}/${result.sessionId}`,
+        location: `/play/${userId}/${result.sessionId}`,
       });
     } catch (error) {
       console.error(
-        `Failed to start play for live ${liveId} by user ${jwtPayload.userId}:`,
+        `Failed to start play for user ${userId} by user ${jwtPayload.userId}:`,
         error
       );
       if (error instanceof HTTPException) {
         throw error;
       }
-
       if (error instanceof LiveNotFoundError) {
         throw new HTTPException(404, {
-          message: `Live stream not found: ${liveId}`,
+          message: `Live stream not found: ${userId}`,
         });
       }
 
@@ -278,7 +278,7 @@ app
 
 // ライブ視聴セッション管理エンドポイント
 app
-  .delete("/play/:liveId/:sessionId", async (c) => {
+  .delete("/play/:userId/:sessionId", async (c) => {
     return c.body("OK", 200);
   }) // ICE候補やセッション再交渉用のPATCHエンドポイント
   .patch(async (c) => {
