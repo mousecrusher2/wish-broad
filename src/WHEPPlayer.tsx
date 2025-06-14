@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import type { WHEPPlayerProps } from "./types";
 import { useLiveStreams } from "./useLiveStreams";
+import { OBSStreamingInfo } from "./OBSStreamingInfo";
 
 export function WHEPPlayer({ user }: WHEPPlayerProps) {
   const [resource, setResource] = useState("");
@@ -613,20 +614,22 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
               >
                 🔌 テスト切断
               </button>
-            )}
+            )}{" "}
           </div>
-        )}
+        )}{" "}
       </div>
-      <div>
+
+      <div className="load-button-section">
         <button
           onClick={handleLoadClick}
           disabled={isLoading || !resource.trim() || streamsLoading}
         >
           {isLoading ? "読み込み中..." : "Load"}
         </button>
-      </div>{" "}
-      <div>
-        <h2>Remote media</h2>{" "}
+      </div>
+
+      <div className="remote-media-section">
+        <h2>Remote media</h2>
         <div className="video-player-container">
           <video
             ref={videoRef}
@@ -664,6 +667,9 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
           )}
         </div>
       </div>
+
+      {/* OBS配信設定セクション */}
+      <OBSStreamingInfo user={user} />
     </div>
   );
 }
