@@ -10,6 +10,9 @@
   //   "AUTHORIZED_GUILD_ID": "your-discord-guild-id-here",
   //   "ENVIRONMENT": "development"
   // },
+  "vars": {
+    "ENVIRONMENT": "production",
+  },
   "d1_databases": [
     {
       "binding": "LIVE_DB",
@@ -25,6 +28,7 @@
   "observability": {
     "logs": {
       "enabled": true,
+      "head_sampling_rate": 1,
     },
   },
 }
