@@ -24,6 +24,8 @@ a:hover {
 
 body {
     margin: 0;
+    min-width: 320px;
+    min-height: 100vh;
 }
 
 h1 {
@@ -32,7 +34,8 @@ h1 {
 }
 
 #app {
-    max-width: 1280px;
+    max-width: 1200px;
+    width: min(90%, 1200px);
     margin: 0 auto;
     padding: 2rem;
     text-align: center;
@@ -141,6 +144,44 @@ video {
     .grid {
         grid-template-columns: minmax(0, 1fr);
     }
+}
+
+/* ヘッダーとログアウトボタンのスタイル */
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.logout-button {
+    padding: 0.5rem 1rem;
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.logout-button:hover {
+    background-color: #c82333;
+}
+
+/* WHEPPlayer コンテナのスタイル */
+.container {
+    max-width: 1000px;
+    width: min(95%, 1000px);
+    margin: 0 auto;
+    padding: 1rem;
 }
 
 /* 認証関連のスタイル */
@@ -370,7 +411,7 @@ video {
 /* スタイリッシュなビデオプレイヤー */
 .video-player-container {
     position: relative;
-    max-width: 800px;
+    max-width: 1000px;
     margin: 1rem auto;
     border-radius: 12px;
     overflow: hidden;
