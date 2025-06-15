@@ -74,7 +74,7 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
 
           <div className="streaming-token-section">
             <div className="token-status">
-              <label>配信キー (Stream Key):</label>
+              <label>Bearerトークン (Stream Key):</label>
               {isLoading ? (
                 <p className="loading">読み込み中...</p>
               ) : error ? (
@@ -90,7 +90,7 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
                 </div>
               ) : hasToken ? (
                 <div className="token-available">
-                  <p className="status-text">✅ 配信キーが発行済みです</p>
+                  <p className="status-text">✅ Bearerトークンが発行済みです</p>
                   {token && showToken ? (
                     <div className="token-display">
                       <div className="input-with-button">
@@ -124,7 +124,7 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
                       className="show-token-button"
                       type="button"
                     >
-                      👁️ キーを表示
+                      👁️ トークンを表示
                     </button>
                   )}
                   <button
@@ -133,19 +133,21 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
                     type="button"
                     disabled={isLoading}
                   >
-                    🔄 新しいキーを発行
+                    🔄 新しいトークンを発行
                   </button>
                 </div>
               ) : (
                 <div className="token-not-available">
-                  <p className="status-text">⚠️ 配信キーが発行されていません</p>
+                  <p className="status-text">
+                    ⚠️ Bearerトークンが発行されていません
+                  </p>
                   <button
                     onClick={handleCreateToken}
                     className="create-token-button"
                     type="button"
                     disabled={isLoading}
                   >
-                    🔑 配信キーを発行
+                    🔑 Bearerトークンを発行
                   </button>
                 </div>
               )}
@@ -156,9 +158,9 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
             <h4>📖 OBS設定方法</h4>
             <ol>
               <li>OBSを開き、「設定」→「配信」を選択</li>
-              <li>サービス: 「カスタム」を選択</li>
+              <li>サービス: 「WHIP」を選択</li>
               <li>サーバー: 上記の配信URLをコピー</li>
-              <li>ストリームキー: 上記の配信キーをコピー</li>
+              <li>Bearerトークン: 上記の配信キーをコピー</li>
               <li>「OK」をクリックして設定完了</li>
             </ol>
           </div>
