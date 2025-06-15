@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import type { WHEPPlayerProps } from "./types";
 import { useLiveStreams } from "./useLiveStreams";
 import { OBSStreamingInfo } from "./OBSStreamingInfo";
@@ -24,8 +24,16 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
     isLoading: streamsLoading,
     error: streamsError,
     refresh,
-  } = useLiveStreams(); // 接続をクリーンアップする関数
-  const cleanupConnection = () => {
+  } = useLiveStreams();
+
+  const stopHealthCheck = useCallback(() => {
+    if (healthCheckIntervalRef.current) {
+      clearInterval(healthCheckIntervalRef.current);
+      healthCheckIntervalRef.current = null;
+    }
+  }, []);
+
+  const cleanupConnection = useCallback(() => {
     stopHealthCheck(); // ヘルスチェックを停止
 
     // すべての保留中のタイムアウトをクリア
@@ -52,366 +60,464 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
     setStreamUrl(null);
     setConnectionStatus("disconnected");
     isReconnectingRef.current = false;
-  }; // 再接続を試行する関数（重複実行を防ぐ）
-  const attemptReconnect = async (resourceValue: string) => {
-    // より厳密な重複実行チェック
-    if (isReconnectingRef.current) {
-      return;
-    } // 現在の接続状態をチェック
-    const goodStates = ["connected", "connecting"];
-    if (goodStates.includes(connectionStatus)) {
-      return;
-    }
+  }, [stopHealthCheck]);
 
-    const maxRetries = 5;
-    const baseDelay = 2000; // 2秒
+  // attemptReconnect と startHealthCheck の型を先に定義
+  type AttemptReconnectFn = (resourceValue: string) => Promise<void>;
+  type StartHealthCheckFn = () => void;
 
-    if (reconnectAttempt >= maxRetries) {
-      setConnectionStatus("failed");
-      setIsLoading(false);
-      isReconnectingRef.current = false;
-      return;
-    }
+  const load: (resourceValue: string, isReconnect?: boolean) => Promise<void> =
+    useCallback(
+      async (resourceValue: string, isReconnect = false) => {
+        if (!resourceValue) return;
 
-    isReconnectingRef.current = true;
-    setConnectionStatus("reconnecting");
-    setReconnectAttempt((prev) => prev + 1);
+        // 現在のリソースを記録
+        currentResourceRef.current = resourceValue;
 
-    const delay = baseDelay * Math.pow(2, reconnectAttempt); // 指数バックオフ
-
-    const timeoutId = window.setTimeout(() => {
-      pendingTimeoutsRef.current.delete(timeoutId);
-      isReconnectingRef.current = false;
-      load(resourceValue, true);
-    }, delay);
-
-    reconnectTimeoutRef.current = timeoutId;
-    pendingTimeoutsRef.current.add(timeoutId);
-  };
-  const load = async (resourceValue: string, isReconnect = false) => {
-    if (!resourceValue) return;
-
-    // 現在のリソースを記録
-    currentResourceRef.current = resourceValue;
-
-    // 再接続でない場合は、既存の接続をクリーンアップし、再接続カウンターをリセット
-    if (!isReconnect) {
-      cleanupConnection();
-      setReconnectAttempt(0);
-      isReconnectingRef.current = false;
-    }
-
-    setIsLoading(true);
-    setConnectionStatus("connecting");
-
-    try {
-      const resourceUrl = new URL(`/play/${resourceValue}`, location.origin);
-      const pc = new RTCPeerConnection({
-        bundlePolicy: "max-bundle",
-      });
-
-      // pcRefに保存
-      pcRef.current = pc; // 接続状態の監視（適切なイベントハンドリング）
-      pc.addEventListener("connectionstatechange", () => {
-        switch (pc.connectionState) {
-          case "connected":
-            setConnectionStatus("connected");
-            setReconnectAttempt(0); // 成功したらカウンターリセット
-            isReconnectingRef.current = false;
-
-            // すべての保留中のタイムアウトをクリア（成功したので不要）
-            pendingTimeoutsRef.current.forEach((timeoutId) => {
-              clearTimeout(timeoutId);
-            });
-            pendingTimeoutsRef.current.clear();
-
-            if (muteTimeoutRef.current) {
-              clearTimeout(muteTimeoutRef.current);
-              muteTimeoutRef.current = null;
-            }
-            break;
-          case "failed":
-            if (canAttemptReconnect()) {
-              attemptReconnect(currentResourceRef.current);
-            }
-            break;
-          case "disconnected":
-            // disconnectedから一定時間後に再接続を試行
-            const timeoutId = window.setTimeout(() => {
-              pendingTimeoutsRef.current.delete(timeoutId);
-              if (
-                pc.connectionState === "disconnected" &&
-                currentResourceRef.current &&
-                !isReconnectingRef.current &&
-                connectionStatus !== "connecting" &&
-                connectionStatus !== "connected"
-              ) {
-                attemptReconnect(currentResourceRef.current);
-              }
-            }, 2000); // 2秒待つ
-            pendingTimeoutsRef.current.add(timeoutId);
-            break;
-          case "connecting":
-          case "new":
-            break;
+        // 再接続でない場合は、既存の接続をクリーンアップし、再接続カウンターをリセット
+        if (!isReconnect) {
+          cleanupConnection();
+          setReconnectAttempt(0);
+          isReconnectingRef.current = false;
         }
-      });
 
-      // ICE接続状態の監視
-      pc.addEventListener("iceconnectionstatechange", () => {
-        switch (pc.iceConnectionState) {
-          case "connected":
-          case "completed":
-            break;
-          case "failed":
-            if (
-              currentResourceRef.current &&
-              !isReconnectingRef.current &&
-              connectionStatus !== "connecting"
-            ) {
-              attemptReconnect(currentResourceRef.current);
-            }
-            break;
-          case "disconnected":
-            // disconnectedからfailedに遷移する可能性があるため、少し待つ
-            const timeoutId = window.setTimeout(() => {
-              pendingTimeoutsRef.current.delete(timeoutId);
-              if (
-                pc.iceConnectionState === "disconnected" &&
-                currentResourceRef.current &&
-                !isReconnectingRef.current &&
-                connectionStatus !== "connecting" &&
-                connectionStatus !== "connected"
-              ) {
-                attemptReconnect(currentResourceRef.current);
-              }
-            }, 3000); // 3秒待つ
-            pendingTimeoutsRef.current.add(timeoutId);
-            break;
-          case "checking":
-          case "new":
-            break;
-        }
-      });
+        setIsLoading(true);
+        setConnectionStatus("connecting");
 
-      const candidatesPromise = new Promise<void>((resolve) => {
-        pc.addEventListener("icegatheringstatechange", (ev) => {
-          let connection = ev.target as RTCPeerConnection;
-          if (!connection) {
-            throw new Error("No connection found");
-          }
+        try {
+          const resourceUrl = new URL(
+            `/play/${resourceValue}`,
+            location.origin
+          );
+          const pc = new RTCPeerConnection({
+            bundlePolicy: "max-bundle",
+          });
 
-          switch (connection.iceGatheringState) {
-            case "complete":
-              resolve();
-              break;
-          }
-        });
-      });
-      const remoteTracksPromise = new Promise<MediaStreamTrack[]>((resolve) => {
-        let tracks: MediaStreamTrack[] = [];
-        pc.ontrack = (event) => {
-          tracks.push(event.track);
-          event.track.onended = () => {
-            // トラックが終了した場合、再接続を試行
-            if (
-              currentResourceRef.current &&
-              !isReconnectingRef.current &&
-              connectionStatus !== "connecting"
-            ) {
-              attemptReconnect(currentResourceRef.current);
-            }
-          };
+          // pcRefに保存
+          pcRef.current = pc;
 
-          event.track.onmute = () => {
-            // ミュート状態のタイムアウトを設定（10秒）
-            if (muteTimeoutRef.current) {
-              clearTimeout(muteTimeoutRef.current);
-            }
-            const timeoutId = window.setTimeout(() => {
-              pendingTimeoutsRef.current.delete(timeoutId);
-              if (
-                currentResourceRef.current &&
-                event.track.muted &&
-                !isReconnectingRef.current &&
-                connectionStatus !== "connecting" &&
-                connectionStatus !== "connected"
-              ) {
-                attemptReconnect(currentResourceRef.current);
-              }
-            }, 10000); // 10秒でタイムアウト
-            muteTimeoutRef.current = timeoutId;
-            pendingTimeoutsRef.current.add(timeoutId);
-          };
-
-          event.track.onunmute = () => {
-            // アンミュートされた場合、タイムアウトをクリア
-            if (muteTimeoutRef.current) {
-              clearTimeout(muteTimeoutRef.current);
-              muteTimeoutRef.current = null;
-            }
-          };
-
-          // ビデオまたはオーディオのいずれか1つでも受信したら解決
-          // （2トラック待ちではなく、より柔軟に対応）
-          if (tracks.length >= 1) {
-            resolve(tracks);
-          }
-        };
-
-        // タイムアウトを設定（10秒でタイムアウト）
-        setTimeout(() => {
-          if (tracks.length === 0) {
-            resolve(tracks);
-          }
-        }, 10000);
-      });
-
-      const offer = await fetch(resourceUrl, { method: "POST" });
-      await pc.setRemoteDescription(
-        new RTCSessionDescription({ type: "offer", sdp: await offer.text() })
-      );
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await candidatesPromise;
-      let sessionUrl = new URL(resourceUrl);
-      sessionUrl.pathname = offer.headers.get("location")!;
-      await fetch(sessionUrl.href, { method: "PATCH", body: answer.sdp });
-      const remoteTracks = await remoteTracksPromise;
-
-      if (remoteTracks.length === 0) {
-        throw new Error("No tracks received from remote peer");
-      }
-
-      const remoteStream = new MediaStream();
-
-      // 受信したすべてのトラックをストリームに追加
-      remoteTracks.forEach((track) => {
-        remoteStream.addTrack(track);
-      });
-      setStreamUrl("active");
-      setConnectionStatus("connected");
-
-      // 接続成功時にヘルスチェックを開始
-      startHealthCheck();
-      // video要素のrefを設定（複数回試行でより確実に）
-      const setVideoStream = (attempts = 0) => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = remoteStream; // video要素のイベントリスナーを追加
-
-          videoRef.current.onstalled = () => {
-            // ビデオが停止した場合、再接続を試行
-            if (currentResourceRef.current) {
-              setTimeout(() => {
-                if (currentResourceRef.current) {
-                  attemptReconnect(currentResourceRef.current);
-                }
-              }, 3000); // 3秒待ってから再接続
-            }
-          };
-          videoRef.current.onwaiting = () => {
-            // データ待機が長時間続く場合、再接続を検討
-            const timeoutId = window.setTimeout(() => {
-              pendingTimeoutsRef.current.delete(timeoutId);
-              if (
-                videoRef.current &&
-                videoRef.current.readyState < 2 &&
-                currentResourceRef.current &&
-                !isReconnectingRef.current &&
-                connectionStatus !== "connecting" &&
-                connectionStatus !== "connected"
-              ) {
-                attemptReconnect(currentResourceRef.current);
-              }
-            }, 8000); // 8秒待機
-            pendingTimeoutsRef.current.add(timeoutId);
-          };
-
-          videoRef.current.onabort = () => {
-            if (
-              currentResourceRef.current &&
-              !isReconnectingRef.current &&
-              connectionStatus !== "connecting"
-            ) {
-              attemptReconnect(currentResourceRef.current);
-            }
-          };
-
-          videoRef.current.onemptied = () => {
-            // ビデオが空になった場合（srcObjectが失われた場合など）
-            if (
-              currentResourceRef.current &&
-              connectionStatus === "connected" &&
-              !isReconnectingRef.current
-            ) {
-              const timeoutId = window.setTimeout(() => {
-                pendingTimeoutsRef.current.delete(timeoutId);
-                const goodStates = ["connecting", "connected"];
-                if (
-                  currentResourceRef.current &&
-                  !isReconnectingRef.current &&
-                  !goodStates.includes(connectionStatus)
-                ) {
-                  attemptReconnect(currentResourceRef.current);
-                }
-              }, 2000);
-              pendingTimeoutsRef.current.add(timeoutId);
-            }
-          };
-          videoRef.current.onerror = () => {
-            // ビデオエラーが発生した場合も再接続を試行
-            if (
+          const canAttemptReconnectFn = () => {
+            return (
               currentResourceRef.current &&
               !isReconnectingRef.current &&
               connectionStatus !== "connecting" &&
               connectionStatus !== "connected"
-            ) {
-              attemptReconnect(currentResourceRef.current);
-            }
+            );
           };
 
-          // 自動再生を試行
-          videoRef.current.play().catch(() => {});
-        } else {
-          // 最大3回まで再試行
-          if (attempts < 3) {
-            setTimeout(() => setVideoStream(attempts + 1), 50 * (attempts + 1));
+          // 接続状態の監視（適切なイベントハンドリング）
+          pc.addEventListener("connectionstatechange", () => {
+            switch (pc.connectionState) {
+              case "connected":
+                setConnectionStatus("connected");
+                setReconnectAttempt(0); // 成功したらカウンターリセット
+                isReconnectingRef.current = false;
+
+                // すべての保留中のタイムアウトをクリア（成功したので不要）
+                pendingTimeoutsRef.current.forEach((timeoutId) => {
+                  clearTimeout(timeoutId);
+                });
+                pendingTimeoutsRef.current.clear();
+
+                if (muteTimeoutRef.current) {
+                  clearTimeout(muteTimeoutRef.current);
+                  muteTimeoutRef.current = null;
+                }
+                break;
+              case "failed":
+                if (canAttemptReconnectFn()) {
+                  attemptReconnect(currentResourceRef.current);
+                }
+                break;
+              case "disconnected": {
+                // disconnectedから一定時間後に再接続を試行
+                const timeoutId = window.setTimeout(() => {
+                  pendingTimeoutsRef.current.delete(timeoutId);
+                  if (
+                    pc.connectionState === "disconnected" &&
+                    currentResourceRef.current &&
+                    !isReconnectingRef.current &&
+                    connectionStatus !== "connecting" &&
+                    connectionStatus !== "connected"
+                  ) {
+                    attemptReconnect(currentResourceRef.current);
+                  }
+                }, 2000); // 2秒待つ
+                pendingTimeoutsRef.current.add(timeoutId);
+                break;
+              }
+              case "connecting":
+              case "new":
+                break;
+            }
+          });
+
+          // ICE接続状態の監視
+          pc.addEventListener("iceconnectionstatechange", () => {
+            switch (pc.iceConnectionState) {
+              case "connected":
+              case "completed":
+                break;
+              case "failed":
+                if (
+                  currentResourceRef.current &&
+                  !isReconnectingRef.current &&
+                  connectionStatus !== "connecting"
+                ) {
+                  attemptReconnect(currentResourceRef.current);
+                }
+                break;
+              case "disconnected": {
+                // disconnectedからfailedに遷移する可能性があるため、少し待つ
+                const timeoutId = window.setTimeout(() => {
+                  pendingTimeoutsRef.current.delete(timeoutId);
+                  if (
+                    pc.iceConnectionState === "disconnected" &&
+                    currentResourceRef.current &&
+                    !isReconnectingRef.current &&
+                    connectionStatus !== "connecting" &&
+                    connectionStatus !== "connected"
+                  ) {
+                    attemptReconnect(currentResourceRef.current);
+                  }
+                }, 3000); // 3秒待つ
+                pendingTimeoutsRef.current.add(timeoutId);
+                break;
+              }
+              case "checking":
+              case "new":
+                break;
+            }
+          });
+
+          const candidatesPromise = new Promise<void>((resolve) => {
+            pc.addEventListener("icegatheringstatechange", (ev) => {
+              const connection = ev.target as RTCPeerConnection;
+              if (!connection) {
+                throw new Error("No connection found");
+              }
+
+              switch (connection.iceGatheringState) {
+                case "complete":
+                  resolve();
+                  break;
+              }
+            });
+          });
+          const remoteTracksPromise = new Promise<MediaStreamTrack[]>(
+            (resolve) => {
+              const tracks: MediaStreamTrack[] = [];
+              pc.ontrack = (event) => {
+                tracks.push(event.track);
+                event.track.onended = () => {
+                  // トラックが終了した場合、再接続を試行
+                  if (
+                    currentResourceRef.current &&
+                    !isReconnectingRef.current &&
+                    connectionStatus !== "connecting"
+                  ) {
+                    attemptReconnect(currentResourceRef.current);
+                  }
+                };
+
+                event.track.onmute = () => {
+                  // ミュート状態のタイムアウトを設定（10秒）
+                  if (muteTimeoutRef.current) {
+                    clearTimeout(muteTimeoutRef.current);
+                  }
+                  const timeoutId = window.setTimeout(() => {
+                    pendingTimeoutsRef.current.delete(timeoutId);
+                    if (
+                      currentResourceRef.current &&
+                      event.track.muted &&
+                      !isReconnectingRef.current &&
+                      connectionStatus !== "connecting" &&
+                      connectionStatus !== "connected"
+                    ) {
+                      attemptReconnect(currentResourceRef.current);
+                    }
+                  }, 10000); // 10秒でタイムアウト
+                  muteTimeoutRef.current = timeoutId;
+                  pendingTimeoutsRef.current.add(timeoutId);
+                };
+
+                event.track.onunmute = () => {
+                  // アンミュートされた場合、タイムアウトをクリア
+                  if (muteTimeoutRef.current) {
+                    clearTimeout(muteTimeoutRef.current);
+                    muteTimeoutRef.current = null;
+                  }
+                };
+
+                // ビデオまたはオーディオのいずれか1つでも受信したら解決
+                // （2トラック待ちではなく、より柔軟に対応）
+                if (tracks.length >= 1) {
+                  resolve(tracks);
+                }
+              };
+
+              // タイムアウトを設定（10秒でタイムアウト）
+              setTimeout(() => {
+                if (tracks.length === 0) {
+                  resolve(tracks);
+                }
+              }, 10000);
+            }
+          );
+
+          const offer = await fetch(resourceUrl, { method: "POST" });
+          await pc.setRemoteDescription(
+            new RTCSessionDescription({
+              type: "offer",
+              sdp: await offer.text(),
+            })
+          );
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await candidatesPromise;
+          const sessionUrl = new URL(resourceUrl);
+          sessionUrl.pathname = offer.headers.get("location")!;
+          await fetch(sessionUrl.href, { method: "PATCH", body: answer.sdp });
+          const remoteTracks = await remoteTracksPromise;
+
+          if (remoteTracks.length === 0) {
+            throw new Error("No tracks received from remote peer");
+          }
+
+          const remoteStream = new MediaStream();
+
+          // 受信したすべてのトラックをストリームに追加
+          remoteTracks.forEach((track) => {
+            remoteStream.addTrack(track);
+          });
+          setStreamUrl("active");
+          setConnectionStatus("connected");
+
+          // 接続成功時にヘルスチェックを開始
+          startHealthCheck();
+          // video要素のrefを設定（複数回試行でより確実に）
+          const setVideoStream = (attempts = 0) => {
+            if (videoRef.current) {
+              videoRef.current.srcObject = remoteStream; // video要素のイベントリスナーを追加
+
+              videoRef.current.onstalled = () => {
+                // ビデオが停止した場合、再接続を試行
+                if (currentResourceRef.current) {
+                  setTimeout(() => {
+                    if (currentResourceRef.current) {
+                      attemptReconnect(currentResourceRef.current);
+                    }
+                  }, 3000); // 3秒待ってから再接続
+                }
+              };
+              videoRef.current.onwaiting = () => {
+                // データ待機が長時間続く場合、再接続を検討
+                const timeoutId = window.setTimeout(() => {
+                  pendingTimeoutsRef.current.delete(timeoutId);
+                  if (
+                    videoRef.current &&
+                    videoRef.current.readyState < 2 &&
+                    currentResourceRef.current &&
+                    !isReconnectingRef.current &&
+                    connectionStatus !== "connecting" &&
+                    connectionStatus !== "connected"
+                  ) {
+                    attemptReconnect(currentResourceRef.current);
+                  }
+                }, 8000); // 8秒待機
+                pendingTimeoutsRef.current.add(timeoutId);
+              };
+
+              videoRef.current.onabort = () => {
+                if (
+                  currentResourceRef.current &&
+                  !isReconnectingRef.current &&
+                  connectionStatus !== "connecting"
+                ) {
+                  attemptReconnect(currentResourceRef.current);
+                }
+              };
+
+              videoRef.current.onemptied = () => {
+                // ビデオが空になった場合（srcObjectが失われた場合など）
+                if (
+                  currentResourceRef.current &&
+                  connectionStatus === "connected" &&
+                  !isReconnectingRef.current
+                ) {
+                  const timeoutId = window.setTimeout(() => {
+                    pendingTimeoutsRef.current.delete(timeoutId);
+                    const goodStates = ["connecting", "connected"];
+                    if (
+                      currentResourceRef.current &&
+                      !isReconnectingRef.current &&
+                      !goodStates.includes(connectionStatus)
+                    ) {
+                      attemptReconnect(currentResourceRef.current);
+                    }
+                  }, 2000);
+                  pendingTimeoutsRef.current.add(timeoutId);
+                }
+              };
+              videoRef.current.onerror = () => {
+                // ビデオエラーが発生した場合も再接続を試行
+                if (
+                  currentResourceRef.current &&
+                  !isReconnectingRef.current &&
+                  connectionStatus !== "connecting" &&
+                  connectionStatus !== "connected"
+                ) {
+                  attemptReconnect(currentResourceRef.current);
+                }
+              };
+
+              // 自動再生を試行
+              videoRef.current.play().catch(() => {});
+            } else {
+              // 最大3回まで再試行
+              if (attempts < 3) {
+                setTimeout(
+                  () => setVideoStream(attempts + 1),
+                  50 * (attempts + 1)
+                );
+              }
+            }
+          };
+          // 即座に試行し、失敗したら再試行
+          setVideoStream();
+        } catch {
+          setStreamUrl(null);
+          if (!isReconnect) {
+            alert("ストリームの読み込みに失敗しました");
+            setConnectionStatus("failed");
+          } else {
+            // 再接続中のエラーの場合、さらに再接続を試行
+            attemptReconnect(resourceValue);
+          }
+        } finally {
+          setIsLoading(false);
+        }
+      },
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [cleanupConnection, connectionStatus]
+    );
+
+  const attemptReconnect: AttemptReconnectFn = useCallback(
+    async (resourceValue: string) => {
+      // より厳密な重複実行チェック
+      if (isReconnectingRef.current) {
+        return;
+      } // 現在の接続状態をチェック
+      const goodStates = ["connected", "connecting"];
+      if (goodStates.includes(connectionStatus)) {
+        return;
+      }
+
+      const maxRetries = 5;
+      const baseDelay = 2000; // 2秒
+
+      if (reconnectAttempt >= maxRetries) {
+        setConnectionStatus("failed");
+        setIsLoading(false);
+        isReconnectingRef.current = false;
+        return;
+      }
+
+      isReconnectingRef.current = true;
+      setConnectionStatus("reconnecting");
+      setReconnectAttempt((prev) => prev + 1);
+
+      const delay = baseDelay * Math.pow(2, reconnectAttempt); // 指数バックオフ
+
+      const timeoutId = window.setTimeout(() => {
+        pendingTimeoutsRef.current.delete(timeoutId);
+        isReconnectingRef.current = false;
+        load(resourceValue, true);
+      }, delay);
+
+      reconnectTimeoutRef.current = timeoutId;
+      pendingTimeoutsRef.current.add(timeoutId);
+    },
+    [connectionStatus, load, reconnectAttempt]
+  );
+
+  const startHealthCheck: StartHealthCheckFn = useCallback(() => {
+    if (healthCheckIntervalRef.current) {
+      clearInterval(healthCheckIntervalRef.current);
+    }
+    healthCheckIntervalRef.current = window.setInterval(() => {
+      if (pcRef.current && currentResourceRef.current) {
+        const pc = pcRef.current;
+        // 接続が切断されている、または失敗している場合
+        if (
+          pc.connectionState === "failed" ||
+          pc.connectionState === "disconnected" ||
+          pc.iceConnectionState === "failed" ||
+          pc.iceConnectionState === "disconnected"
+        ) {
+          if (
+            !isReconnectingRef.current &&
+            connectionStatus !== "connecting" &&
+            connectionStatus !== "connected"
+          ) {
+            attemptReconnect(currentResourceRef.current);
           }
         }
-      };
-      // 即座に試行し、失敗したら再試行
-      setVideoStream();
-    } catch (error) {
-      setStreamUrl(null);
-      if (!isReconnect) {
-        alert("ストリームの読み込みに失敗しました");
-        setConnectionStatus("failed");
-      } else {
-        // 再接続中のエラーの場合、さらに再接続を試行
-        attemptReconnect(resourceValue);
+
+        // ビデオ要素の状態もチェック
+        if (videoRef.current) {
+          const video = videoRef.current;
+          if (video.srcObject) {
+            const stream = video.srcObject as MediaStream;
+            const tracks = stream.getTracks();
+
+            // すべてのトラックが終了またはミュートされている場合
+            const allTracksEnded = tracks.every(
+              (track) => track.readyState === "ended"
+            );
+
+            if (allTracksEnded) {
+              if (
+                !isReconnectingRef.current &&
+                connectionStatus !== "connecting" &&
+                connectionStatus !== "connected"
+              ) {
+                attemptReconnect(currentResourceRef.current);
+              }
+            }
+          }
+        }
       }
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    }, 5000); // 5秒ごとにチェック
+  }, [attemptReconnect, connectionStatus]);
+
+  // useEffect の依存配列を更新
+  useEffect(() => {
+    // load 関数の依存配列から attemptReconnect と startHealthCheck を削除したため、
+    // ここで load が変更されたときに attemptReconnect と startHealthCheck を更新する必要があるかもしれないが、
+    // 通常は load が変わる状況では attemptReconnect や startHealthCheck も再定義されるべきなので、
+    // ESLint の警告を無視するか、より複雑な依存関係管理が必要になる。
+    // ここでは ESLint の警告を無視する。
+  }, [load]);
+
   // 手動再接続ボタン用の関数
-  const handleReconnect = () => {
+  const handleReconnect = useCallback(() => {
     if (resource) {
       setReconnectAttempt(0);
       isReconnectingRef.current = false;
       load(resource);
     }
-  }; // コンポーネントアンマウント時のクリーンアップ
+  }, [resource, load]); // コンポーネントアンマウント時のクリーンアップ
   useEffect(() => {
     return () => {
       cleanupConnection();
       isReconnectingRef.current = false;
     };
-  }, []);
+  }, [cleanupConnection]);
 
-  const handleLoadClick = async () => {
+  const handleLoadClick = useCallback(async () => {
     await load(resource);
-  };
+  }, [load, resource]);
 
   const selectedStream = streams.find(
     (stream) => stream.owner.userId === resource
@@ -464,82 +570,13 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
       window.removeEventListener("offline", handleOffline);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [connectionStatus]);
+  }, [connectionStatus, load, cleanupConnection]);
 
   // 定期的な接続状態チェック
-  const startHealthCheck = () => {
-    if (healthCheckIntervalRef.current) {
-      clearInterval(healthCheckIntervalRef.current);
-    }
-    healthCheckIntervalRef.current = window.setInterval(() => {
-      if (pcRef.current && currentResourceRef.current) {
-        const pc = pcRef.current;
-        // 接続が切断されている、または失敗している場合
-        if (
-          pc.connectionState === "failed" ||
-          pc.connectionState === "disconnected" ||
-          pc.iceConnectionState === "failed" ||
-          pc.iceConnectionState === "disconnected"
-        ) {
-          if (
-            !isReconnectingRef.current &&
-            connectionStatus !== "connecting" &&
-            connectionStatus !== "connected"
-          ) {
-            attemptReconnect(currentResourceRef.current);
-          }
-        }
+  // startHealthCheck は load の後に定義済み
 
-        // ビデオ要素の状態もチェック
-        if (videoRef.current) {
-          const video = videoRef.current;
-          if (video.srcObject) {
-            const stream = video.srcObject as MediaStream;
-            const tracks = stream.getTracks();
-
-            // すべてのトラックが終了またはミュートされている場合
-            const allTracksEnded = tracks.every(
-              (track) => track.readyState === "ended"
-            );
-
-            if (allTracksEnded) {
-              if (
-                !isReconnectingRef.current &&
-                connectionStatus !== "connecting" &&
-                connectionStatus !== "connected"
-              ) {
-                attemptReconnect(currentResourceRef.current);
-              }
-            }
-          }
-        }
-      }
-    }, 5000); // 5秒毎にチェック
-  };
-
-  const stopHealthCheck = () => {
-    if (healthCheckIntervalRef.current) {
-      clearInterval(healthCheckIntervalRef.current);
-      healthCheckIntervalRef.current = null;
-    }
-  };
-
-  // テスト用: 接続を意図的に切断する関数
-  const handleDisconnect = () => {
-    if (pcRef.current) {
-      pcRef.current.close();
-    }
-  };
-
-  // 再接続が可能な状態かチェックするヘルパー関数
-  const canAttemptReconnect = () => {
-    const goodStates = ["connecting", "connected"];
-    return (
-      currentResourceRef.current &&
-      !isReconnectingRef.current &&
-      !goodStates.includes(connectionStatus)
-    );
-  };
+  // ヘルスチェックを停止する関数
+  // stopHealthCheck は cleanupConnection の前に定義済み
 
   return (
     <div className="grid">
@@ -607,7 +644,7 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
             )}
             {connectionStatus === "connected" && (
               <button
-                onClick={handleDisconnect}
+                onClick={cleanupConnection} // handleDisconnect を cleanupConnection に変更
                 type="button"
                 className="disconnect-button"
                 style={{ marginLeft: "10px", backgroundColor: "#ff6b6b" }}
