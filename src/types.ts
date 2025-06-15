@@ -15,10 +15,6 @@ export interface WHEPPlayerProps {
   user: User;
 }
 
-export interface LoginPromptProps {
-  onLogin: () => void;
-}
-
 export type Live = {
   owner: User;
 };

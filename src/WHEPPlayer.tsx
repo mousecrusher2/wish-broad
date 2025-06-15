@@ -579,90 +579,99 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
   // stopHealthCheck は cleanupConnection の前に定義済み
 
   return (
-    <div className="grid">
-      <h1>ANGOU BROADCAST</h1>
-      <div className="user-info">
-        <p>ようこそ、{user.displayName}さん</p>
-      </div>
-      <div className="stream-selection">
-        <label htmlFor="stream-select">配信を選択:</label>
-        {streamsLoading ? (
-          <p>配信リストを読み込み中...</p>
-        ) : streamsError ? (
-          <div>
-            <p>エラー: {streamsError}</p>
-            <button onClick={refresh} type="button">
-              再試行
+    <div className="container">
+      <header>
+        <h1>WHEP Player</h1>
+        <div className="user-info">
+          <span>ようこそ、{user.displayName} さん</span>
+          <form method="POST" action="/logout">
+            <button type="submit" className="logout-button">
+              ログアウト
             </button>
-          </div>
-        ) : (
-          <select
-            id="stream-select"
-            value={resource}
-            onChange={(e) => setResource(e.target.value)}
-            disabled={isLoading}
-          >
-            <option value="">配信を選択してください</option>{" "}
-            {streams.map((stream, index) => (
-              <option key={index} value={stream.owner.userId}>
-                🎥 {stream.owner.displayName}
-              </option>
-            ))}
-          </select>
-        )}
-        {selectedStream && (
-          <div className="selected-stream-info">
-            <p>
-              選択中:{" "}
-              <span className="stream-owner">
-                {selectedStream.owner.displayName}
-              </span>
-              <span className="stream-text">の配信</span>
-            </p>
-          </div>
-        )}
-        {connectionStatus !== "disconnected" && (
-          <div className={`connection-status ${connectionStatus}`}>
-            <p>
-              接続状態:
-              <span className="status-text">
-                {connectionStatus === "connecting" && "接続中..."}
-                {connectionStatus === "connected" && "✅ 接続済み"}
-                {connectionStatus === "reconnecting" &&
-                  `🔄 再接続中 (${reconnectAttempt}/5)`}
-                {connectionStatus === "failed" && "❌ 接続失敗"}
-              </span>
-            </p>{" "}
-            {connectionStatus === "failed" && (
-              <button
-                onClick={handleReconnect}
-                type="button"
-                className="reconnect-button"
-              >
-                手動再接続
+          </form>
+        </div>
+      </header>
+      <div className="controls">
+        <div className="stream-selection">
+          <label htmlFor="stream-select">配信を選択:</label>
+          {streamsLoading ? (
+            <p>配信リストを読み込み中...</p>
+          ) : streamsError ? (
+            <div>
+              <p>エラー: {streamsError}</p>
+              <button onClick={refresh} type="button">
+                再試行
               </button>
-            )}
-            {connectionStatus === "connected" && (
-              <button
-                onClick={cleanupConnection} // handleDisconnect を cleanupConnection に変更
-                type="button"
-                className="disconnect-button"
-                style={{ marginLeft: "10px", backgroundColor: "#ff6b6b" }}
-              >
-                🔌 テスト切断
-              </button>
-            )}{" "}
-          </div>
-        )}{" "}
-      </div>
+            </div>
+          ) : (
+            <select
+              id="stream-select"
+              value={resource}
+              onChange={(e) => setResource(e.target.value)}
+              disabled={isLoading}
+            >
+              <option value="">配信を選択してください</option>{" "}
+              {streams.map((stream, index) => (
+                <option key={index} value={stream.owner.userId}>
+                  🎥 {stream.owner.displayName}
+                </option>
+              ))}
+            </select>
+          )}
+          {selectedStream && (
+            <div className="selected-stream-info">
+              <p>
+                選択中:{" "}
+                <span className="stream-owner">
+                  {selectedStream.owner.displayName}
+                </span>
+                <span className="stream-text">の配信</span>
+              </p>
+            </div>
+          )}
+          {connectionStatus !== "disconnected" && (
+            <div className={`connection-status ${connectionStatus}`}>
+              <p>
+                接続状態:
+                <span className="status-text">
+                  {connectionStatus === "connecting" && "接続中..."}
+                  {connectionStatus === "connected" && "✅ 接続済み"}
+                  {connectionStatus === "reconnecting" &&
+                    `🔄 再接続中 (${reconnectAttempt}/5)`}
+                  {connectionStatus === "failed" && "❌ 接続失敗"}
+                </span>
+              </p>{" "}
+              {connectionStatus === "failed" && (
+                <button
+                  onClick={handleReconnect}
+                  type="button"
+                  className="reconnect-button"
+                >
+                  手動再接続
+                </button>
+              )}
+              {connectionStatus === "connected" && (
+                <button
+                  onClick={cleanupConnection} // handleDisconnect を cleanupConnection に変更
+                  type="button"
+                  className="disconnect-button"
+                  style={{ marginLeft: "10px", backgroundColor: "#ff6b6b" }}
+                >
+                  🔌 テスト切断
+                </button>
+              )}{" "}
+            </div>
+          )}{" "}
+        </div>
 
-      <div className="load-button-section">
-        <button
-          onClick={handleLoadClick}
-          disabled={isLoading || !resource.trim() || streamsLoading}
-        >
-          {isLoading ? "読み込み中..." : "Load"}
-        </button>
+        <div className="load-button-section">
+          <button
+            onClick={handleLoadClick}
+            disabled={isLoading || !resource.trim() || streamsLoading}
+          >
+            {isLoading ? "読み込み中..." : "Load"}
+          </button>
+        </div>
       </div>
 
       <div className="remote-media-section">

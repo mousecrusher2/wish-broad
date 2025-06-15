@@ -12,7 +12,7 @@ import {
 import { StatusCode } from "hono/utils/http-status";
 import { logger } from "hono/logger";
 import { bearerAuth } from "hono/bearer-auth";
-import { setCookie } from "hono/cookie";
+import { deleteCookie, setCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { discordAuth, revokeToken } from "@hono/oauth-providers/discord";
 import { jwt, sign } from "hono/jwt";
@@ -192,6 +192,13 @@ app.get("/login", async (c) => {
     httpOnly: true,
     secure: isProduction,
     sameSite: "Strict",
+  });
+  return c.redirect("/");
+});
+
+app.post("/logout", async (c) => {
+  deleteCookie(c, "authtoken", {
+    secure: c.env.ENVIRONMENT === "production",
   });
   return c.redirect("/");
 });

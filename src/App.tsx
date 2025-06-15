@@ -5,10 +5,6 @@ import { WHEPPlayer } from "./WHEPPlayer";
 function App() {
   const { user, isLoading, isAuthenticated } = useAuth();
 
-  const handleLogin = () => {
-    window.location.href = "/login";
-  };
-
   if (isLoading) {
     return (
       <div className="loading-container">
@@ -17,9 +13,8 @@ function App() {
       </div>
     );
   }
-
   if (!isAuthenticated || !user) {
-    return <LoginPrompt onLogin={handleLogin} />;
+    return <LoginPrompt />;
   }
 
   return <WHEPPlayer user={user} />;
