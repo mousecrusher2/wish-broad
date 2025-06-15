@@ -96,7 +96,7 @@ app
       throw error;
     }
   })
-  .all(async (_c) => {
+  .all(async () => {
     throw new HTTPException(400, { message: "Not supported" });
   });
 
@@ -274,7 +274,7 @@ app
       throw error;
     }
   })
-  .all(async (_c) => {
+  .all(async () => {
     throw new HTTPException(404, { message: "Not supported" });
   });
 

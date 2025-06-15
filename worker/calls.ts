@@ -6,7 +6,7 @@ export class CallsApiError extends Error {
     public readonly statusCode: number,
     public readonly statusText: string,
     public readonly endpoint: string,
-    public readonly responseBody?: any
+    public readonly responseBody?: unknown
   ) {
     super(`Calls API Error: ${statusCode} ${statusText} at ${endpoint}`);
     this.name = "CallsApiError";
@@ -111,15 +111,14 @@ export class CallsClient {
     tracks: TrackLocator[],
     sdpOffer?: string
   ): Promise<NewTracksResponse> {
-    const body: any = {
-      tracks: tracks,
-    };
-
-    if (sdpOffer && sdpOffer.length > 0) {
-      body.sessionDescription = {
+    const body = sdpOffer && sdpOffer.length > 0 ? {
+      sessionDescription: {
         type: "offer",
         sdp: sdpOffer,
-      };
+      },
+      tracks: tracks,
+    } : {
+      tracks: tracks,
     }
 
     const endpoint = `${this.endpoint}/sessions/${sessionId}/tracks/new`;
