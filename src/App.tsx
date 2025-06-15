@@ -12,7 +12,7 @@ function App() {
   if (isLoading) {
     return (
       <div className="loading-container">
-        <h1>WISH WHEP Player</h1>
+        <h1>ANGOU BROADCAST</h1>
         <p>認証状態を確認中...</p>
       </div>
     );

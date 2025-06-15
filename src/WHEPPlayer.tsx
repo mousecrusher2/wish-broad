@@ -580,7 +580,7 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
 
   return (
     <div className="grid">
-      <h1>Basic WISH WHEP Player</h1>
+      <h1>ANGOU BROADCAST</h1>
       <div className="user-info">
         <p>ようこそ、{user.displayName}さん</p>
       </div>
