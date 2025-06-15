@@ -5,7 +5,7 @@ export function LoginPrompt() {
       <p>このアプリケーションを使用するにはログインが必要です。</p>
       <form method="POST" action="/login">
         <button type="submit" className="login-button">
-          ログイン
+          Discordでログイン
         </button>
       </form>
     </div>
