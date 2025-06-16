@@ -59,13 +59,112 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
     }
     setStreamUrl(null);
     setConnectionStatus("disconnected");
-    isReconnectingRef.current = false;
-  }, [stopHealthCheck]);
+    isReconnectingRef.current = false;  }, [stopHealthCheck]);
 
-  // attemptReconnect と startHealthCheck の型を先に定義
+  // 型定義
   type AttemptReconnectFn = (resourceValue: string) => Promise<void>;
   type StartHealthCheckFn = () => void;
+  // load関数への参照を保持するref（循環依存を避けるため）
+  const loadFnRef = useRef<(resourceValue: string, isReconnect?: boolean) => Promise<void>>(
+    async () => {}
+  );
 
+  // attemptReconnect を先に定義（loadより前）
+  const attemptReconnect: AttemptReconnectFn = useCallback(
+    async (resourceValue: string) => {
+      // より厳密な重複実行チェック
+      if (isReconnectingRef.current) {
+        return;
+      }
+      // 現在の接続状態をチェック
+      const goodStates = ["connected", "connecting"];
+      if (goodStates.includes(connectionStatus)) {
+        return;
+      }
+
+      const maxRetries = 5;
+      const baseDelay = 2000; // 2秒
+
+      if (reconnectAttempt >= maxRetries) {
+        setConnectionStatus("failed");
+        setIsLoading(false);
+        isReconnectingRef.current = false;
+        return;
+      }
+
+      isReconnectingRef.current = true;
+      setConnectionStatus("reconnecting");
+      setReconnectAttempt((prev) => prev + 1);
+
+      const delay = baseDelay * Math.pow(2, reconnectAttempt); // 指数バックオフ
+
+      const timeoutId = window.setTimeout(() => {
+        pendingTimeoutsRef.current.delete(timeoutId);
+        isReconnectingRef.current = false;
+        // refを使用してload関数を呼び出し
+        if (loadFnRef.current) {
+          loadFnRef.current(resourceValue, true);
+        }
+      }, delay);
+
+      reconnectTimeoutRef.current = timeoutId;
+      pendingTimeoutsRef.current.add(timeoutId);
+    },
+    [connectionStatus, reconnectAttempt]
+  );
+
+  // startHealthCheck を先に定義（loadより前）
+  const startHealthCheck: StartHealthCheckFn = useCallback(() => {
+    if (healthCheckIntervalRef.current) {
+      clearInterval(healthCheckIntervalRef.current);
+    }
+    healthCheckIntervalRef.current = window.setInterval(() => {
+      if (pcRef.current && currentResourceRef.current) {
+        const pc = pcRef.current;
+        // 接続が切断されている、または失敗している場合
+        if (
+          pc.connectionState === "failed" ||
+          pc.connectionState === "disconnected" ||
+          pc.iceConnectionState === "failed" ||
+          pc.iceConnectionState === "disconnected"
+        ) {
+          if (
+            !isReconnectingRef.current &&
+            connectionStatus !== "connecting" &&
+            connectionStatus !== "connected"
+          ) {
+            attemptReconnect(currentResourceRef.current);
+          }
+        }
+
+        // ビデオ要素の状態もチェック
+        if (videoRef.current) {
+          const video = videoRef.current;
+          if (video.srcObject) {
+            const stream = video.srcObject as MediaStream;
+            const tracks = stream.getTracks();
+
+            // すべてのトラックが終了またはミュートされている場合
+            const allTracksEnded = tracks.every(
+              (track) => track.readyState === "ended"
+            );
+
+            if (allTracksEnded) {
+              if (
+                !isReconnectingRef.current &&
+                connectionStatus !== "connecting" &&
+                connectionStatus !== "connected"
+              ) {
+                attemptReconnect(currentResourceRef.current);
+              }
+            }
+          }
+        }
+      }
+    }, 5000); // 5秒ごとにチェック
+  }, [attemptReconnect, connectionStatus]);
+
+  // load関数を最後に定義
   const load: (resourceValue: string, isReconnect?: boolean) => Promise<void> =
     useCallback(
       async (resourceValue: string, isReconnect = false) => {
@@ -393,112 +492,16 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
           } else {
             // 再接続中のエラーの場合、さらに再接続を試行
             attemptReconnect(resourceValue);
-          }
-        } finally {
+          }        } finally {
           setIsLoading(false);
         }
       },
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      [cleanupConnection, connectionStatus]
+      [cleanupConnection, connectionStatus, attemptReconnect, startHealthCheck]
     );
 
-  const attemptReconnect: AttemptReconnectFn = useCallback(
-    async (resourceValue: string) => {
-      // より厳密な重複実行チェック
-      if (isReconnectingRef.current) {
-        return;
-      } // 現在の接続状態をチェック
-      const goodStates = ["connected", "connecting"];
-      if (goodStates.includes(connectionStatus)) {
-        return;
-      }
-
-      const maxRetries = 5;
-      const baseDelay = 2000; // 2秒
-
-      if (reconnectAttempt >= maxRetries) {
-        setConnectionStatus("failed");
-        setIsLoading(false);
-        isReconnectingRef.current = false;
-        return;
-      }
-
-      isReconnectingRef.current = true;
-      setConnectionStatus("reconnecting");
-      setReconnectAttempt((prev) => prev + 1);
-
-      const delay = baseDelay * Math.pow(2, reconnectAttempt); // 指数バックオフ
-
-      const timeoutId = window.setTimeout(() => {
-        pendingTimeoutsRef.current.delete(timeoutId);
-        isReconnectingRef.current = false;
-        load(resourceValue, true);
-      }, delay);
-
-      reconnectTimeoutRef.current = timeoutId;
-      pendingTimeoutsRef.current.add(timeoutId);
-    },
-    [connectionStatus, load, reconnectAttempt]
-  );
-
-  const startHealthCheck: StartHealthCheckFn = useCallback(() => {
-    if (healthCheckIntervalRef.current) {
-      clearInterval(healthCheckIntervalRef.current);
-    }
-    healthCheckIntervalRef.current = window.setInterval(() => {
-      if (pcRef.current && currentResourceRef.current) {
-        const pc = pcRef.current;
-        // 接続が切断されている、または失敗している場合
-        if (
-          pc.connectionState === "failed" ||
-          pc.connectionState === "disconnected" ||
-          pc.iceConnectionState === "failed" ||
-          pc.iceConnectionState === "disconnected"
-        ) {
-          if (
-            !isReconnectingRef.current &&
-            connectionStatus !== "connecting" &&
-            connectionStatus !== "connected"
-          ) {
-            attemptReconnect(currentResourceRef.current);
-          }
-        }
-
-        // ビデオ要素の状態もチェック
-        if (videoRef.current) {
-          const video = videoRef.current;
-          if (video.srcObject) {
-            const stream = video.srcObject as MediaStream;
-            const tracks = stream.getTracks();
-
-            // すべてのトラックが終了またはミュートされている場合
-            const allTracksEnded = tracks.every(
-              (track) => track.readyState === "ended"
-            );
-
-            if (allTracksEnded) {
-              if (
-                !isReconnectingRef.current &&
-                connectionStatus !== "connecting" &&
-                connectionStatus !== "connected"
-              ) {
-                attemptReconnect(currentResourceRef.current);
-              }
-            }
-          }
-        }
-      }
-    }, 5000); // 5秒ごとにチェック
-  }, [attemptReconnect, connectionStatus]);
-
-  // useEffect の依存配列を更新
+  // loadFnRef に実際の関数を設定
   useEffect(() => {
-    // load 関数の依存配列から attemptReconnect と startHealthCheck を削除したため、
-    // ここで load が変更されたときに attemptReconnect と startHealthCheck を更新する必要があるかもしれないが、
-    // 通常は load が変わる状況では attemptReconnect や startHealthCheck も再定義されるべきなので、
-    // ESLint の警告を無視するか、より複雑な依存関係管理が必要になる。
-    // ここでは ESLint の警告を無視する。
-  }, [load]);
+    loadFnRef.current = load;  }, [load]);
 
   // 手動再接続ボタン用の関数
   const handleReconnect = useCallback(() => {
@@ -648,9 +651,8 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
                   className="reconnect-button"
                 >
                   手動再接続
-                </button>
-              )}
-              {connectionStatus === "connected" && (
+                </button>              )}
+              {connectionStatus === "connected" && window.location.hostname === "localhost" && (
                 <button
                   onClick={cleanupConnection} // handleDisconnect を cleanupConnection に変更
                   type="button"
