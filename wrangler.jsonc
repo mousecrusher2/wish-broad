@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "whip-worker",
   "main": "worker/index.ts",
-  "compatibility_date": "2025-04-27",
+  "compatibility_date": "2025-09-15",
   // "compatibility_flags": [
   //   "nodejs_compat"
   // ],

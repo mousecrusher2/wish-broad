@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { JWTPayload, Bindings, DiscordGuildMember } from "./types";
 import * as db from "./database";
 import { getGuildMember } from "./discord";
-import { calculateJwtTimestamps, JWT_DURATION_SECONDS } from "./jwt-utils";
+import { calcJwtTimestamps, JWT_DURATION_SECONDS } from "./jwt-utils";
 import {
   CallsClient,
   startIngest,
@@ -18,6 +18,15 @@ import { discordAuth, revokeToken } from "@hono/oauth-providers/discord";
 import { jwt, sign } from "hono/jwt";
 
 const app = new Hono<{ Bindings: Bindings }>();
+
+app.onError((err, c) => {
+  console.error(
+    "Unhandled error:",
+    err,
+    err instanceof Error ? err.stack : null
+  );
+  return c.json({ message: "Internal Server Error" }, 500);
+});
 
 app.use(logger());
 
@@ -149,7 +158,8 @@ app.get("/login", async (c) => {
   const oauthToken = c.get("token");
   if (!user || !oauthToken) {
     throw new HTTPException(401, { message: "Unauthorized" });
-  } // ユーザーが認証済みギルドのメンバーかどうかをチェック
+  }
+  // ユーザーが認証済みギルドのメンバーかどうかをチェック
   let member: DiscordGuildMember;
   try {
     member = await getGuildMember(oauthToken.token, c.env.AUTHORIZED_GUILD_ID);
@@ -175,7 +185,7 @@ app.get("/login", async (c) => {
     displayName,
   });
 
-  const { iat, exp } = calculateJwtTimestamps(JWT_DURATION_SECONDS.ONE_DAY);
+  const { iat, exp } = calcJwtTimestamps(JWT_DURATION_SECONDS.ONE_DAY);
   const payload: JWTPayload = {
     iat,
     exp,

@@ -11,7 +11,7 @@ export function getExpirationTimestamp(durationInSeconds: number): number {
 }
 
 // JWT用のiat（issued at）とexp（expiration）を計算
-export function calculateJwtTimestamps(durationInSeconds: number = 60 * 60 * 24): { iat: number; exp: number } {
+export function calcJwtTimestamps(durationInSeconds: number = 60 * 60 * 24): { iat: number; exp: number } {
   const iat = getCurrentTimestamp();
   const exp = iat + durationInSeconds;
   return { iat, exp };
