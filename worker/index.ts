@@ -215,11 +215,15 @@ app.post("/logout", async (c) => {
 
 // ライブ視聴用エンドポイントの認証ミドルウェア
 app.use("/play/*", async (c, next) => {
-  return jwt({
-    secret: c.env.JWT_SECRET,
-    cookie: "authtoken",
-    alg: "HS256",
-  })(c, next);
+  try {
+    return jwt({
+      secret: c.env.JWT_SECRET,
+      cookie: "authtoken",
+      alg: "HS256",
+    })(c, next);
+  } catch {
+    throw new HTTPException(401, { message: "Unauthorized" });
+  }
 });
 
 // ライブ視聴開始エンドポイント（WHEP）
@@ -333,11 +337,15 @@ app
 
 // API routes用の認証ミドルウェア
 app.use("/api/*", async (c, next) => {
-  return jwt({
-    secret: c.env.JWT_SECRET,
-    cookie: "authtoken",
-    alg: "HS256",
-  })(c, next);
+  try {
+    return jwt({
+      secret: c.env.JWT_SECRET,
+      cookie: "authtoken",
+      alg: "HS256",
+    })(c, next);
+  } catch {
+    throw new HTTPException(401, { message: "Unauthorized" });
+  }
 });
 
 // ユーザー情報を取得するAPIエンドポイント

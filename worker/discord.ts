@@ -12,6 +12,7 @@ export async function getGuildMember(
     {
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        "Accept": "application/json",
       },
     }
   );
