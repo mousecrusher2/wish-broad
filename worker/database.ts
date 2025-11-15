@@ -5,12 +5,12 @@ export async function setTracks(
   database: D1Database,
   userId: string,
   sessionId: string,
-  tracks: TrackLocator[]
+  tracks: TrackLocator[],
 ): Promise<void> {
   const tracksJson = JSON.stringify(tracks);
   await database
     .prepare(
-      "INSERT OR REPLACE INTO live_tracks (user_id, session_id, tracks_json) VALUES (?, ?, ?)"
+      "INSERT OR REPLACE INTO live_tracks (user_id, session_id, tracks_json) VALUES (?, ?, ?)",
     )
     .bind(userId, sessionId, tracksJson)
     .run();
@@ -18,7 +18,7 @@ export async function setTracks(
 
 export async function getTracks(
   database: D1Database,
-  userId: string
+  userId: string,
 ): Promise<TrackLocator[]> {
   const result = await database
     .prepare("SELECT tracks_json FROM live_tracks WHERE user_id = ?")
@@ -34,7 +34,7 @@ export async function getTracks(
 
 export async function deleteTracks(
   database: D1Database,
-  userId: string
+  userId: string,
 ): Promise<void> {
   await database
     .prepare("DELETE FROM live_tracks WHERE user_id = ?")
@@ -48,7 +48,7 @@ export async function deleteTracks(
  */
 export async function shouldCheckSession(
   database: D1Database,
-  userId: string
+  userId: string,
 ): Promise<boolean> {
   const result = await database
     .prepare("SELECT last_session_check FROM live_tracks WHERE user_id = ?")
@@ -71,11 +71,11 @@ export async function shouldCheckSession(
  */
 export async function updateSessionCheckTime(
   database: D1Database,
-  userId: string
+  userId: string,
 ): Promise<void> {
   await database
     .prepare(
-      "UPDATE live_tracks SET last_session_check = CURRENT_TIMESTAMP WHERE user_id = ?"
+      "UPDATE live_tracks SET last_session_check = CURRENT_TIMESTAMP WHERE user_id = ?",
     )
     .bind(userId)
     .run();
@@ -86,7 +86,7 @@ export async function updateSessionCheckTime(
  */
 export async function deleteInactiveSession(
   database: D1Database,
-  userId: string
+  userId: string,
 ): Promise<void> {
   await database
     .prepare("DELETE FROM live_tracks WHERE user_id = ?")
@@ -98,11 +98,11 @@ export async function deleteInactiveSession(
 export async function setLiveToken(
   database: D1Database,
   userId: string,
-  token: string
+  token: string,
 ): Promise<void> {
   await database
     .prepare(
-      "INSERT OR REPLACE INTO live_tokens (user_id, token) VALUES (?, ?)"
+      "INSERT OR REPLACE INTO live_tokens (user_id, token) VALUES (?, ?)",
     )
     .bind(userId, token)
     .run();
@@ -110,7 +110,7 @@ export async function setLiveToken(
 
 export async function getLiveToken(
   database: D1Database,
-  userId: string
+  userId: string,
 ): Promise<string | null> {
   const result = await database
     .prepare("SELECT token FROM live_tokens WHERE user_id = ?")
@@ -122,7 +122,7 @@ export async function getLiveToken(
 
 export async function hasLiveToken(
   database: D1Database,
-  userId: string
+  userId: string,
 ): Promise<boolean> {
   const result = await database
     .prepare("SELECT 1 FROM live_tokens WHERE user_id = ? LIMIT 1")
@@ -135,7 +135,7 @@ export async function hasLiveToken(
 export async function setUser(database: D1Database, user: User): Promise<void> {
   await database
     .prepare(
-      "INSERT OR REPLACE INTO users (user_id, display_name) VALUES (?, ?)"
+      "INSERT OR REPLACE INTO users (user_id, display_name) VALUES (?, ?)",
     )
     .bind(user.userId, user.displayName)
     .run();
@@ -143,7 +143,7 @@ export async function setUser(database: D1Database, user: User): Promise<void> {
 
 export async function getUser(
   database: D1Database,
-  userId: string
+  userId: string,
 ): Promise<User | null> {
   const result = await database
     .prepare("SELECT user_id, display_name FROM users WHERE user_id = ?")
@@ -163,7 +163,7 @@ export async function getUser(
 export async function getAllLives(database: D1Database): Promise<Live[]> {
   const results = await database
     .prepare(
-      "SELECT users.user_id, display_name FROM live_tracks JOIN users ON live_tracks.user_id = users.user_id"
+      "SELECT users.user_id, display_name FROM live_tracks JOIN users ON live_tracks.user_id = users.user_id",
     )
     .all();
 

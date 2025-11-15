@@ -23,7 +23,7 @@ app.onError((err, c) => {
   console.error(
     "Unhandled error:",
     err,
-    err instanceof Error ? err.stack : null
+    err instanceof Error ? err.stack : null,
   );
   return c.json({ message: "Internal Server Error" }, 500);
 });
@@ -85,7 +85,7 @@ app
         c.env.LIVE_DB,
         userId,
         result.sessionId,
-        result.tracks
+        result.tracks,
       );
 
       return c.body(result.sdpAnswer, 201, {
@@ -143,7 +143,7 @@ app.use("/login", async (c, next) => {
     await revokeToken(
       c.env.DISCORD_CLIENT_ID,
       c.env.DISCORD_CLIENT_SECRET,
-      oauthToken.token
+      oauthToken.token,
     );
   } catch (error) {
     // トークン取り消しの失敗は致命的ではないので、ログのみ出力
@@ -235,7 +235,7 @@ app
     // JWTペイロードからユーザー情報を取得してログ出力
     const jwtPayload = c.get("jwtPayload") as JWTPayload;
     console.log(
-      `User ${jwtPayload.displayName} (${jwtPayload.userId}) is trying to play user: ${userId}`
+      `User ${jwtPayload.displayName} (${jwtPayload.userId}) is trying to play user: ${userId}`,
     );
 
     // Calls APIクライアントを初期化
@@ -280,7 +280,7 @@ app
     } catch (error) {
       console.error(
         `Failed to start play for user ${userId} by user ${jwtPayload.userId}:`,
-        error
+        error,
       );
       if (error instanceof HTTPException) {
         throw error;
@@ -321,7 +321,7 @@ app
 
       const response = await callsClient.renegotiateSession(
         sessionId,
-        sdpAnswer
+        sdpAnswer,
       );
       return c.body(null, response.status as StatusCode);
     } catch (error) {
@@ -368,7 +368,7 @@ app.post("/api/me/livetoken", async (c) => {
   const randomBytes = new Uint8Array(32);
   crypto.getRandomValues(randomBytes);
   const token = Array.from(randomBytes, (byte) =>
-    byte.toString(16).padStart(2, "0")
+    byte.toString(16).padStart(2, "0"),
   ).join("");
   try {
     // データベースに保存（既存があれば上書き）

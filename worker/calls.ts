@@ -6,7 +6,7 @@ export class CallsApiError extends Error {
     public readonly statusCode: number,
     public readonly statusText: string,
     public readonly endpoint: string,
-    public readonly responseBody?: unknown
+    public readonly responseBody?: unknown,
   ) {
     super(`Calls API Error: ${statusCode} ${statusText} at ${endpoint}`);
     this.name = "CallsApiError";
@@ -23,7 +23,7 @@ export class LiveNotFoundError extends Error {
 // レスポンスチェック用ユーティリティ
 async function checkCallsApiResponse(
   response: Response,
-  endpoint: string
+  endpoint: string,
 ): Promise<void> {
   if (!response.ok) {
     let responseBody;
@@ -42,7 +42,7 @@ async function checkCallsApiResponse(
       response.status,
       response.statusText,
       endpoint,
-      responseBody
+      responseBody,
     );
   }
 }
@@ -80,7 +80,7 @@ export class CallsClient {
    */
   async createIngestTracks(
     sessionId: string,
-    sdpOffer: string
+    sdpOffer: string,
   ): Promise<NewTracksResponse> {
     const body = {
       sessionDescription: {
@@ -109,17 +109,20 @@ export class CallsClient {
   async connectToTracks(
     sessionId: string,
     tracks: TrackLocator[],
-    sdpOffer?: string
+    sdpOffer?: string,
   ): Promise<NewTracksResponse> {
-    const body = sdpOffer && sdpOffer.length > 0 ? {
-      sessionDescription: {
-        type: "offer",
-        sdp: sdpOffer,
-      },
-      tracks: tracks,
-    } : {
-      tracks: tracks,
-    }
+    const body =
+      sdpOffer && sdpOffer.length > 0
+        ? {
+            sessionDescription: {
+              type: "offer",
+              sdp: sdpOffer,
+            },
+            tracks: tracks,
+          }
+        : {
+            tracks: tracks,
+          };
 
     const endpoint = `${this.endpoint}/sessions/${sessionId}/tracks/new`;
     const response = await fetch(endpoint, {
@@ -139,7 +142,7 @@ export class CallsClient {
    */
   async renegotiateSession(
     sessionId: string,
-    sdpAnswer: string
+    sdpAnswer: string,
   ): Promise<Response> {
     const body = {
       sessionDescription: {
@@ -187,7 +190,7 @@ export class CallsClient {
 export async function startIngest(
   callsClient: CallsClient,
   _liveId: string,
-  sdpOffer: string
+  sdpOffer: string,
 ): Promise<{
   sessionId: string;
   sdpAnswer: string;
@@ -199,7 +202,7 @@ export async function startIngest(
   // 配信者からのSDP Offerを使ってトラックを作成
   const tracksResult = await callsClient.createIngestTracks(
     sessionResult.sessionId,
-    sdpOffer
+    sdpOffer,
   );
 
   // トラック情報を整理
@@ -223,7 +226,7 @@ export async function startPlay(
   callsClient: CallsClient,
   liveId: string,
   tracks: TrackLocator[],
-  sdpOffer?: string
+  sdpOffer?: string,
 ): Promise<{
   sessionId: string;
   sdpAnswer: string;
@@ -239,7 +242,7 @@ export async function startPlay(
   const tracksResult = await callsClient.connectToTracks(
     sessionResult.sessionId,
     tracks,
-    sdpOffer
+    sdpOffer,
   );
   return {
     sessionId: sessionResult.sessionId,

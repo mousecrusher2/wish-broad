@@ -1,4 +1,5 @@
 # Wish Broad Copilot Instructions
+
 - **Big Picture**: Cloudflare Worker (Hono) under `worker/` serves auth, API, and WHIP/WHEP signaling; React + Vite front-end under `src/` consumes the Worker APIs. Player is WebRTC-first, so connectivity flows span both halves.
 - **Worker Entry**: `worker/index.ts` wires routes. Follow the existing pattern: declare middleware (`app.use`) before handlers, throw `HTTPException` on client errors, let unexpected errors bubble to the global `onError` logger.
 - **Auth Flow**: `/login` uses `discordAuth` middleware, validates guild membership via `worker/discord.ts`, stores users in D1, signs JWT with `hono/jwt`, and sets the `authtoken` cookie. Front-end access always happens via `fetch` to `/api/*` with the cookie; avoid inventing alternate auth paths.

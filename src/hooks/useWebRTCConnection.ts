@@ -26,7 +26,10 @@ interface WebRTCConnectionActions {
   setReconnectAttempt: React.Dispatch<React.SetStateAction<number>>;
   setStreamUrl: (url: string | null) => void;
   cleanupConnection: () => void;
-  setupConnectionEventListeners: (pc: RTCPeerConnection, onConnectionChange?: () => void) => void;
+  setupConnectionEventListeners: (
+    pc: RTCPeerConnection,
+    onConnectionChange?: () => void,
+  ) => void;
 }
 
 export function useWebRTCConnection(): [
@@ -101,15 +104,24 @@ export function useWebRTCConnection(): [
 
       // イベントリスナーを追加
       pc.addEventListener("connectionstatechange", handleConnectionStateChange);
-      pc.addEventListener("iceconnectionstatechange", handleIceConnectionStateChange);
+      pc.addEventListener(
+        "iceconnectionstatechange",
+        handleIceConnectionStateChange,
+      );
 
       // クリーンアップ関数を返す
       return () => {
-        pc.removeEventListener("connectionstatechange", handleConnectionStateChange);
-        pc.removeEventListener("iceconnectionstatechange", handleIceConnectionStateChange);
+        pc.removeEventListener(
+          "connectionstatechange",
+          handleConnectionStateChange,
+        );
+        pc.removeEventListener(
+          "iceconnectionstatechange",
+          handleIceConnectionStateChange,
+        );
       };
     },
-    [setConnectionStatus, setReconnectAttempt]
+    [setConnectionStatus, setReconnectAttempt],
   );
 
   const state: WebRTCConnectionState = {

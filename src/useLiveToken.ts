@@ -40,7 +40,7 @@ export function useLiveToken() {
     } catch (err) {
       console.error("Failed to fetch token status:", err);
       setError(
-        err instanceof Error ? err.message : "トークン状況の取得に失敗しました"
+        err instanceof Error ? err.message : "トークン状況の取得に失敗しました",
       );
       setHasToken(false);
       setToken(null);
@@ -75,7 +75,7 @@ export function useLiveToken() {
     } catch (err) {
       console.error("Failed to create token:", err);
       setError(
-        err instanceof Error ? err.message : "トークンの発行に失敗しました"
+        err instanceof Error ? err.message : "トークンの発行に失敗しました",
       );
     } finally {
       setIsLoading(false);

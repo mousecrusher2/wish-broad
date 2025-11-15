@@ -18,13 +18,14 @@ export function useReconnection(
   setIsLoading: (loading: boolean) => void,
   pcRef: React.RefObject<RTCPeerConnection | null>,
   videoRef: React.RefObject<HTMLVideoElement | null>,
-  currentResourceRef: React.RefObject<string>
+  currentResourceRef: React.RefObject<string>,
 ) {
   const isVisible = usePageVisibility();
   const lastCheckTimeRef = useRef<number>(Date.now());
   const reconnectTimeoutRef = useRef<number | null>(null);
   const muteTimeoutRef = useRef<number | null>(null);
-  const pendingTimeoutsRef = useRef<Set<number>>(new Set());  const healthCheckIntervalRef = useRef<number | null>(null);
+  const pendingTimeoutsRef = useRef<Set<number>>(new Set());
+  const healthCheckIntervalRef = useRef<number | null>(null);
   const isReconnectingRef = useRef<boolean>(false);
 
   // 接続状態を即座にチェックする関数
@@ -56,7 +57,7 @@ export function useReconnection(
         const stream = videoRef.current.srcObject as MediaStream;
         const tracks = stream.getTracks();
         const allTracksEnded = tracks.every(
-          (track) => track.readyState === "ended"
+          (track) => track.readyState === "ended",
         );
 
         if (allTracksEnded) {
@@ -70,9 +71,10 @@ export function useReconnection(
             return true;
           }
         }
-      }      return false;
+      }
+      return false;
     },
-    [connectionStatus, pcRef, videoRef, currentResourceRef]
+    [connectionStatus, pcRef, videoRef, currentResourceRef],
   );
   // Page Visibility変更時の処理
   useEffect(() => {
@@ -98,7 +100,7 @@ export function useReconnection(
       if (healthCheckIntervalRef.current) {
         // 現在のヘルスチェックを停止して再開始
         clearInterval(healthCheckIntervalRef.current);
-        const getCheckInterval = () => isVisible ? 5000 : 30000;
+        const getCheckInterval = () => (isVisible ? 5000 : 30000);
 
         const performHealthCheck = () => {
           if (pcRef.current && currentResourceRef.current) {
@@ -106,10 +108,13 @@ export function useReconnection(
           }
         };
 
-        healthCheckIntervalRef.current = window.setInterval(performHealthCheck, getCheckInterval());
+        healthCheckIntervalRef.current = window.setInterval(
+          performHealthCheck,
+          getCheckInterval(),
+        );
       }
     },
-    [isVisible, pcRef, currentResourceRef, checkConnectionImmediate]
+    [isVisible, pcRef, currentResourceRef, checkConnectionImmediate],
   );
 
   const stopHealthCheck = useCallback(() => {
@@ -141,7 +146,7 @@ export function useReconnection(
   const attemptReconnect = useCallback(
     async (
       resourceValue: string,
-      loadFn: (resource: string, isReconnect?: boolean) => Promise<void>
+      loadFn: (resource: string, isReconnect?: boolean) => Promise<void>,
     ) => {
       // より厳密な重複実行チェック
       if (isReconnectingRef.current) {
@@ -185,7 +190,7 @@ export function useReconnection(
       setConnectionStatus,
       setIsLoading,
       setReconnectAttempt,
-    ]
+    ],
   );
   const startHealthCheck = useCallback(
     (attemptReconnectFn: (resource: string) => void) => {
@@ -218,7 +223,10 @@ export function useReconnection(
           const currentInterval = getCheckInterval();
           if (healthCheckIntervalRef.current) {
             clearInterval(healthCheckIntervalRef.current);
-            healthCheckIntervalRef.current = window.setInterval(performHealthCheck, currentInterval);
+            healthCheckIntervalRef.current = window.setInterval(
+              performHealthCheck,
+              currentInterval,
+            );
           }
         }, getCheckInterval());
       };
@@ -229,7 +237,7 @@ export function useReconnection(
       // 定期チェックをスケジュール
       scheduleNextCheck();
     },
-    [pcRef, currentResourceRef, checkConnectionImmediate, isVisible]
+    [pcRef, currentResourceRef, checkConnectionImmediate, isVisible],
   );
   const refs: ReconnectionRefs = {
     reconnectTimeoutRef,

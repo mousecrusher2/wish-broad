@@ -11,7 +11,7 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
     useLiveToken();
   const [showToken, setShowToken] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"none" | "url" | "token">(
-    "none"
+    "none",
   );
   const [showOBSSettings, setShowOBSSettings] = useState(false);
 

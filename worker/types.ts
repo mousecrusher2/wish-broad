@@ -31,7 +31,8 @@ export type JWTPayload = {
 };
 
 export type Bindings = {
-  CALLS_APP_ID: string;  CALLS_APP_SECRET: string;
+  CALLS_APP_ID: string;
+  CALLS_APP_SECRET: string;
   JWT_SECRET: string;
   DISCORD_CLIENT_ID: string;
   DISCORD_CLIENT_SECRET: string;
@@ -45,18 +46,18 @@ export type DiscordUser = {
   username: string;
   discriminator: string;
   global_name?: string;
-}
+};
 
 export type DiscordGuildMember = {
   user: DiscordUser;
   nick?: string;
-}
+};
 
 export type User = {
   userId: string;
   displayName: string;
-}
+};
 
 export type Live = {
   owner: User;
-}
+};

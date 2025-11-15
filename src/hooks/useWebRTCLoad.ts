@@ -16,10 +16,13 @@ export function useWebRTCLoad(
   cleanupConnection: () => void,
   attemptReconnect: (
     resource: string,
-    loadFn: (resource: string, isReconnect?: boolean) => Promise<void>
+    loadFn: (resource: string, isReconnect?: boolean) => Promise<void>,
   ) => Promise<void>,
   startHealthCheck: (attemptReconnectFn: (resource: string) => void) => void,
-  setupConnectionEventListeners: (pc: RTCPeerConnection, onConnectionChange?: () => void) => void
+  setupConnectionEventListeners: (
+    pc: RTCPeerConnection,
+    onConnectionChange?: () => void,
+  ) => void,
 ) {
   // load関数への参照を保持するref（循環依存を避けるため）
   const loadFnRef = useRef<
@@ -46,7 +49,8 @@ export function useWebRTCLoad(
       setConnectionStatus("connecting");
 
       try {
-        const resourceUrl = new URL(`/play/${resourceValue}`, location.origin);        const pc = new RTCPeerConnection({
+        const resourceUrl = new URL(`/play/${resourceValue}`, location.origin);
+        const pc = new RTCPeerConnection({
           bundlePolicy: "max-bundle",
         });
 
@@ -57,7 +61,8 @@ export function useWebRTCLoad(
         const connectionChangeHandler = () => {
           // 再接続の条件チェック
           if (
-            (pc.connectionState === "failed" || pc.connectionState === "disconnected") &&
+            (pc.connectionState === "failed" ||
+              pc.connectionState === "disconnected") &&
             currentResourceRef.current &&
             !isReconnectingRef.current &&
             connectionStatus !== "connecting" &&
@@ -99,7 +104,7 @@ export function useWebRTCLoad(
                 ) {
                   attemptReconnect(
                     currentResourceRef.current,
-                    loadFnRef.current
+                    loadFnRef.current,
                   );
                 }
               };
@@ -120,7 +125,7 @@ export function useWebRTCLoad(
                   ) {
                     attemptReconnect(
                       currentResourceRef.current,
-                      loadFnRef.current
+                      loadFnRef.current,
                     );
                   }
                 }, 10000); // 10秒でタイムアウト
@@ -149,7 +154,7 @@ export function useWebRTCLoad(
                 resolve(tracks);
               }
             }, 10000);
-          }
+          },
         );
 
         const offer = await fetch(resourceUrl, { method: "POST" });
@@ -157,7 +162,7 @@ export function useWebRTCLoad(
           new RTCSessionDescription({
             type: "offer",
             sdp: await offer.text(),
-          })
+          }),
         );
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -182,7 +187,7 @@ export function useWebRTCLoad(
 
         // 接続成功時にヘルスチェックを開始
         startHealthCheck((resource: string) =>
-          attemptReconnect(resource, loadFnRef.current)
+          attemptReconnect(resource, loadFnRef.current),
         );
 
         // video要素のrefを設定（複数回試行でより確実に）
@@ -198,7 +203,7 @@ export function useWebRTCLoad(
                   if (currentResourceRef.current) {
                     attemptReconnect(
                       currentResourceRef.current,
-                      loadFnRef.current
+                      loadFnRef.current,
                     );
                   }
                 }, 3000); // 3秒待ってから再接続
@@ -219,7 +224,7 @@ export function useWebRTCLoad(
                 ) {
                   attemptReconnect(
                     currentResourceRef.current,
-                    loadFnRef.current
+                    loadFnRef.current,
                   );
                 }
               }, 8000); // 8秒待機
@@ -253,7 +258,7 @@ export function useWebRTCLoad(
                   ) {
                     attemptReconnect(
                       currentResourceRef.current,
-                      loadFnRef.current
+                      loadFnRef.current,
                     );
                   }
                 }, 2000);
@@ -280,13 +285,14 @@ export function useWebRTCLoad(
             if (attempts < 3) {
               setTimeout(
                 () => setVideoStream(attempts + 1),
-                50 * (attempts + 1)
+                50 * (attempts + 1),
               );
             }
           }
         };
         // 即座に試行し、失敗したら再試行
-        setVideoStream();      } catch {
+        setVideoStream();
+      } catch {
         setStreamUrl(null);
         if (!isReconnect) {
           alert("ストリームの読み込みに失敗しました");
@@ -298,7 +304,8 @@ export function useWebRTCLoad(
       } finally {
         setIsLoading(false);
       }
-    },    [
+    },
+    [
       setIsLoading,
       setConnectionStatus,
       setStreamUrl,
@@ -314,7 +321,7 @@ export function useWebRTCLoad(
       startHealthCheck,
       connectionStatus,
       setupConnectionEventListeners,
-    ]
+    ],
   );
 
   // loadFnRef に実際の関数を設定

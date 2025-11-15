@@ -1,795 +1,805 @@
 :root {
-    line-height: 1.5;
-    font-weight: 400;
+  line-height: 1.5;
+  font-weight: 400;
 
-    color-scheme: light dark;
-    color: rgba(255, 255, 255, 0.87);
-    background-color: #242424;
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
 
-    font-synthesis: none;
-    text-rendering: optimizeLegibility;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 a {
-    font-weight: 500;
-    color: #646cff;
-    text-decoration: inherit;
+  font-weight: 500;
+  color: #646cff;
+  text-decoration: inherit;
 }
 
 a:hover {
-    color: #535bf2;
+  color: #535bf2;
 }
 
 body {
-    margin: 0;
-    min-width: 320px;
-    min-height: 100vh;
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
 }
 
 h1 {
-    font-size: 3.2em;
-    line-height: 1.1;
+  font-size: 3.2em;
+  line-height: 1.1;
 }
 
 #app {
-    max-width: 1200px;
-    width: min(90%, 1200px);
-    margin: 0 auto;
-    padding: 2rem;
-    text-align: center;
+  max-width: 1200px;
+  width: min(90%, 1200px);
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
 }
 
 .logo {
-    height: 6em;
-    padding: 1.5em;
-    will-change: filter;
-    transition: filter 300ms;
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
 }
 
 .logo:hover {
-    filter: drop-shadow(0 0 2em #646cffaa);
+  filter: drop-shadow(0 0 2em #646cffaa);
 }
 
 .logo.vanilla:hover {
-    filter: drop-shadow(0 0 2em #3178c6aa);
+  filter: drop-shadow(0 0 2em #3178c6aa);
 }
 
 .card {
-    padding: 2em;
+  padding: 2em;
 }
 
 .read-the-docs {
-    color: #888;
+  color: #888;
 }
 
 button {
-    border-radius: 8px;
-    border: 1px solid transparent;
-    padding: 0.6em 1.2em;
-    font-size: 1em;
-    font-weight: 500;
-    font-family: inherit;
-    background-color: #1a1a1a;
-    cursor: pointer;
-    transition: border-color 0.25s;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: #1a1a1a;
+  cursor: pointer;
+  transition: border-color 0.25s;
 }
 
 button:hover {
-    border-color: #646cff;
+  border-color: #646cff;
 }
 
 button:focus,
 button:focus-visible {
-    outline: 4px auto -webkit-focus-ring-color;
+  outline: 4px auto -webkit-focus-ring-color;
 }
 
 @media (prefers-color-scheme: light) {
-    :root {
-        color: #213547;
-        background-color: #ffffff;
-    }
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
 
-    a:hover {
-        color: #747bff;
-    }
+  a:hover {
+    color: #747bff;
+  }
 
-    button {
-        background-color: #f9f9f9;
-    }
+  button {
+    background-color: #f9f9f9;
+  }
 }
 
 /* Styles are safe to ignore, just here for demo */
 html {
-    color-scheme: light dark;
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-        Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
-    background: white;
-    color: black;
+  color-scheme: light dark;
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    Oxygen,
+    Ubuntu,
+    Cantarell,
+    "Open Sans",
+    "Helvetica Neue",
+    sans-serif;
+  background: white;
+  color: black;
 }
 
 body,
 h1,
 h2 {
-    margin: 0;
+  margin: 0;
 }
 
 h1,
 h2 {
-    font-weight: 400;
+  font-weight: 400;
 }
 
 h1 {
-    font-size: 1.5rem;
-    grid-column: 1 / -1;
+  font-size: 1.5rem;
+  grid-column: 1 / -1;
 }
 
 h2 {
-    font-size: 1rem;
-    margin-bottom: 0.5rem;
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
 }
 
 video {
-    width: 100%;
+  width: 100%;
 }
 
 .grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 1rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1rem;
 }
 
 @media (max-width: 500px) {
-    .grid {
-        grid-template-columns: minmax(0, 1fr);
-    }
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* ヘッダーとログアウトボタンのスタイル */
 header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 2rem;
-    padding-bottom: 1rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .user-info {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
 }
 
 .logout-button {
-    padding: 0.5rem 1rem;
-    background-color: #dc3545;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.9rem;
+  padding: 0.5rem 1rem;
+  background-color: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
 }
 
 .logout-button:hover {
-    background-color: #c82333;
+  background-color: #c82333;
 }
 
 /* WHEPPlayer コンテナのスタイル */
 .container {
-    max-width: 1000px;
-    width: min(95%, 1000px);
-    margin: 0 auto;
-    padding: 1rem;
+  max-width: 1000px;
+  width: min(95%, 1000px);
+  margin: 0 auto;
+  padding: 1rem;
 }
 
 /* 認証関連のスタイル */
 .loading-container,
 .login-container {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 50vh;
-    padding: 2rem;
-    text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 50vh;
+  padding: 2rem;
+  text-align: center;
 }
 
 .login-button {
-    margin-top: 1rem;
-    padding: 0.8rem 1.5rem;
-    font-size: 1.1rem;
-    background-color: #646cff;
-    color: white;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: background-color 0.25s;
+  margin-top: 1rem;
+  padding: 0.8rem 1.5rem;
+  font-size: 1.1rem;
+  background-color: #646cff;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.25s;
 }
 
 .login-button:hover {
-    background-color: #535bf2;
+  background-color: #535bf2;
 }
 
 .login-button:disabled {
-    background-color: #888;
-    cursor: not-allowed;
+  background-color: #888;
+  cursor: not-allowed;
 }
 
 .user-info {
-    grid-column: 1 / -1;
-    padding: 0.5rem;
-    background-color: rgba(100, 108, 255, 0.1);
-    border-radius: 8px;
-    margin-bottom: 1rem;
+  grid-column: 1 / -1;
+  padding: 0.5rem;
+  background-color: rgba(100, 108, 255, 0.1);
+  border-radius: 8px;
+  margin-bottom: 1rem;
 }
 
 .user-info p {
-    margin: 0;
-    color: #646cff;
-    font-weight: 500;
+  margin: 0;
+  color: #646cff;
+  font-weight: 500;
 }
 
 /* 配信選択のスタイル */
 .stream-selection {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .stream-selection label {
-    font-weight: 500;
-    color: #646cff;
+  font-weight: 500;
+  color: #646cff;
 }
 
 .stream-selection select {
-    padding: 0.6em 1.2em;
-    font-size: 1em;
-    border: 1px solid #ccc;
-    border-radius: 8px;
-    background-color: #1a1a1a;
-    color: rgba(255, 255, 255, 0.87);
-    cursor: pointer;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background-color: #1a1a1a;
+  color: rgba(255, 255, 255, 0.87);
+  cursor: pointer;
 }
 
 .stream-selection select:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .stream-selection select:focus {
-    outline: 2px solid #646cff;
-    outline-offset: 2px;
+  outline: 2px solid #646cff;
+  outline-offset: 2px;
 }
 
 .selected-stream-info {
-    margin-top: 0.5rem;
-    padding: 0.8rem;
-    background-color: rgba(100, 108, 255, 0.1);
-    border-radius: 8px;
-    border-left: 3px solid #646cff;
+  margin-top: 0.5rem;
+  padding: 0.8rem;
+  background-color: rgba(100, 108, 255, 0.1);
+  border-radius: 8px;
+  border-left: 3px solid #646cff;
 }
 
 .selected-stream-info p {
-    margin: 0;
-    font-size: 0.9rem;
+  margin: 0;
+  font-size: 0.9rem;
 }
 
 .stream-owner {
-    font-weight: 600;
-    color: #646cff;
+  font-weight: 600;
+  color: #646cff;
 }
 
 .stream-text {
-    color: rgba(255, 255, 255, 0.7);
-    font-style: italic;
+  color: rgba(255, 255, 255, 0.7);
+  font-style: italic;
 }
 
 .stream-id {
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.85rem;
 }
 
 /* 接続状態表示 */
 .connection-status {
-    margin-top: 0.5rem;
-    padding: 0.6rem;
-    border-radius: 6px;
-    font-size: 0.9rem;
+  margin-top: 0.5rem;
+  padding: 0.6rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
 }
 
 .connection-status.connecting {
-    background-color: rgba(255, 193, 7, 0.1);
-    border-left: 3px solid #ffc107;
+  background-color: rgba(255, 193, 7, 0.1);
+  border-left: 3px solid #ffc107;
 }
 
 .connection-status.connected {
-    background-color: rgba(40, 167, 69, 0.1);
-    border-left: 3px solid #28a745;
+  background-color: rgba(40, 167, 69, 0.1);
+  border-left: 3px solid #28a745;
 }
 
 .connection-status.reconnecting {
-    background-color: rgba(255, 193, 7, 0.1);
-    border-left: 3px solid #ffc107;
+  background-color: rgba(255, 193, 7, 0.1);
+  border-left: 3px solid #ffc107;
 }
 
 .connection-status.failed {
-    background-color: rgba(220, 53, 69, 0.1);
-    border-left: 3px solid #dc3545;
+  background-color: rgba(220, 53, 69, 0.1);
+  border-left: 3px solid #dc3545;
 }
 
 .connection-status p {
-    margin: 0 0 0.5rem 0;
+  margin: 0 0 0.5rem 0;
 }
 
 .status-text {
-    margin-left: 0.5rem;
-    font-weight: 500;
+  margin-left: 0.5rem;
+  font-weight: 500;
 }
 
 .reconnect-button {
-    background-color: #dc3545;
-    color: white;
-    border: none;
-    padding: 0.4rem 0.8rem;
-    border-radius: 4px;
-    font-size: 0.8rem;
-    cursor: pointer;
-    transition: background-color 0.25s;
+  background-color: #dc3545;
+  color: white;
+  border: none;
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background-color 0.25s;
 }
 
 .reconnect-button:hover {
-    background-color: #c82333;
+  background-color: #c82333;
 }
 
 @media (prefers-color-scheme: light) {
-    .stream-selection select {
-        background-color: #f9f9f9;
-        color: #213547;
-        border-color: #ddd;
-    }
+  .stream-selection select {
+    background-color: #f9f9f9;
+    color: #213547;
+    border-color: #ddd;
+  }
 
-    .selected-stream-info {
-        background-color: rgba(100, 108, 255, 0.05);
-    }
+  .selected-stream-info {
+    background-color: rgba(100, 108, 255, 0.05);
+  }
 
-    .stream-text {
-        color: rgba(33, 53, 71, 0.7);
-    }
+  .stream-text {
+    color: rgba(33, 53, 71, 0.7);
+  }
 
-    .stream-id {
-        color: rgba(33, 53, 71, 0.5);
-    }
+  .stream-id {
+    color: rgba(33, 53, 71, 0.5);
+  }
 
-    .connection-status.connecting {
-        background-color: rgba(255, 193, 7, 0.05);
-    }
+  .connection-status.connecting {
+    background-color: rgba(255, 193, 7, 0.05);
+  }
 
-    .connection-status.connected {
-        background-color: rgba(40, 167, 69, 0.05);
-    }
+  .connection-status.connected {
+    background-color: rgba(40, 167, 69, 0.05);
+  }
 
-    .connection-status.reconnecting {
-        background-color: rgba(255, 193, 7, 0.05);
-    }
+  .connection-status.reconnecting {
+    background-color: rgba(255, 193, 7, 0.05);
+  }
 
-    .connection-status.failed {
-        background-color: rgba(220, 53, 69, 0.05);
-    }
+  .connection-status.failed {
+    background-color: rgba(220, 53, 69, 0.05);
+  }
 }
 
 /* プレイヤープレースホルダー */
 .no-stream-placeholder {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 300px;
-    background-color: rgba(255, 255, 255, 0.05);
-    border: 2px dashed rgba(255, 255, 255, 0.2);
-    border-radius: 8px;
-    margin: 1rem 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 2px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  margin: 1rem 0;
 }
 
 .no-stream-placeholder p {
-    color: rgba(255, 255, 255, 0.6);
-    font-style: italic;
-    margin: 0;
+  color: rgba(255, 255, 255, 0.6);
+  font-style: italic;
+  margin: 0;
 }
 
 @media (prefers-color-scheme: light) {
-    .no-stream-placeholder {
-        background-color: rgba(0, 0, 0, 0.02);
-        border-color: rgba(0, 0, 0, 0.1);
-    }
+  .no-stream-placeholder {
+    background-color: rgba(0, 0, 0, 0.02);
+    border-color: rgba(0, 0, 0, 0.1);
+  }
 
-    .no-stream-placeholder p {
-        color: rgba(0, 0, 0, 0.6);
-    }
+  .no-stream-placeholder p {
+    color: rgba(0, 0, 0, 0.6);
+  }
 }
 
 /* スタイリッシュなビデオプレイヤー */
 .video-player-container {
-    position: relative;
-    max-width: 1000px;
-    margin: 1rem auto;
-    border-radius: 12px;
-    overflow: hidden;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-    background: linear-gradient(145deg, #2a2a2a, #1a1a1a);
+  position: relative;
+  max-width: 1000px;
+  margin: 1rem auto;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  background: linear-gradient(145deg, #2a2a2a, #1a1a1a);
 }
 
 .styled-video-player {
-    width: 100%;
-    height: auto;
-    display: block;
-    border-radius: 12px;
-    background-color: #000;
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 12px;
+  background-color: #000;
 }
 
 .styled-video-player::-webkit-media-controls-panel {
-    background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
 }
 
 .styled-video-player::-webkit-media-controls-play-button,
 .styled-video-player::-webkit-media-controls-fullscreen-button,
 .styled-video-player::-webkit-media-controls-volume-slider,
 .styled-video-player::-webkit-media-controls-timeline {
-    filter: brightness(1.2) contrast(1.1);
+  filter: brightness(1.2) contrast(1.1);
 }
 
 /* カスタムコントロールオーバーレイ */
 .video-player-container::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 4px;
-    background: linear-gradient(90deg, #646cff, #535bf2);
-    z-index: 1;
-    opacity: 0.8;
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #646cff, #535bf2);
+  z-index: 1;
+  opacity: 0.8;
 }
 
 @media (prefers-color-scheme: light) {
-    .video-player-container {
-        background: linear-gradient(145deg, #f8f9fa, #e9ecef);
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-    }
+  .video-player-container {
+    background: linear-gradient(145deg, #f8f9fa, #e9ecef);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  }
 }
 
 @media (max-width: 768px) {
-    .video-player-container {
-        margin: 1rem;
-    }
+  .video-player-container {
+    margin: 1rem;
+  }
 }
 
 /* OBS配信情報のスタイル */
 .obs-streaming-info {
-    margin: 2rem 0;
-    text-align: center;
+  margin: 2rem 0;
+  text-align: center;
 }
 
 .obs-streaming-info h3 {
-    color: #ffffff;
-    margin-bottom: 1.5rem;
-    font-size: 1.5rem;
-    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  color: #ffffff;
+  margin-bottom: 1.5rem;
+  font-size: 1.5rem;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
 .streaming-url-section,
 .streaming-token-section {
-    margin-bottom: 2rem;
-    text-align: left;
+  margin-bottom: 2rem;
+  text-align: left;
 }
 
 .streaming-url-section label,
 .streaming-token-section label {
-    display: block;
-    margin-bottom: 0.5rem;
-    color: #e0e0e0;
-    font-weight: 600;
+  display: block;
+  margin-bottom: 0.5rem;
+  color: #e0e0e0;
+  font-weight: 600;
 }
 
 .input-with-button {
-    display: flex;
-    gap: 10px;
-    align-items: center;
+  display: flex;
+  gap: 10px;
+  align-items: center;
 }
 
 .streaming-url-input,
 .token-input {
-    flex: 1;
-    padding: 12px 16px;
-    border: 2px solid rgba(255, 255, 255, 0.2);
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.1);
-    color: #ffffff;
-    font-family: 'Courier New', monospace;
-    font-size: 0.9rem;
-    backdrop-filter: blur(10px);
+  flex: 1;
+  padding: 12px 16px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  font-family: "Courier New", monospace;
+  font-size: 0.9rem;
+  backdrop-filter: blur(10px);
 }
 
 .streaming-url-input:focus,
 .token-input:focus {
-    outline: none;
-    border-color: #4CAF50;
-    box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.2);
+  outline: none;
+  border-color: #4caf50;
+  box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.2);
 }
 
 .copy-button {
-    padding: 12px 20px;
-    background: linear-gradient(135deg, #4CAF50, #45a049);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-weight: 600;
-    transition: all 0.3s ease;
-    white-space: nowrap;
+  padding: 12px 20px;
+  background: linear-gradient(135deg, #4caf50, #45a049);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  white-space: nowrap;
 }
 
 .copy-button:hover {
-    background: linear-gradient(135deg, #45a049, #3d8b40);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+  background: linear-gradient(135deg, #45a049, #3d8b40);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
 }
 
 .token-status {
-    background: rgba(255, 255, 255, 0.05);
-    padding: 1.5rem;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1.5rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .status-text {
-    margin: 0.5rem 0;
-    color: #e0e0e0;
+  margin: 0.5rem 0;
+  color: #e0e0e0;
 }
 
 .loading {
-    color: #FFB74D;
-    margin: 0.5rem 0;
+  color: #ffb74d;
+  margin: 0.5rem 0;
 }
 
 .error {
-    color: #FF6B6B;
-    margin: 0.5rem 0;
+  color: #ff6b6b;
+  margin: 0.5rem 0;
 }
 
 .error-section {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .retry-button {
-    padding: 8px 16px;
-    background: #FF6B6B;
-    color: white;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    align-self: flex-start;
+  padding: 8px 16px;
+  background: #ff6b6b;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  align-self: flex-start;
 }
 
 .retry-button:hover {
-    background: #ff5252;
+  background: #ff5252;
 }
 
 .token-available,
 .token-not-available {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .token-display {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .create-token-button,
 .regenerate-button,
 .show-token-button,
 .hide-token-button {
-    padding: 12px 24px;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-weight: 600;
-    transition: all 0.3s ease;
-    align-self: flex-start;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  align-self: flex-start;
 }
 
 .create-token-button {
-    background: linear-gradient(135deg, #2196F3, #1976D2);
-    color: white;
+  background: linear-gradient(135deg, #2196f3, #1976d2);
+  color: white;
 }
 
 .create-token-button:hover {
-    background: linear-gradient(135deg, #1976D2, #1565C0);
-    transform: translateY(-2px);
+  background: linear-gradient(135deg, #1976d2, #1565c0);
+  transform: translateY(-2px);
 }
 
 .create-token-button:disabled {
-    background: #666;
-    cursor: not-allowed;
-    transform: none;
+  background: #666;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .regenerate-button {
-    background: linear-gradient(135deg, #FF9800, #F57C00);
-    color: white;
+  background: linear-gradient(135deg, #ff9800, #f57c00);
+  color: white;
 }
 
 .regenerate-button:hover {
-    background: linear-gradient(135deg, #F57C00, #E65100);
-    transform: translateY(-2px);
+  background: linear-gradient(135deg, #f57c00, #e65100);
+  transform: translateY(-2px);
 }
 
 .show-token-button {
-    background: linear-gradient(135deg, #9C27B0, #7B1FA2);
-    color: white;
+  background: linear-gradient(135deg, #9c27b0, #7b1fa2);
+  color: white;
 }
 
 .show-token-button:hover {
-    background: linear-gradient(135deg, #7B1FA2, #6A1B9A);
-    transform: translateY(-2px);
+  background: linear-gradient(135deg, #7b1fa2, #6a1b9a);
+  transform: translateY(-2px);
 }
 
 .hide-token-button {
-    background: linear-gradient(135deg, #607D8B, #455A64);
-    color: white;
+  background: linear-gradient(135deg, #607d8b, #455a64);
+  color: white;
 }
 
 .hide-token-button:hover {
-    background: linear-gradient(135deg, #455A64, #37474F);
-    transform: translateY(-2px);
+  background: linear-gradient(135deg, #455a64, #37474f);
+  transform: translateY(-2px);
 }
 
 .obs-instructions {
-    background: rgba(255, 255, 255, 0.05);
-    padding: 1.5rem;
-    border-radius: 8px;
-    text-align: left;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1.5rem;
+  border-radius: 8px;
+  text-align: left;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .obs-instructions h4 {
-    color: #ffffff;
-    margin-bottom: 1rem;
-    font-size: 1.2rem;
+  color: #ffffff;
+  margin-bottom: 1rem;
+  font-size: 1.2rem;
 }
 
 .obs-instructions ol {
-    color: #e0e0e0;
-    line-height: 1.6;
-    padding-left: 1.5rem;
+  color: #e0e0e0;
+  line-height: 1.6;
+  padding-left: 1.5rem;
 }
 
 .obs-instructions li {
-    margin-bottom: 0.5rem;
+  margin-bottom: 0.5rem;
 }
 
 /* OBS設定のトグル表示関連スタイル */
 .obs-toggle-section {
-    margin-bottom: 1rem;
+  margin-bottom: 1rem;
 }
 
 .obs-toggle-button {
-    padding: 12px 24px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-weight: 600;
-    font-size: 1rem;
-    transition: all 0.3s ease;
-    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.2);
+  padding: 12px 24px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 1rem;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.2);
 }
 
 .obs-toggle-button:hover {
-    background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3);
+  background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3);
 }
 
 .obs-toggle-button:active {
-    transform: translateY(0);
+  transform: translateY(0);
 }
 
 .obs-settings-content {
-    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-    padding: 2rem;
-    border-radius: 12px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    animation: fadeIn 0.3s ease-in-out;
-    margin-top: 1rem;
+  background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+  padding: 2rem;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  animation: fadeIn 0.3s ease-in-out;
+  margin-top: 1rem;
 }
 
 /* OBS設定コンテンツ内の全てのテキストを白系にする */
 .obs-settings-content,
 .obs-settings-content * {
-    color: #ffffff !important;
+  color: #ffffff !important;
 }
 
 .obs-settings-content label {
-    color: #e0e0e0 !important;
+  color: #e0e0e0 !important;
 }
 
 .obs-settings-content .status-text {
-    color: #e0e0e0 !important;
+  color: #e0e0e0 !important;
 }
 
 .obs-settings-content .loading {
-    color: #FFB74D !important;
+  color: #ffb74d !important;
 }
 
 .obs-settings-content .error {
-    color: #FF6B6B !important;
+  color: #ff6b6b !important;
 }
 
 .obs-settings-content ol,
 .obs-settings-content li,
 .obs-settings-content p {
-    color: #e0e0e0 !important;
+  color: #e0e0e0 !important;
 }
 
 @keyframes fadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(-10px);
-    }
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
 
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* WHEPPlayerのセクション整理スタイル */
 .load-button-section {
-    margin: 2rem 0;
-    text-align: center;
+  margin: 2rem 0;
+  text-align: center;
 }
 
 .load-button-section button {
-    padding: 12px 24px;
-    background: linear-gradient(135deg, #4CAF50, #45a049);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-weight: 600;
-    font-size: 1rem;
-    transition: all 0.3s ease;
-    box-shadow: 0 4px 15px rgba(76, 175, 80, 0.2);
+  padding: 12px 24px;
+  background: linear-gradient(135deg, #4caf50, #45a049);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 1rem;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(76, 175, 80, 0.2);
 }
 
 .load-button-section button:hover:not(:disabled) {
-    background: linear-gradient(135deg, #45a049, #3d8b40);
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(76, 175, 80, 0.3);
+  background: linear-gradient(135deg, #45a049, #3d8b40);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(76, 175, 80, 0.3);
 }
 
 .load-button-section button:disabled {
-    background: #666;
-    cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
+  background: #666;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 .remote-media-section {
-    margin: 2rem 0;
+  margin: 2rem 0;
 }
 
 .remote-media-section h2 {
-    text-align: center;
-    margin-bottom: 1.5rem;
-    color: #ffffff;
-    font-size: 1.8rem;
+  text-align: center;
+  margin-bottom: 1.5rem;
+  color: #ffffff;
+  font-size: 1.8rem;
 }

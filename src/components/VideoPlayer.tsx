@@ -27,5 +27,5 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
         </div>
       </div>
     );
-  }
+  },
 );

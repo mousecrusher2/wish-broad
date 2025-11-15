@@ -19,7 +19,8 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
     useWebRTCConnection();
   const { connectionStatus, isLoading, reconnectAttempt, streamUrl } =
     connectionState;
-  const { pcRef, videoRef, currentResourceRef } = connectionRefs;  const {
+  const { pcRef, videoRef, currentResourceRef } = connectionRefs;
+  const {
     setConnectionStatus,
     setIsLoading,
     setReconnectAttempt,
@@ -44,14 +45,15 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
     setIsLoading,
     pcRef,
     videoRef,
-    currentResourceRef
-  );  const {
+    currentResourceRef,
+  );
+  const {
     refs: reconnectionRefs,
     cleanupTimeouts,
     attemptReconnect,
     startHealthCheck,
     updateHealthCheckInterval,
-  } = reconnectionHook;  // WebRTC接続処理
+  } = reconnectionHook; // WebRTC接続処理
   const load = useWebRTCLoad(
     connectionStatus,
     setIsLoading,
@@ -66,7 +68,8 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
     reconnectionRefs.muteTimeoutRef,
     cleanupConnection,
     attemptReconnect,
-    startHealthCheck,    setupConnectionEventListeners
+    startHealthCheck,
+    setupConnectionEventListeners,
   );
 
   // クリーンアップ処理を拡張
@@ -108,7 +111,14 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
       };
       updateHealthCheckInterval(reconnectWrapper);
     }
-  }, [isVisible, resource, connectionStatus, updateHealthCheckInterval, attemptReconnect, load]);
+  }, [
+    isVisible,
+    resource,
+    connectionStatus,
+    updateHealthCheckInterval,
+    attemptReconnect,
+    load,
+  ]);
 
   return (
     <div className="container">
