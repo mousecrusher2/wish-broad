@@ -21,12 +21,18 @@ export function useReconnection(
   currentResourceRef: React.RefObject<string>,
 ) {
   const isVisible = usePageVisibility();
-  const lastCheckTimeRef = useRef<number>(Date.now());
+  const lastCheckTimeRef = useRef<number | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const muteTimeoutRef = useRef<number | null>(null);
   const pendingTimeoutsRef = useRef<Set<number>>(new Set());
   const healthCheckIntervalRef = useRef<number | null>(null);
   const isReconnectingRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    if (lastCheckTimeRef.current === null) {
+      lastCheckTimeRef.current = Date.now();
+    }
+  }, []);
 
   // 接続状態を即座にチェックする関数
   const checkConnectionImmediate = useCallback(

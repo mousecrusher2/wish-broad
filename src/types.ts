@@ -5,11 +5,10 @@ export interface User {
   displayName: string;
 }
 
-export interface AuthState {
-  user: User | null;
-  isLoading: boolean;
-  isAuthenticated: boolean;
-}
+export type AuthState =
+  | { status: "unauthenticated" }
+  | { status: "authenticated"; user: User }
+  | { status: "error"; message?: string };
 
 export interface WHEPPlayerProps {
   user: User;

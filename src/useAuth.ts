@@ -1,47 +1,34 @@
-import { useState, useEffect } from "react";
-import type { AuthState } from "./types";
+import { use } from "react";
+import type { AuthState, User } from "./types";
 
-export function useAuth(): AuthState {
-  const [authState, setAuthState] = useState<AuthState>({
-    user: null,
-    isLoading: true,
-    isAuthenticated: false,
-  });
-  const [hasChecked, setHasChecked] = useState(false);
+// React の外側で実行する認証確認関数
+export async function checkAuth(): Promise<AuthState> {
+  try {
+    const response = await fetch("/api/me", { credentials: "include" });
+    if (response.ok) {
+      const userData = (await response.json()) as User;
+      return { status: "authenticated", user: userData };
+    }
 
-  useEffect(() => {
-    if (hasChecked) return;
+    if (response.status === 401) {
+      return { status: "unauthenticated" };
+    }
 
-    const checkAuth = async () => {
-      try {
-        const response = await fetch("/api/me");
-        if (response.ok) {
-          const userData = await response.json();
-          setAuthState({
-            user: userData,
-            isLoading: false,
-            isAuthenticated: true,
-          });
-        } else {
-          setAuthState({
-            user: null,
-            isLoading: false,
-            isAuthenticated: false,
-          });
-        }
-      } catch (error) {
-        console.error("Authentication check failed:", error);
-        setAuthState({
-          user: null,
-          isLoading: false,
-          isAuthenticated: false,
-        });
-      }
-      setHasChecked(true);
+    // 200,401 以外はエラー扱い
+    throw new Error(`Unexpected status code: ${response.status}`);
+  } catch (error) {
+    console.error("Authentication check failed:", error);
+    return {
+      status: "error",
+      message:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch authentication status",
     };
+  }
+}
 
-    checkAuth();
-  });
-
-  return authState;
+// Suspense から使うラッパー
+export function useAuthFromPromise(promise: Promise<AuthState>): AuthState {
+  return use(promise);
 }

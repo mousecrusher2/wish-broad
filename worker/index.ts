@@ -20,6 +20,12 @@ import { jwt, sign } from "hono/jwt";
 const app = new Hono<{ Bindings: Bindings }>();
 
 app.onError((err, c) => {
+  // HTTPExceptionはそのままレスポンス化して返す（ログも挟まない）
+  if (err instanceof HTTPException) {
+    return err.getResponse();
+  }
+
+  // 想定外エラーのみログ出力し、500として処理
   console.error(
     "Unhandled error:",
     err,
@@ -215,15 +221,11 @@ app.post("/logout", async (c) => {
 
 // ライブ視聴用エンドポイントの認証ミドルウェア
 app.use("/play/*", async (c, next) => {
-  try {
-    return jwt({
-      secret: c.env.JWT_SECRET,
-      cookie: "authtoken",
-      alg: "HS256",
-    })(c, next);
-  } catch {
-    throw new HTTPException(401, { message: "Unauthorized" });
-  }
+  return jwt({
+    secret: c.env.JWT_SECRET,
+    cookie: "authtoken",
+    alg: "HS256",
+  })(c, next);
 });
 
 // ライブ視聴開始エンドポイント（WHEP）
@@ -337,15 +339,11 @@ app
 
 // API routes用の認証ミドルウェア
 app.use("/api/*", async (c, next) => {
-  try {
-    return jwt({
-      secret: c.env.JWT_SECRET,
-      cookie: "authtoken",
-      alg: "HS256",
-    })(c, next);
-  } catch {
-    throw new HTTPException(401, { message: "Unauthorized" });
-  }
+  return jwt({
+    secret: c.env.JWT_SECRET,
+    cookie: "authtoken",
+    alg: "HS256",
+  })(c, next);
 });
 
 // ユーザー情報を取得するAPIエンドポイント
