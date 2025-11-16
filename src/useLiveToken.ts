@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 
 interface LiveTokenResponse {
-  hastoken: boolean;
+  hasToken: boolean;
 }
 
 interface CreateTokenResponse {
@@ -9,17 +9,19 @@ interface CreateTokenResponse {
   token: string;
 }
 
+type LiveTokenState =
+  | { status: "loading" }
+  | { status: "none" }
+  | { status: "available"; token: string | null }
+  | { status: "error"; message: string };
+
 export function useLiveToken() {
-  const [hasToken, setHasToken] = useState<boolean>(false);
-  const [token, setToken] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [state, setState] = useState<LiveTokenState>({ status: "loading" });
 
   // トークンの状況を取得
   const fetchTokenStatus = async () => {
     try {
-      setIsLoading(true);
-      setError(null);
+      setState({ status: "loading" });
 
       const response = await fetch("/api/me/livetoken", {
         method: "GET",
@@ -31,29 +33,28 @@ export function useLiveToken() {
       }
 
       const data: LiveTokenResponse = await response.json();
-      setHasToken(data.hastoken);
 
-      // トークンが存在しない場合、既存のトークンをクリア
-      if (!data.hastoken) {
-        setToken(null);
+      if (data.hasToken) {
+        setState({ status: "available", token: null });
+      } else {
+        setState({ status: "none" });
       }
     } catch (err) {
       console.error("Failed to fetch token status:", err);
-      setError(
-        err instanceof Error ? err.message : "トークン状況の取得に失敗しました",
-      );
-      setHasToken(false);
-      setToken(null);
-    } finally {
-      setIsLoading(false);
+      setState({
+        status: "error",
+        message:
+          err instanceof Error
+            ? err.message
+            : "トークン状況の取得に失敗しました",
+      });
     }
   };
 
   // 新しいトークンを発行
   const createToken = async () => {
     try {
-      setIsLoading(true);
-      setError(null);
+      setState({ status: "loading" });
 
       const response = await fetch("/api/me/livetoken", {
         method: "POST",
@@ -67,18 +68,19 @@ export function useLiveToken() {
       const data: CreateTokenResponse = await response.json();
 
       if (data.success) {
-        setToken(data.token);
-        setHasToken(true);
+        setState({ status: "available", token: data.token });
       } else {
         throw new Error("トークンの発行に失敗しました");
       }
     } catch (err) {
       console.error("Failed to create token:", err);
-      setError(
-        err instanceof Error ? err.message : "トークンの発行に失敗しました",
-      );
-    } finally {
-      setIsLoading(false);
+      setState({
+        status: "error",
+        message:
+          err instanceof Error
+            ? err.message
+            : "トークンの発行に失敗しました",
+      });
     }
   };
 
@@ -88,10 +90,7 @@ export function useLiveToken() {
   }, []);
 
   return {
-    hasToken,
-    token,
-    isLoading,
-    error,
+    state,
     fetchTokenStatus,
     createToken,
   };
