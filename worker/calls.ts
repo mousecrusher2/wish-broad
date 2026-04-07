@@ -8,7 +8,9 @@ export class CallsApiError extends Error {
     public readonly endpoint: string,
     public readonly responseBody?: unknown,
   ) {
-    super(`Calls API Error: ${statusCode} ${statusText} at ${endpoint}`);
+    super(
+      `Calls API Error: ${String(statusCode)} ${statusText} at ${endpoint}`,
+    );
     this.name = "CallsApiError";
   }
 }

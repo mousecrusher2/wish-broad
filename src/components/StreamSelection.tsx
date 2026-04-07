@@ -50,7 +50,9 @@ export function StreamSelection({
                   name="stream"
                   value={stream.owner.userId}
                   checked={resource === stream.owner.userId}
-                  onChange={(e) => setResource(e.target.value)}
+                  onChange={(e) => {
+                    setResource(e.target.value);
+                  }}
                   style={{ marginRight: "8px" }}
                 />
                 {stream.owner.displayName}の配信

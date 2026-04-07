@@ -18,7 +18,9 @@ export async function getGuildMember(
   );
 
   if (!memberResponse.ok) {
-    throw new Error(`Failed to fetch guild member: ${memberResponse.status}`);
+    throw new Error(
+      `Failed to fetch guild member: ${String(memberResponse.status)}`,
+    );
   }
 
   return await memberResponse.json();

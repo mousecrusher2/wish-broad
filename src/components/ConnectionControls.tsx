@@ -24,7 +24,7 @@ export function ConnectionControls({
       case "failed":
         return "接続失敗";
       case "reconnecting":
-        return `再接続中... (試行回数: ${reconnectAttempt})`;
+        return `再接続中... (試行回数: ${String(reconnectAttempt)})`;
       default:
         return "未接続";
     }

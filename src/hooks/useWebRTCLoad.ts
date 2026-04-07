@@ -68,7 +68,10 @@ export function useWebRTCLoad(
             connectionStatus !== "connecting" &&
             connectionStatus !== "connected"
           ) {
-            attemptReconnect(currentResourceRef.current, loadFnRef.current);
+            void attemptReconnect(
+              currentResourceRef.current,
+              loadFnRef.current,
+            );
           }
         };
         setupConnectionEventListeners(pc, connectionChangeHandler);
@@ -102,7 +105,7 @@ export function useWebRTCLoad(
                   !isReconnectingRef.current &&
                   connectionStatus !== "connecting"
                 ) {
-                  attemptReconnect(
+                  void attemptReconnect(
                     currentResourceRef.current,
                     loadFnRef.current,
                   );
@@ -123,7 +126,7 @@ export function useWebRTCLoad(
                     connectionStatus !== "connecting" &&
                     connectionStatus !== "connected"
                   ) {
-                    attemptReconnect(
+                    void attemptReconnect(
                       currentResourceRef.current,
                       loadFnRef.current,
                     );
@@ -168,7 +171,11 @@ export function useWebRTCLoad(
         await pc.setLocalDescription(answer);
         await candidatesPromise;
         const sessionUrl = new URL(resourceUrl);
-        sessionUrl.pathname = offer.headers.get("location")!;
+        const sessionLocation = offer.headers.get("location");
+        if (!sessionLocation) {
+          throw new Error("Missing session location header");
+        }
+        sessionUrl.pathname = sessionLocation;
         await fetch(sessionUrl.href, { method: "PATCH", body: answer.sdp });
         const remoteTracks = await remoteTracksPromise;
 
@@ -186,9 +193,9 @@ export function useWebRTCLoad(
         setConnectionStatus("connected");
 
         // 接続成功時にヘルスチェックを開始
-        startHealthCheck((resource: string) =>
-          attemptReconnect(resource, loadFnRef.current),
-        );
+        startHealthCheck((resource: string) => {
+          void attemptReconnect(resource, loadFnRef.current);
+        });
 
         // video要素のrefを設定（複数回試行でより確実に）
         const setVideoStream = (attempts = 0) => {
@@ -201,7 +208,7 @@ export function useWebRTCLoad(
               if (currentResourceRef.current) {
                 setTimeout(() => {
                   if (currentResourceRef.current) {
-                    attemptReconnect(
+                    void attemptReconnect(
                       currentResourceRef.current,
                       loadFnRef.current,
                     );
@@ -222,7 +229,7 @@ export function useWebRTCLoad(
                   connectionStatus !== "connecting" &&
                   connectionStatus !== "connected"
                 ) {
-                  attemptReconnect(
+                  void attemptReconnect(
                     currentResourceRef.current,
                     loadFnRef.current,
                   );
@@ -237,7 +244,10 @@ export function useWebRTCLoad(
                 !isReconnectingRef.current &&
                 connectionStatus !== "connecting"
               ) {
-                attemptReconnect(currentResourceRef.current, loadFnRef.current);
+                void attemptReconnect(
+                  currentResourceRef.current,
+                  loadFnRef.current,
+                );
               }
             };
 
@@ -256,7 +266,7 @@ export function useWebRTCLoad(
                     !isReconnectingRef.current &&
                     !goodStates.includes(connectionStatus)
                   ) {
-                    attemptReconnect(
+                    void attemptReconnect(
                       currentResourceRef.current,
                       loadFnRef.current,
                     );
@@ -274,17 +284,22 @@ export function useWebRTCLoad(
                 connectionStatus !== "connecting" &&
                 connectionStatus !== "connected"
               ) {
-                attemptReconnect(currentResourceRef.current, loadFnRef.current);
+                void attemptReconnect(
+                  currentResourceRef.current,
+                  loadFnRef.current,
+                );
               }
             };
 
             // 自動再生を試行
-            videoRef.current.play().catch(() => {});
+            void videoRef.current.play().catch(() => {});
           } else {
             // 最大3回まで再試行
             if (attempts < 3) {
               setTimeout(
-                () => setVideoStream(attempts + 1),
+                () => {
+                  setVideoStream(attempts + 1);
+                },
                 50 * (attempts + 1),
               );
             }
@@ -299,7 +314,7 @@ export function useWebRTCLoad(
           setConnectionStatus("failed");
         } else {
           // 再接続中のエラーの場合、さらに再接続を試行
-          attemptReconnect(resourceValue, loadFnRef.current);
+          void attemptReconnect(resourceValue, loadFnRef.current);
         }
       } finally {
         setIsLoading(false);

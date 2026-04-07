@@ -8,6 +8,26 @@ interface UseLiveStreamsResult {
   refresh: () => void;
 }
 
+function isLive(value: unknown): value is Live {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const owner = (value as { owner?: unknown }).owner;
+  if (typeof owner !== "object" || owner === null) {
+    return false;
+  }
+
+  return (
+    typeof (owner as { userId?: unknown }).userId === "string" &&
+    typeof (owner as { displayName?: unknown }).displayName === "string"
+  );
+}
+
+function isLiveList(value: unknown): value is Live[] {
+  return Array.isArray(value) && value.every(isLive);
+}
+
 export function useLiveStreams(): UseLiveStreamsResult {
   const [streams, setStreams] = useState<Live[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -22,7 +42,10 @@ export function useLiveStreams(): UseLiveStreamsResult {
       try {
         const response = await fetch("/api/lives");
         if (response.ok) {
-          const data = await response.json();
+          const data: unknown = await response.json();
+          if (!isLiveList(data)) {
+            throw new Error("Unexpected live streams response");
+          }
           setStreams(data);
         } else {
           setError("配信リストの取得に失敗しました");
@@ -35,7 +58,7 @@ export function useLiveStreams(): UseLiveStreamsResult {
       }
     };
 
-    fetchStreams();
+    void fetchStreams();
   }, [shouldRefresh]);
 
   const refresh = () => {

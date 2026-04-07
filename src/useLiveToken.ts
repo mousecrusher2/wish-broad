@@ -15,6 +15,23 @@ type LiveTokenState =
   | { status: "available"; token: string | null }
   | { status: "error"; message: string };
 
+function isLiveTokenResponse(value: unknown): value is LiveTokenResponse {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { hasToken?: unknown }).hasToken === "boolean"
+  );
+}
+
+function isCreateTokenResponse(value: unknown): value is CreateTokenResponse {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { success?: unknown }).success === true &&
+    typeof (value as { token?: unknown }).token === "string"
+  );
+}
+
 export function useLiveToken() {
   const [state, setState] = useState<LiveTokenState>({ status: "loading" });
 
@@ -29,10 +46,13 @@ export function useLiveToken() {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        throw new Error(`HTTP error! status: ${String(response.status)}`);
       }
 
-      const data: LiveTokenResponse = await response.json();
+      const data: unknown = await response.json();
+      if (!isLiveTokenResponse(data)) {
+        throw new Error("Unexpected live token response");
+      }
 
       if (data.hasToken) {
         setState({ status: "available", token: null });
@@ -62,10 +82,13 @@ export function useLiveToken() {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        throw new Error(`HTTP error! status: ${String(response.status)}`);
       }
 
-      const data: CreateTokenResponse = await response.json();
+      const data: unknown = await response.json();
+      if (!isCreateTokenResponse(data)) {
+        throw new Error("Unexpected token creation response");
+      }
 
       if (data.success) {
         setState({ status: "available", token: data.token });
@@ -84,7 +107,7 @@ export function useLiveToken() {
 
   // コンポーネントマウント時にトークン状況を取得
   useEffect(() => {
-    fetchTokenStatus();
+    void fetchTokenStatus();
   }, []);
 
   return {

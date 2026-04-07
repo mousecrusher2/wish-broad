@@ -39,7 +39,9 @@ function StreamingUrlSection({
           className="streaming-url-input"
         />
         <button
-          onClick={() => copyToClipboard(streamingUrl, "url")}
+          onClick={() => {
+            void copyToClipboard(streamingUrl, "url");
+          }}
           className="copy-button"
           type="button"
         >
@@ -59,6 +61,9 @@ function TokenSection({
   copyStatus,
   copyToClipboard,
 }: TokenSectionProps) {
+  const token =
+    state.status === "available" && state.token ? state.token : undefined;
+
   return (
     <div className="streaming-token-section">
       <div className="token-status">
@@ -75,17 +80,19 @@ function TokenSection({
         ) : state.status === "available" ? (
           <div className="token-available">
             <p className="status-text">✅ Bearerトークンが発行済みです</p>
-            {state.token ? (
+            {token ? (
               <div className="token-display">
                 <div className="input-with-button">
                   <input
                     type="text"
-                    value={state.token}
+                    value={token}
                     readOnly
                     className="token-input"
                   />
                   <button
-                    onClick={() => copyToClipboard(state.token!, "token")}
+                    onClick={() => {
+                      void copyToClipboard(token, "token");
+                    }}
                     className="copy-button"
                     type="button"
                   >
@@ -163,7 +170,9 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
     try {
       await navigator.clipboard.writeText(text);
       setCopyStatus(type);
-      setTimeout(() => setCopyStatus("none"), 2000);
+      setTimeout(() => {
+        setCopyStatus("none");
+      }, 2000);
     } catch (err) {
       console.error("Failed to copy to clipboard:", err);
       alert("クリップボードへのコピーに失敗しました");
@@ -179,7 +188,9 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
     <div className="obs-streaming-info">
       <div className="obs-toggle-section">
         <button
-          onClick={() => setShowOBSSettings(!showOBSSettings)}
+          onClick={() => {
+            setShowOBSSettings(!showOBSSettings);
+          }}
           className="obs-toggle-button"
           type="button"
         >
@@ -197,10 +208,18 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
           />
           <TokenSection
             state={state}
-            onRetry={fetchTokenStatus}
-            onCreateToken={handleCreateToken}
-            onShowToken={() => setShowToken(true)}
-            onHideToken={() => setShowToken(false)}
+            onRetry={() => {
+              void fetchTokenStatus();
+            }}
+            onCreateToken={() => {
+              void handleCreateToken();
+            }}
+            onShowToken={() => {
+              setShowToken(true);
+            }}
+            onHideToken={() => {
+              setShowToken(false);
+            }}
             copyStatus={copyStatus}
             copyToClipboard={copyToClipboard}
           />

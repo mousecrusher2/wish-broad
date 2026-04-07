@@ -170,7 +170,10 @@ app.get("/login", async (c) => {
   try {
     member = await getGuildMember(oauthToken.token, c.env.AUTHORIZED_GUILD_ID);
   } catch (error) {
-    console.error(`Error fetching guild member for user ${user.id}:`, error);
+    console.error(
+      `Error fetching guild member for user ${String(user.id)}:`,
+      error,
+    );
 
     if (error instanceof Error) {
       throw new HTTPException(401, {

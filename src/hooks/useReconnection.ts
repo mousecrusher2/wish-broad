@@ -96,7 +96,9 @@ export function useReconnection(
         }
       }, 500); // 遅延を500msに増加
 
-      return () => clearTimeout(timeoutId);
+      return () => {
+        clearTimeout(timeoutId);
+      };
     }
   }, [isVisible, checkConnectionImmediate, pcRef, currentResourceRef]);
 
@@ -184,7 +186,7 @@ export function useReconnection(
         if (isReconnectingRef.current) {
           isReconnectingRef.current = false;
         }
-        loadFn(resourceValue, true);
+        void loadFn(resourceValue, true);
       }, delay);
 
       reconnectTimeoutRef.current = timeoutId;

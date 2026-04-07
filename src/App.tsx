@@ -19,7 +19,13 @@ function AppContent() {
         <h1>ANGOU BROADCAST</h1>
         <p>認証状態の確認中にエラーが発生しました。</p>
         <p>ページを再読み込みしてもう一度お試しください。</p>
-        <button onClick={() => window.location.reload()}>再読み込み</button>
+        <button
+          onClick={() => {
+            window.location.reload();
+          }}
+        >
+          再読み込み
+        </button>
       </div>
     );
   }

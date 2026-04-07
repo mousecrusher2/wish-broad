@@ -82,7 +82,7 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
     if (resource) {
       setReconnectAttempt(0);
       // isReconnectingRefの変更は避ける
-      load(resource);
+      void load(resource);
     }
   }, [resource, setReconnectAttempt, load]);
 
@@ -93,7 +93,7 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
 
   const handleLoadClick = useCallback(() => {
     if (resource) {
-      load(resource);
+      void load(resource);
     }
   }, [resource, load]);
   // コンポーネントのアンマウント時のクリーンアップ
@@ -107,7 +107,7 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
     if (resource && connectionStatus === "connected") {
       // 既存のヘルスチェックがある場合、間隔を更新
       const reconnectWrapper = (resourceToUse: string) => {
-        attemptReconnect(resourceToUse, load);
+        void attemptReconnect(resourceToUse, load);
       };
       updateHealthCheckInterval(reconnectWrapper);
     }

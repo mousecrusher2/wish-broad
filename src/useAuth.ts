@@ -15,7 +15,7 @@ export async function checkAuth(): Promise<AuthState> {
     }
 
     // 200,401 以外はエラー扱い
-    throw new Error(`Unexpected status code: ${response.status}`);
+    throw new Error(`Unexpected status code: ${String(response.status)}`);
   } catch (error) {
     console.error("Authentication check failed:", error);
     return {
