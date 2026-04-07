@@ -7,6 +7,13 @@ const ReactCompilerConfig = {
 };
 
 export default defineConfig({
+  environments: {
+    whip_worker: {
+      build: {
+        minify: true,
+      },
+    },
+  },
   plugins: [
     react({
       babel: { plugins: ["babel-plugin-react-compiler", ReactCompilerConfig] },

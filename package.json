@@ -9,9 +9,9 @@
     "dev:worker": "wrangler dev --local",
     "dev:full": "wrangler dev",
     "build": "tsc && vite build",
-    "preview": "vite preview",
+    "preview": "pnpm run build && vite preview",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
-    "deploy": "wrangler deploy",
+    "deploy": "pnpm run build && wrangler deploy",
     "check": "tsc && eslint",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

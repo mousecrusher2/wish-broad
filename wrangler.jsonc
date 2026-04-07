@@ -23,7 +23,6 @@
   "assets": {
     "not_found_handling": "none",
     "run_worker_first": false,
-    "directory": "./dist",
   },
   "observability": {
     "logs": {
