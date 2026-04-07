@@ -3,10 +3,11 @@ import globals from "globals";
 import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
-import reactCompiler from "eslint-plugin-react-compiler";
+
+const reactHooksConfig = reactHooks.configs.flat["recommended-latest"];
 
 export default tseslint.config(
-  { ignores: ["dist"] },
+  { ignores: ["dist", "worker-configuration.d.ts"] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],
@@ -15,14 +16,12 @@ export default tseslint.config(
       globals: globals.browser,
     },
     plugins: {
-      "react-hooks": reactHooks,
+      ...reactHooksConfig.plugins,
       "react-refresh": reactRefresh,
-      "react-compiler": reactCompiler,
     },
     rules: {
-      ...reactHooks.configs.recommended.rules,
+      ...reactHooksConfig.rules,
       ...reactRefresh.configs.recommended.rules,
-      ...reactCompiler.configs.recommended.rules,
       "react-refresh/only-export-components": [
         "warn",
         { allowConstantExport: true },

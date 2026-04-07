@@ -68,11 +68,7 @@ function TokenSection({
         ) : state.status === "error" ? (
           <div className="error-section">
             <p className="error">❌ {state.message}</p>
-            <button
-              onClick={onRetry}
-              type="button"
-              className="retry-button"
-            >
+            <button onClick={onRetry} type="button" className="retry-button">
               再試行
             </button>
           </div>
@@ -93,9 +89,7 @@ function TokenSection({
                     className="copy-button"
                     type="button"
                   >
-                    {copyStatus === "token"
-                      ? "✅ コピー済み"
-                      : "📋 コピー"}
+                    {copyStatus === "token" ? "✅ コピー済み" : "📋 コピー"}
                   </button>
                 </div>
                 <button
@@ -125,9 +119,7 @@ function TokenSection({
           </div>
         ) : (
           <div className="token-not-available">
-            <p className="status-text">
-              ⚠️ Bearerトークンが発行されていません
-            </p>
+            <p className="status-text">⚠️ Bearerトークンが発行されていません</p>
             <button
               onClick={onCreateToken}
               className="create-token-button"

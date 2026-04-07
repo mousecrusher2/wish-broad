@@ -11,11 +11,11 @@
 - **React Layout**: `src/App.tsx` routes users based on `useAuth`. Player logic lives in `WHEPPlayer` with hooks under `src/hooks/` handling reconnects, health checks, and WebRTC lifecycles. When adding UI, prefer composing new hooks/components rather than stuffing `WHEPPlayer`.
 - **Networking from UI**: The UI always calls Worker routes relative to origin (`/api/...`, `/play/...`) and expects JSON unless the route returns SDP strings. Keep `credentials: "include"` when touching protected APIs.
 - **Styling & Structure**: Styling sits in `src/style.css`; components are function-based with TypeScript props in `src/types.ts`. Follow existing naming (PascalCase components, camelCase hooks).
-- **Build & Dev**: Use `npm run dev` for the Vite front-end, `npm run dev:worker` (local-only) or `npm run dev:full` (wrangler edges) for Worker. Production builds run `npm run build` which compiles TypeScript then bundles via Vite. Wrangler config/bindings live in `wrangler.jsonc` and `.dev.vars`.
+- **Build & Dev**: Use `pnpm dev` for the Vite front-end, `pnpm dev:worker` (local-only) or `pnpm dev:full` (wrangler edges) for Worker. Production builds run `pnpm build` which compiles TypeScript then bundles via Vite. Wrangler config/bindings live in `wrangler.jsonc` and `.dev.vars`.
 - **D1 Management**: Schema is in `schema.sql`. Apply locally with `wrangler d1 execute <binding> --file=schema.sql`. Never handcraft SQL strings outside `worker/database.ts`.
 - **Env Vars**: Bindings are typed by `worker/types.ts::Bindings`. Update that type whenever adding Wrangler vars so `c.env` stays type-safe.
 - **Testing & Logging**: No automated tests yet; rely on manual verification. Worker logs go to Cloudflare (wrangler dev prints console). Prefer `console.error`/`console.warn` with useful context, as seen in existing handlers.
-- **Deployment**: `npm run deploy` calls `wrangler deploy --minify`. Ensure `dist/` is fresh (run build) and that D1 migrations are up-to-date before deploying.
+- **Deployment**: `pnpm deploy` calls `wrangler deploy --minify`. Ensure `dist/` is fresh (run build) and that D1 migrations are up-to-date before deploying.
 - **Adding Routes**: Place new Worker APIs under `/api/*` with JWT middleware, return JSON via `c.json`. For WHIP/WHEP, match existing headers (e.g., `protocol-version`, `application/sdp`).
 - **Front-to-Worker Contract**: `/api/me` returns `{ userId, displayName }`, `/api/lives` proxies `db.getAllLives`. Keep responses stable or update hooks/components that rely on them.
 - **Error Messaging**: Favor user-friendly Japanese strings on the front-end (see hooks/components). Backend messages can be English but should remain actionable.

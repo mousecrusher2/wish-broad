@@ -77,9 +77,7 @@ export function useLiveToken() {
       setState({
         status: "error",
         message:
-          err instanceof Error
-            ? err.message
-            : "トークンの発行に失敗しました",
+          err instanceof Error ? err.message : "トークンの発行に失敗しました",
       });
     }
   };
