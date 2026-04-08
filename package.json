@@ -12,6 +12,8 @@
     "preview": "pnpm run build && vite preview",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
     "deploy": "pnpm run build && wrangler deploy",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "check": "tsc && eslint",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
@@ -32,6 +34,7 @@
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.58.0",
     "vite": "^8.0.5",
+    "vitest": "^4.1.3",
     "wrangler": "4.80.0"
   },
   "dependencies": {
