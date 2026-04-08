@@ -1,6 +1,7 @@
 // Discord APIを使用したユーザー認証とギルド管理の関数群
 
 import { DiscordGuildMember } from "./types";
+import { parseDiscordGuildMember } from "./validation";
 
 // Discord APIからメンバー情報を取得する関数
 export async function getGuildMember(
@@ -23,5 +24,6 @@ export async function getGuildMember(
     );
   }
 
-  return await memberResponse.json();
+  const responseBody: unknown = await memberResponse.json();
+  return parseDiscordGuildMember(responseBody, "Discord guild member response");
 }

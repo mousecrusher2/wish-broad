@@ -64,13 +64,13 @@ export type Bindings = {
 export type DiscordUser = {
   id: string;
   username: string;
-  discriminator: string;
-  global_name?: string;
+  discriminator?: string | null;
+  global_name?: string | null;
 };
 
 export type DiscordGuildMember = {
   user: DiscordUser;
-  nick?: string;
+  nick?: string | null;
 };
 
 export type User = {

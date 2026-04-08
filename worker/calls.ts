@@ -5,6 +5,11 @@ import {
   StoredTrack,
   TrackLocator,
 } from "./types";
+import {
+  parseCloseTracksResponse,
+  parseNewSessionResponse,
+  parseNewTracksResponse,
+} from "./validation";
 
 // カスタムエラークラス
 export class CallsApiError extends Error {
@@ -81,7 +86,11 @@ export class CallsClient {
     });
 
     await checkCallsApiResponse(response, endpoint);
-    return response.json() as Promise<NewSessionResponse>;
+    const responseBody: unknown = await response.json();
+    return parseNewSessionResponse(
+      responseBody,
+      "Calls createSession response",
+    );
   }
   /**
    * 配信者用：新しいトラックを作成（WHIP）
@@ -109,7 +118,11 @@ export class CallsClient {
     });
 
     await checkCallsApiResponse(response, endpoint);
-    return response.json() as Promise<NewTracksResponse>;
+    const responseBody: unknown = await response.json();
+    return parseNewTracksResponse(
+      responseBody,
+      "Calls createIngestTracks response",
+    );
   }
   /**
    * 視聴者用：既存のトラックに接続（WHEP）
@@ -143,7 +156,11 @@ export class CallsClient {
     });
 
     await checkCallsApiResponse(response, endpoint);
-    return response.json() as Promise<NewTracksResponse>;
+    const responseBody: unknown = await response.json();
+    return parseNewTracksResponse(
+      responseBody,
+      "Calls connectToTracks response",
+    );
   }
   /**
    * セッション再交渉（ICE候補やセッション再交渉用）
@@ -197,7 +214,8 @@ export class CallsClient {
     });
 
     await checkCallsApiResponse(response, endpoint);
-    return response.json() as Promise<CloseTracksResponse>;
+    const responseBody: unknown = await response.json();
+    return parseCloseTracksResponse(responseBody, "Calls closeTracks response");
   }
 
   /**

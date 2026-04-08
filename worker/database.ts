@@ -1,4 +1,5 @@
 import { Live, StoredTrack, TrackLocator, User } from "./types";
+import { parseLiveTrackRow, parseStoredTracksJson } from "./validation";
 
 export type LiveTrackRecord = {
   userId: string;
@@ -37,10 +38,15 @@ export async function getLiveTrackRecord(
     return null;
   }
 
+  const row = parseLiveTrackRow(result, "D1 live_tracks row");
+
   return {
-    userId: result.user_id as string,
-    sessionId: result.session_id as string,
-    tracks: JSON.parse(result.tracks_json as string) as StoredTrack[],
+    userId: row.user_id,
+    sessionId: row.session_id,
+    tracks: parseStoredTracksJson(
+      row.tracks_json,
+      "D1 live_tracks.tracks_json",
+    ),
   };
 }
 
