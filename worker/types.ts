@@ -23,6 +23,26 @@ export type TrackLocator = {
   trackName: string;
 };
 
+export type StoredTrack = TrackLocator & {
+  mid: string;
+};
+
+export type CloseTrackResult = {
+  mid: string;
+  errorCode?: string;
+  errorDescription?: string;
+  sessionId?: string;
+  trackName?: string;
+};
+
+export type CloseTracksResponse = {
+  errorCode?: string;
+  errorDescription?: string;
+  requiresImmediateRenegotiation?: boolean;
+  sessionDescription?: SessionDescription;
+  tracks?: CloseTrackResult[];
+};
+
 export type JWTPayload = {
   iat: number;
   exp: number;

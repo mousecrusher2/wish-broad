@@ -1,5 +1,5 @@
 -- D1データベースのスキーマ
--- useridにつき1行で、TrackLocator配列のJSONを保存する
+-- useridにつき1行で、StoredTrack配列のJSONを保存する
 -- useridはlive_idと同一
 CREATE TABLE IF NOT EXISTS live_tracks (
     user_id TEXT PRIMARY KEY,

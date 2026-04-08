@@ -1,9 +1,9 @@
-import { Live, TrackLocator, User } from "./types";
+import { Live, StoredTrack, TrackLocator, User } from "./types";
 
 export type LiveTrackRecord = {
   userId: string;
   sessionId: string;
-  tracks: TrackLocator[];
+  tracks: StoredTrack[];
 };
 
 // D1データベースでTrackLocatorを管理する関数群
@@ -11,7 +11,7 @@ export async function setTracks(
   database: D1Database,
   userId: string,
   sessionId: string,
-  tracks: TrackLocator[],
+  tracks: StoredTrack[],
 ): Promise<void> {
   const tracksJson = JSON.stringify(tracks);
   await database
@@ -40,7 +40,7 @@ export async function getLiveTrackRecord(
   return {
     userId: result.user_id as string,
     sessionId: result.session_id as string,
-    tracks: JSON.parse(result.tracks_json as string) as TrackLocator[],
+    tracks: JSON.parse(result.tracks_json as string) as StoredTrack[],
   };
 }
 
@@ -49,17 +49,13 @@ export async function getTracks(
   userId: string,
 ): Promise<TrackLocator[]> {
   const liveTrackRecord = await getLiveTrackRecord(database, userId);
-  return liveTrackRecord?.tracks ?? [];
-}
-
-export async function deleteTracks(
-  database: D1Database,
-  userId: string,
-): Promise<void> {
-  await database
-    .prepare("DELETE FROM live_tracks WHERE user_id = ?")
-    .bind(userId)
-    .run();
+  return (
+    liveTrackRecord?.tracks.map(({ location, sessionId, trackName }) => ({
+      location,
+      sessionId,
+      trackName,
+    })) ?? []
+  );
 }
 
 export async function deleteTracksForSession(
@@ -110,19 +106,6 @@ export async function updateSessionCheckTime(
     .prepare(
       "UPDATE live_tracks SET last_session_check = CURRENT_TIMESTAMP WHERE user_id = ?",
     )
-    .bind(userId)
-    .run();
-}
-
-/**
- * セッションが非アクティブだった場合のレコード削除
- */
-export async function deleteInactiveSession(
-  database: D1Database,
-  userId: string,
-): Promise<void> {
-  await database
-    .prepare("DELETE FROM live_tracks WHERE user_id = ?")
     .bind(userId)
     .run();
 }

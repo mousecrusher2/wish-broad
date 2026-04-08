@@ -97,7 +97,11 @@ app
           });
         }
 
-        await db.deleteInactiveSession(c.env.LIVE_DB, userId);
+        await db.deleteTracksForSession(
+          c.env.LIVE_DB,
+          userId,
+          existingLive.sessionId,
+        );
       }
 
       const result = await startIngest(callsClient, userId, sdpOffer);
@@ -135,6 +139,11 @@ app
 // 配信セッションを削除し、関連データを清理
 app.delete("/ingest/:userId/:sessionId", async (c) => {
   const { userId, sessionId } = c.req.param();
+  const callsClient = new CallsClient({
+    appId: c.env.CALLS_APP_ID,
+    appSecret: c.env.CALLS_APP_SECRET,
+  });
+
   try {
     const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
     if (!existingLive) {
@@ -147,6 +156,48 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
       throw new HTTPException(400, {
         message: "Session ID does not match the active live stream",
       });
+    }
+
+    if (
+      existingLive.tracks.length === 0 ||
+      existingLive.tracks.some((track) => track.mid.length === 0)
+    ) {
+      throw new HTTPException(500, {
+        message: "Stored live track data is invalid",
+      });
+    }
+
+    try {
+      const closeResponse = await callsClient.closeTracks(
+        sessionId,
+        existingLive.tracks,
+      );
+
+      if (
+        closeResponse.errorCode ||
+        closeResponse.tracks?.some((track) => track.errorCode)
+      ) {
+        console.error(
+          `Calls reported track close errors for user ${userId}:`,
+          closeResponse,
+        );
+        throw new HTTPException(502, {
+          message: "Failed to close live tracks",
+        });
+      }
+    } catch (error) {
+      if (error instanceof CallsApiError && error.statusCode === 404) {
+        // 既にセッションやトラックが消えている場合は、D1だけ掃除すればよい
+      } else if (error instanceof HTTPException) {
+        throw error;
+      } else if (error instanceof CallsApiError) {
+        console.error(`Failed to close live tracks for user ${userId}:`, error);
+        throw new HTTPException(502, {
+          message: "Failed to close live tracks",
+        });
+      } else {
+        throw error;
+      }
     }
 
     const deleted = await db.deleteTracksForSession(
@@ -293,11 +344,9 @@ app
       appId: c.env.CALLS_APP_ID,
       appSecret: c.env.CALLS_APP_SECRET,
     });
+    let liveTrackRecord: db.LiveTrackRecord | null = null;
     try {
-      const liveTrackRecord = await db.getLiveTrackRecord(
-        c.env.LIVE_DB,
-        userId,
-      );
+      liveTrackRecord = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
       const tracks = liveTrackRecord?.tracks ?? [];
 
       // トラックが存在し、セッションチェックが必要な場合のみチェック実行
@@ -311,7 +360,11 @@ app
           );
           if (!isActive) {
             // セッションが終了している場合、データベースからレコードを削除
-            await db.deleteInactiveSession(c.env.LIVE_DB, userId);
+            await db.deleteTracksForSession(
+              c.env.LIVE_DB,
+              userId,
+              liveTrackRecord.sessionId,
+            );
             throw new LiveNotFoundError(userId);
           }
 
@@ -344,7 +397,13 @@ app
         });
       }
       if (error instanceof CallsApiError && error.statusCode === 404) {
-        await db.deleteInactiveSession(c.env.LIVE_DB, userId);
+        if (liveTrackRecord) {
+          await db.deleteTracksForSession(
+            c.env.LIVE_DB,
+            userId,
+            liveTrackRecord.sessionId,
+          );
+        }
         throw new HTTPException(404, {
           message: `Live stream not found: ${userId}`,
         });

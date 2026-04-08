@@ -1,4 +1,10 @@
-import { NewSessionResponse, NewTracksResponse, TrackLocator } from "./types";
+import {
+  CloseTracksResponse,
+  NewSessionResponse,
+  NewTracksResponse,
+  StoredTrack,
+  TrackLocator,
+} from "./types";
 
 // カスタムエラークラス
 export class CallsApiError extends Error {
@@ -164,7 +170,37 @@ export class CallsClient {
     });
     await checkCallsApiResponse(response, endpoint);
     return response;
-  } /**
+  }
+
+  /**
+   * セッションに紐づくトラックを閉じる
+   */
+  async closeTracks(
+    sessionId: string,
+    tracks: StoredTrack[],
+  ): Promise<CloseTracksResponse> {
+    const body = {
+      force: true,
+      tracks: tracks.map((track) => ({
+        mid: track.mid,
+      })),
+    };
+
+    const endpoint = `${this.endpoint}/sessions/${sessionId}/tracks/close`;
+    const response = await fetch(endpoint, {
+      method: "PUT",
+      headers: {
+        ...this.headers,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    await checkCallsApiResponse(response, endpoint);
+    return response.json() as Promise<CloseTracksResponse>;
+  }
+
+  /**
    * セッションが継続しているか確認
    */
   async isSessionActive(sessionId: string): Promise<boolean> {
@@ -196,7 +232,7 @@ export async function startIngest(
 ): Promise<{
   sessionId: string;
   sdpAnswer: string;
-  tracks: TrackLocator[];
+  tracks: StoredTrack[];
 }> {
   // 新しいセッションを作成
   const sessionResult = await callsClient.createSession();
@@ -212,6 +248,7 @@ export async function startIngest(
     location: "remote" as const,
     sessionId: sessionResult.sessionId,
     trackName: track.trackName,
+    mid: track.mid,
   }));
 
   return {
