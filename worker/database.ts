@@ -1,5 +1,11 @@
 import { Live, TrackLocator, User } from "./types";
 
+export type LiveTrackRecord = {
+  userId: string;
+  sessionId: string;
+  tracks: TrackLocator[];
+};
+
 // D1データベースでTrackLocatorを管理する関数群
 export async function setTracks(
   database: D1Database,
@@ -16,20 +22,34 @@ export async function setTracks(
     .run();
 }
 
-export async function getTracks(
+export async function getLiveTrackRecord(
   database: D1Database,
   userId: string,
-): Promise<TrackLocator[]> {
+): Promise<LiveTrackRecord | null> {
   const result = await database
-    .prepare("SELECT tracks_json FROM live_tracks WHERE user_id = ?")
+    .prepare(
+      "SELECT user_id, session_id, tracks_json FROM live_tracks WHERE user_id = ?",
+    )
     .bind(userId)
     .first();
 
   if (!result) {
-    return [];
+    return null;
   }
 
-  return JSON.parse(result.tracks_json as string) as TrackLocator[];
+  return {
+    userId: result.user_id as string,
+    sessionId: result.session_id as string,
+    tracks: JSON.parse(result.tracks_json as string) as TrackLocator[],
+  };
+}
+
+export async function getTracks(
+  database: D1Database,
+  userId: string,
+): Promise<TrackLocator[]> {
+  const liveTrackRecord = await getLiveTrackRecord(database, userId);
+  return liveTrackRecord?.tracks ?? [];
 }
 
 export async function deleteTracks(
@@ -40,6 +60,19 @@ export async function deleteTracks(
     .prepare("DELETE FROM live_tracks WHERE user_id = ?")
     .bind(userId)
     .run();
+}
+
+export async function deleteTracksForSession(
+  database: D1Database,
+  userId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const result = await database
+    .prepare("DELETE FROM live_tracks WHERE user_id = ? AND session_id = ?")
+    .bind(userId, sessionId)
+    .run();
+
+  return result.meta.changes > 0;
 }
 
 /**

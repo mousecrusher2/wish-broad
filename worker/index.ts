@@ -4,6 +4,7 @@ import * as db from "./database";
 import { getGuildMember } from "./discord";
 import { calcJwtTimestamps, JWT_DURATION_SECONDS } from "./jwt-utils";
 import {
+  CallsApiError,
   CallsClient,
   startIngest,
   startPlay,
@@ -84,6 +85,21 @@ app
       if (!sdpOffer || sdpOffer.trim().length === 0) {
         throw new HTTPException(400, { message: "SDP offer is required" });
       }
+
+      const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
+      if (existingLive) {
+        const isActive = await callsClient.isSessionActive(
+          existingLive.sessionId,
+        );
+        if (isActive) {
+          throw new HTTPException(400, {
+            message: "A live stream is already active for this user",
+          });
+        }
+
+        await db.deleteInactiveSession(c.env.LIVE_DB, userId);
+      }
+
       const result = await startIngest(callsClient, userId, sdpOffer);
 
       // トラック情報をデータベースに保存（session_idも含める）
@@ -118,11 +134,38 @@ app
 // ライブ配信終了エンドポイント
 // 配信セッションを削除し、関連データを清理
 app.delete("/ingest/:userId/:sessionId", async (c) => {
-  const { userId } = c.req.param();
+  const { userId, sessionId } = c.req.param();
   try {
-    await db.deleteTracks(c.env.LIVE_DB, userId);
+    const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
+    if (!existingLive) {
+      throw new HTTPException(400, {
+        message: "No live stream found for this user",
+      });
+    }
+
+    if (existingLive.sessionId !== sessionId) {
+      throw new HTTPException(400, {
+        message: "Session ID does not match the active live stream",
+      });
+    }
+
+    const deleted = await db.deleteTracksForSession(
+      c.env.LIVE_DB,
+      userId,
+      sessionId,
+    );
+    if (!deleted) {
+      throw new HTTPException(400, {
+        message: "Failed to delete the requested live stream",
+      });
+    }
+
     return c.text("OK", 200);
   } catch (error) {
+    if (error instanceof HTTPException) {
+      throw error;
+    }
+
     console.error(`Failed to delete tracks for user ${userId}:`, error);
     throw error;
   }
@@ -143,17 +186,19 @@ app.use("/login", async (c, next) => {
   if (!oauthToken) {
     throw new HTTPException(401, { message: "Unauthorized" });
   }
-  await next();
-
   try {
-    await revokeToken(
-      c.env.DISCORD_CLIENT_ID,
-      c.env.DISCORD_CLIENT_SECRET,
-      oauthToken.token,
-    );
-  } catch (error) {
-    // トークン取り消しの失敗は致命的ではないので、ログのみ出力
-    console.warn("Failed to revoke OAuth token:", error);
+    await next();
+  } finally {
+    try {
+      await revokeToken(
+        c.env.DISCORD_CLIENT_ID,
+        c.env.DISCORD_CLIENT_SECRET,
+        oauthToken.token,
+      );
+    } catch (error) {
+      // トークン取り消しの失敗は致命的ではないので、ログのみ出力
+      console.warn("Failed to revoke OAuth token:", error);
+    }
   }
 });
 
@@ -249,26 +294,29 @@ app
       appSecret: c.env.CALLS_APP_SECRET,
     });
     try {
-      const tracks = await db.getTracks(c.env.LIVE_DB, userId);
+      const liveTrackRecord = await db.getLiveTrackRecord(
+        c.env.LIVE_DB,
+        userId,
+      );
+      const tracks = liveTrackRecord?.tracks ?? [];
 
       // トラックが存在し、セッションチェックが必要な場合のみチェック実行
-      if (tracks.length > 0) {
+      if (liveTrackRecord) {
         const shouldCheck = await db.shouldCheckSession(c.env.LIVE_DB, userId);
 
         if (shouldCheck) {
           // セッションアクティブチェック
-          const ingestSessionId = tracks[0]?.sessionId;
-          if (ingestSessionId) {
-            const isActive = await callsClient.isSessionActive(ingestSessionId);
-            if (!isActive) {
-              // セッションが終了している場合、データベースからレコードを削除
-              await db.deleteInactiveSession(c.env.LIVE_DB, userId);
-              throw new LiveNotFoundError(userId);
-            }
-
-            // セッションチェック時刻を更新
-            await db.updateSessionCheckTime(c.env.LIVE_DB, userId);
+          const isActive = await callsClient.isSessionActive(
+            liveTrackRecord.sessionId,
+          );
+          if (!isActive) {
+            // セッションが終了している場合、データベースからレコードを削除
+            await db.deleteInactiveSession(c.env.LIVE_DB, userId);
+            throw new LiveNotFoundError(userId);
           }
+
+          // セッションチェック時刻を更新
+          await db.updateSessionCheckTime(c.env.LIVE_DB, userId);
         }
       }
 
@@ -291,6 +339,12 @@ app
         throw error;
       }
       if (error instanceof LiveNotFoundError) {
+        throw new HTTPException(404, {
+          message: `Live stream not found: ${userId}`,
+        });
+      }
+      if (error instanceof CallsApiError && error.statusCode === 404) {
+        await db.deleteInactiveSession(c.env.LIVE_DB, userId);
         throw new HTTPException(404, {
           message: `Live stream not found: ${userId}`,
         });
