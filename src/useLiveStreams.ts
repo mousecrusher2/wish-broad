@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import useSWR from "swr";
 import type { Live } from "./types";
 
 interface UseLiveStreamsResult {
@@ -28,47 +28,43 @@ function isLiveList(value: unknown): value is Live[] {
   return Array.isArray(value) && value.every(isLive);
 }
 
+async function fetchLiveStreams(): Promise<Live[]> {
+  try {
+    const response = await fetch("/api/lives");
+    if (!response.ok) {
+      throw new Error("配信リストの取得に失敗しました");
+    }
+
+    const data: unknown = await response.json();
+    if (!isLiveList(data)) {
+      throw new Error("Unexpected live streams response");
+    }
+
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch live streams:", error);
+    throw error instanceof Error
+      ? error
+      : new Error("配信リストの取得中にエラーが発生しました");
+  }
+}
+
 export function useLiveStreams(): UseLiveStreamsResult {
-  const [streams, setStreams] = useState<Live[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [shouldRefresh, setShouldRefresh] = useState(0);
-
-  useEffect(() => {
-    const fetchStreams = async () => {
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const response = await fetch("/api/lives");
-        if (response.ok) {
-          const data: unknown = await response.json();
-          if (!isLiveList(data)) {
-            throw new Error("Unexpected live streams response");
-          }
-          setStreams(data);
-        } else {
-          setError("配信リストの取得に失敗しました");
-        }
-      } catch (err) {
-        console.error("Failed to fetch live streams:", err);
-        setError("配信リストの取得中にエラーが発生しました");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    void fetchStreams();
-  }, [shouldRefresh]);
-
-  const refresh = () => {
-    setShouldRefresh((prev) => prev + 1);
-  };
+  const { data, error, isLoading, isValidating, mutate } = useSWR<
+    Live[],
+    Error
+  >("/api/lives", fetchLiveStreams, {
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    shouldRetryOnError: false,
+  });
 
   return {
-    streams,
-    isLoading,
-    error,
-    refresh,
+    streams: data ?? [],
+    isLoading: isLoading || isValidating,
+    error: error instanceof Error ? error.message : null,
+    refresh: () => {
+      void mutate();
+    },
   };
 }

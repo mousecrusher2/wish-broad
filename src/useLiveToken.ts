@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import useSWR from "swr";
 
 interface LiveTokenResponse {
   hasToken: boolean;
@@ -32,50 +33,65 @@ function isCreateTokenResponse(value: unknown): value is CreateTokenResponse {
   );
 }
 
-export function useLiveToken() {
-  const [state, setState] = useState<LiveTokenState>({ status: "loading" });
+async function fetchLiveTokenState(): Promise<LiveTokenState> {
+  try {
+    const response = await fetch("/api/me/livetoken", {
+      method: "GET",
+      credentials: "include",
+    });
 
-  // トークンの状況を取得
-  const fetchTokenStatus = async () => {
-    try {
-      setState({ status: "loading" });
-
-      const response = await fetch("/api/me/livetoken", {
-        method: "GET",
-        credentials: "include",
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${String(response.status)}`);
-      }
-
-      const data: unknown = await response.json();
-      if (!isLiveTokenResponse(data)) {
-        throw new Error("Unexpected live token response");
-      }
-
-      if (data.hasToken) {
-        setState({ status: "available", token: null });
-      } else {
-        setState({ status: "none" });
-      }
-    } catch (err) {
-      console.error("Failed to fetch token status:", err);
-      setState({
-        status: "error",
-        message:
-          err instanceof Error
-            ? err.message
-            : "トークン状況の取得に失敗しました",
-      });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${String(response.status)}`);
     }
+
+    const data: unknown = await response.json();
+    if (!isLiveTokenResponse(data)) {
+      throw new Error("Unexpected live token response");
+    }
+
+    if (data.hasToken) {
+      return { status: "available", token: null };
+    }
+
+    return { status: "none" };
+  } catch (error) {
+    console.error("Failed to fetch token status:", error);
+    return {
+      status: "error",
+      message:
+        error instanceof Error
+          ? error.message
+          : "トークン状況の取得に失敗しました",
+    };
+  }
+}
+
+export function useLiveToken() {
+  const [overrideState, setOverrideState] = useState<LiveTokenState | null>(
+    null,
+  );
+  const { data, mutate } = useSWR<LiveTokenState>(
+    "/api/me/livetoken",
+    fetchLiveTokenState,
+    {
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      shouldRetryOnError: false,
+    },
+  );
+
+  const state = overrideState ?? data ?? { status: "loading" };
+
+  const fetchTokenStatus = async () => {
+    setOverrideState({ status: "loading" });
+    await mutate();
+    setOverrideState(null);
   };
 
-  // 新しいトークンを発行
   const createToken = async () => {
-    try {
-      setState({ status: "loading" });
+    setOverrideState({ status: "loading" });
 
+    try {
       const response = await fetch("/api/me/livetoken", {
         method: "POST",
         credentials: "include",
@@ -85,30 +101,32 @@ export function useLiveToken() {
         throw new Error(`HTTP error! status: ${String(response.status)}`);
       }
 
-      const data: unknown = await response.json();
-      if (!isCreateTokenResponse(data)) {
+      const nextData: unknown = await response.json();
+      if (!isCreateTokenResponse(nextData)) {
         throw new Error("Unexpected token creation response");
       }
 
-      if (data.success) {
-        setState({ status: "available", token: data.token });
-      } else {
-        throw new Error("トークンの発行に失敗しました");
-      }
-    } catch (err) {
-      console.error("Failed to create token:", err);
-      setState({
-        status: "error",
-        message:
-          err instanceof Error ? err.message : "トークンの発行に失敗しました",
-      });
+      const nextState: LiveTokenState = {
+        status: "available",
+        token: nextData.token,
+      };
+      await mutate(nextState, { revalidate: false });
+    } catch (error) {
+      console.error("Failed to create token:", error);
+      await mutate(
+        {
+          status: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "トークンの発行に失敗しました",
+        } satisfies LiveTokenState,
+        { revalidate: false },
+      );
+    } finally {
+      setOverrideState(null);
     }
   };
-
-  // コンポーネントマウント時にトークン状況を取得
-  useEffect(() => {
-    void fetchTokenStatus();
-  }, []);
 
   return {
     state,

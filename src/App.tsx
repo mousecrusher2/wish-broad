@@ -1,10 +1,7 @@
 import { Suspense } from "react";
-import { checkAuth, useAuthFromPromise } from "./useAuth";
+import { useAuth } from "./useAuth";
 import { LoginPrompt } from "./LoginPrompt";
 import { WHEPPlayer } from "./WHEPPlayer";
-
-// React の外側で一度だけ作る認証チェック Promise
-const authPromise = checkAuth();
 
 const screenShellClasses =
   "mx-auto flex min-h-screen w-full max-w-3xl items-center justify-center px-6 py-16";
@@ -17,7 +14,7 @@ const actionButtonClasses =
   "mt-6 inline-flex items-center justify-center rounded-full bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/60";
 
 function AppContent() {
-  const auth = useAuthFromPromise(authPromise);
+  const auth = useAuth();
 
   if (auth.status === "authenticated") {
     return <WHEPPlayer user={auth.user} />;

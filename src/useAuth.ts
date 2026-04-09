@@ -1,8 +1,7 @@
-import { use } from "react";
+import useSWR from "swr";
 import type { AuthState, User } from "./types";
 
-// React の外側で実行する認証確認関数
-export async function checkAuth(): Promise<AuthState> {
+async function fetchAuthState(): Promise<AuthState> {
   try {
     const response = await fetch("/api/me", { credentials: "include" });
     if (response.ok) {
@@ -14,7 +13,6 @@ export async function checkAuth(): Promise<AuthState> {
       return { status: "unauthenticated" };
     }
 
-    // 200,401 以外はエラー扱い
     throw new Error(`Unexpected status code: ${String(response.status)}`);
   } catch (error) {
     console.error("Authentication check failed:", error);
@@ -28,7 +26,18 @@ export async function checkAuth(): Promise<AuthState> {
   }
 }
 
-// Suspense から使うラッパー
-export function useAuthFromPromise(promise: Promise<AuthState>): AuthState {
-  return use(promise);
+export function useAuth(): AuthState {
+  const { data } = useSWR<AuthState>("/api/me", fetchAuthState, {
+    suspense: true,
+    revalidateIfStale: false,
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    shouldRetryOnError: false,
+  });
+
+  if (!data) {
+    throw new Error("Authentication state is unavailable");
+  }
+
+  return data;
 }
