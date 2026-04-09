@@ -1,4 +1,5 @@
 import {
+  Bindings,
   CloseTracksResponse,
   NewSessionResponse,
   NewTracksResponse,
@@ -60,183 +61,185 @@ async function checkCallsApiResponse(
   }
 }
 
-export interface CallsConfig {
-  appId: string;
-  appSecret: string;
+type CallsEnv = Pick<Bindings, "CALLS_APP_ID" | "CALLS_APP_SECRET">;
+
+function getEndpoint(env: CallsEnv, path: string): string {
+  return `https://rtc.live.cloudflare.com/v1/apps/${env.CALLS_APP_ID}${path}`;
 }
 
-export class CallsClient {
-  private endpoint: string;
-  private headers: Record<string, string>;
+function getHeaders(env: CallsEnv): Record<string, string> {
+  return {
+    Authorization: `Bearer ${env.CALLS_APP_SECRET}`,
+  };
+}
 
-  constructor(config: CallsConfig) {
-    this.endpoint = `https://rtc.live.cloudflare.com/v1/apps/${config.appId}`;
-    this.headers = {
-      Authorization: `Bearer ${config.appSecret}`,
-    };
-  }
-  /**
-   * 新しいセッションを作成
-   */
-  async createSession(): Promise<NewSessionResponse> {
-    const endpoint = `${this.endpoint}/sessions/new`;
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: this.headers,
-    });
+/**
+ * 新しいセッションを作成
+ */
+export async function createSession(
+  env: CallsEnv,
+): Promise<NewSessionResponse> {
+  const endpoint = getEndpoint(env, "/sessions/new");
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: getHeaders(env),
+  });
 
+  await checkCallsApiResponse(response, endpoint);
+  const responseBody: unknown = await response.json();
+  return parseNewSessionResponse(responseBody, "Calls createSession response");
+}
+
+/**
+ * 配信者用：新しいトラックを作成（WHIP）
+ */
+export async function createIngestTracks(
+  env: CallsEnv,
+  sessionId: string,
+  sdpOffer: string,
+): Promise<NewTracksResponse> {
+  const body = {
+    sessionDescription: {
+      type: "offer",
+      sdp: sdpOffer,
+    },
+    autoDiscover: true,
+  };
+
+  const endpoint = getEndpoint(env, `/sessions/${sessionId}/tracks/new`);
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      ...getHeaders(env),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  await checkCallsApiResponse(response, endpoint);
+  const responseBody: unknown = await response.json();
+  return parseNewTracksResponse(
+    responseBody,
+    "Calls createIngestTracks response",
+  );
+}
+
+/**
+ * 視聴者用：既存のトラックに接続（WHEP）
+ */
+export async function connectToTracks(
+  env: CallsEnv,
+  sessionId: string,
+  tracks: TrackLocator[],
+  sdpOffer?: string,
+): Promise<NewTracksResponse> {
+  const body =
+    sdpOffer && sdpOffer.length > 0
+      ? {
+          sessionDescription: {
+            type: "offer",
+            sdp: sdpOffer,
+          },
+          tracks: tracks,
+        }
+      : {
+          tracks: tracks,
+        };
+
+  const endpoint = getEndpoint(env, `/sessions/${sessionId}/tracks/new`);
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      ...getHeaders(env),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  await checkCallsApiResponse(response, endpoint);
+  const responseBody: unknown = await response.json();
+  return parseNewTracksResponse(responseBody, "Calls connectToTracks response");
+}
+
+/**
+ * セッション再交渉（ICE候補やセッション再交渉用）
+ */
+export async function renegotiateSession(
+  env: CallsEnv,
+  sessionId: string,
+  sdpAnswer: string,
+): Promise<Response> {
+  const body = {
+    sessionDescription: {
+      type: "answer",
+      sdp: sdpAnswer,
+    },
+  };
+
+  const endpoint = getEndpoint(env, `/sessions/${sessionId}/renegotiate`);
+  const response = await fetch(endpoint, {
+    method: "PUT",
+    headers: {
+      ...getHeaders(env),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  await checkCallsApiResponse(response, endpoint);
+  return response;
+}
+
+/**
+ * セッションに紐づくトラックを閉じる
+ */
+export async function closeTracks(
+  env: CallsEnv,
+  sessionId: string,
+  tracks: StoredTrack[],
+): Promise<CloseTracksResponse> {
+  const body = {
+    force: true,
+    tracks: tracks.map((track) => ({
+      mid: track.mid,
+    })),
+  };
+
+  const endpoint = getEndpoint(env, `/sessions/${sessionId}/tracks/close`);
+  const response = await fetch(endpoint, {
+    method: "PUT",
+    headers: {
+      ...getHeaders(env),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  await checkCallsApiResponse(response, endpoint);
+  const responseBody: unknown = await response.json();
+  return parseCloseTracksResponse(responseBody, "Calls closeTracks response");
+}
+
+/**
+ * セッションが継続しているか確認
+ */
+export async function isSessionActive(
+  env: CallsEnv,
+  sessionId: string,
+): Promise<boolean> {
+  const endpoint = getEndpoint(env, `/sessions/${sessionId}`);
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: getHeaders(env),
+  });
+
+  try {
     await checkCallsApiResponse(response, endpoint);
-    const responseBody: unknown = await response.json();
-    return parseNewSessionResponse(
-      responseBody,
-      "Calls createSession response",
-    );
-  }
-  /**
-   * 配信者用：新しいトラックを作成（WHIP）
-   */
-  async createIngestTracks(
-    sessionId: string,
-    sdpOffer: string,
-  ): Promise<NewTracksResponse> {
-    const body = {
-      sessionDescription: {
-        type: "offer",
-        sdp: sdpOffer,
-      },
-      autoDiscover: true,
-    };
-
-    const endpoint = `${this.endpoint}/sessions/${sessionId}/tracks/new`;
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        ...this.headers,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-
-    await checkCallsApiResponse(response, endpoint);
-    const responseBody: unknown = await response.json();
-    return parseNewTracksResponse(
-      responseBody,
-      "Calls createIngestTracks response",
-    );
-  }
-  /**
-   * 視聴者用：既存のトラックに接続（WHEP）
-   */
-  async connectToTracks(
-    sessionId: string,
-    tracks: TrackLocator[],
-    sdpOffer?: string,
-  ): Promise<NewTracksResponse> {
-    const body =
-      sdpOffer && sdpOffer.length > 0
-        ? {
-            sessionDescription: {
-              type: "offer",
-              sdp: sdpOffer,
-            },
-            tracks: tracks,
-          }
-        : {
-            tracks: tracks,
-          };
-
-    const endpoint = `${this.endpoint}/sessions/${sessionId}/tracks/new`;
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        ...this.headers,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-
-    await checkCallsApiResponse(response, endpoint);
-    const responseBody: unknown = await response.json();
-    return parseNewTracksResponse(
-      responseBody,
-      "Calls connectToTracks response",
-    );
-  }
-  /**
-   * セッション再交渉（ICE候補やセッション再交渉用）
-   */
-  async renegotiateSession(
-    sessionId: string,
-    sdpAnswer: string,
-  ): Promise<Response> {
-    const body = {
-      sessionDescription: {
-        type: "answer",
-        sdp: sdpAnswer,
-      },
-    };
-
-    const endpoint = `${this.endpoint}/sessions/${sessionId}/renegotiate`;
-    const response = await fetch(endpoint, {
-      method: "PUT",
-      headers: {
-        ...this.headers,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    await checkCallsApiResponse(response, endpoint);
-    return response;
-  }
-
-  /**
-   * セッションに紐づくトラックを閉じる
-   */
-  async closeTracks(
-    sessionId: string,
-    tracks: StoredTrack[],
-  ): Promise<CloseTracksResponse> {
-    const body = {
-      force: true,
-      tracks: tracks.map((track) => ({
-        mid: track.mid,
-      })),
-    };
-
-    const endpoint = `${this.endpoint}/sessions/${sessionId}/tracks/close`;
-    const response = await fetch(endpoint, {
-      method: "PUT",
-      headers: {
-        ...this.headers,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-
-    await checkCallsApiResponse(response, endpoint);
-    const responseBody: unknown = await response.json();
-    return parseCloseTracksResponse(responseBody, "Calls closeTracks response");
-  }
-
-  /**
-   * セッションが継続しているか確認
-   */
-  async isSessionActive(sessionId: string): Promise<boolean> {
-    const endpoint = `${this.endpoint}/sessions/${sessionId}`;
-    const response = await fetch(endpoint, {
-      method: "GET",
-      headers: this.headers,
-    });
-
-    try {
-      await checkCallsApiResponse(response, endpoint);
-      return true; // ステータスコード200ならセッションはアクティブ
-    } catch (error) {
-      if (error instanceof CallsApiError && error.statusCode === 404) {
-        return false; // セッションが見つからない場合は非アクティブ
-      }
-      throw error; // その他のエラーは再スロー
+    return true; // ステータスコード200ならセッションはアクティブ
+  } catch (error) {
+    if (error instanceof CallsApiError && error.statusCode === 404) {
+      return false; // セッションが見つからない場合は非アクティブ
     }
+    throw error; // その他のエラーは再スロー
   }
 }
 
@@ -244,7 +247,7 @@ export class CallsClient {
  * 配信開始処理：SDP Offerを受け取り、Cloudflareセッションを作成してトラック情報を返す
  */
 export async function startIngest(
-  callsClient: CallsClient,
+  env: CallsEnv,
   _liveId: string,
   sdpOffer: string,
 ): Promise<{
@@ -253,10 +256,11 @@ export async function startIngest(
   tracks: StoredTrack[];
 }> {
   // 新しいセッションを作成
-  const sessionResult = await callsClient.createSession();
+  const sessionResult = await createSession(env);
 
   // 配信者からのSDP Offerを使ってトラックを作成
-  const tracksResult = await callsClient.createIngestTracks(
+  const tracksResult = await createIngestTracks(
+    env,
     sessionResult.sessionId,
     sdpOffer,
   );
@@ -280,7 +284,7 @@ export async function startIngest(
  * 視聴開始処理：既存のトラックに接続して視聴セッションを作成
  */
 export async function startPlay(
-  callsClient: CallsClient,
+  env: CallsEnv,
   liveId: string,
   tracks: TrackLocator[],
   sdpOffer?: string,
@@ -293,10 +297,11 @@ export async function startPlay(
   }
 
   // 新しい視聴セッションを作成
-  const sessionResult = await callsClient.createSession();
+  const sessionResult = await createSession(env);
 
   // 既存のトラックに接続
-  const tracksResult = await callsClient.connectToTracks(
+  const tracksResult = await connectToTracks(
+    env,
     sessionResult.sessionId,
     tracks,
     sdpOffer,

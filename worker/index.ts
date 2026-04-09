@@ -5,7 +5,9 @@ import { getGuildMember } from "./discord";
 import { calcJwtTimestamps, JWT_DURATION_SECONDS } from "./jwt-utils";
 import {
   CallsApiError,
-  CallsClient,
+  closeTracks,
+  isSessionActive,
+  renegotiateSession,
   startIngest,
   startPlay,
   LiveNotFoundError,
@@ -84,12 +86,6 @@ app.options("/ingest/:userId/:settionId?", async () => {
 app
   .post("/ingest/:userId", async (c) => {
     const { userId } = c.req.param();
-
-    // Calls APIクライアントを初期化
-    const callsClient = new CallsClient({
-      appId: c.env.CALLS_APP_ID,
-      appSecret: c.env.CALLS_APP_SECRET,
-    });
     const sdpOffer = await c.req.text();
     if (!sdpOffer || sdpOffer.trim().length === 0) {
       return c.text("SDP offer is required", 400);
@@ -97,9 +93,7 @@ app
 
     const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
     if (existingLive) {
-      const isActive = await callsClient.isSessionActive(
-        existingLive.sessionId,
-      );
+      const isActive = await isSessionActive(c.env, existingLive.sessionId);
       if (isActive) {
         return c.text("A live stream is already active for this user", 400);
       }
@@ -111,7 +105,7 @@ app
       );
     }
 
-    const result = await startIngest(callsClient, userId, sdpOffer);
+    const result = await startIngest(c.env, userId, sdpOffer);
 
     // トラック情報をデータベースに保存（session_idも含める）
     await db.setTracks(c.env.LIVE_DB, userId, result.sessionId, result.tracks);
@@ -131,10 +125,6 @@ app
 // 配信セッションを削除し、関連データを清理
 app.delete("/ingest/:userId/:sessionId", async (c) => {
   const { userId, sessionId } = c.req.param();
-  const callsClient = new CallsClient({
-    appId: c.env.CALLS_APP_ID,
-    appSecret: c.env.CALLS_APP_SECRET,
-  });
 
   const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
   if (!existingLive) {
@@ -153,7 +143,8 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
   }
 
   try {
-    const closeResponse = await callsClient.closeTracks(
+    const closeResponse = await closeTracks(
+      c.env,
       sessionId,
       existingLive.tracks,
     );
@@ -305,10 +296,6 @@ app
     );
 
     // Calls APIクライアントを初期化
-    const callsClient = new CallsClient({
-      appId: c.env.CALLS_APP_ID,
-      appSecret: c.env.CALLS_APP_SECRET,
-    });
     const liveTrackRecord = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
     const tracks = liveTrackRecord?.tracks ?? [];
 
@@ -318,7 +305,8 @@ app
 
       if (shouldCheck) {
         // セッションアクティブチェック
-        const isActive = await callsClient.isSessionActive(
+        const isActive = await isSessionActive(
+          c.env,
           liveTrackRecord.sessionId,
         );
         if (!isActive) {
@@ -339,7 +327,7 @@ app
     const sdpOffer = await c.req.text();
 
     try {
-      const result = await startPlay(callsClient, userId, tracks, sdpOffer);
+      const result = await startPlay(c.env, userId, tracks, sdpOffer);
 
       return c.body(result.sdpAnswer, 201, {
         "access-control-expose-headers": "location",
@@ -382,18 +370,12 @@ app
   .patch(async (c) => {
     const { sessionId } = c.req.param();
 
-    // Calls APIクライアントを初期化
-    const callsClient = new CallsClient({
-      appId: c.env.CALLS_APP_ID,
-      appSecret: c.env.CALLS_APP_SECRET,
-    });
-
     const sdpAnswer = await c.req.text();
     if (!sdpAnswer || sdpAnswer.trim().length === 0) {
       return c.text("SDP answer is required", 400);
     }
 
-    const response = await callsClient.renegotiateSession(sessionId, sdpAnswer);
+    const response = await renegotiateSession(c.env, sessionId, sdpAnswer);
     return c.body(null, response.status as StatusCode);
   });
 

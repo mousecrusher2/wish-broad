@@ -46,27 +46,12 @@ const callsMocks = vi.hoisted(() => {
     }
   }
 
-  const client = {
-    closeTracks: vi.fn<() => Promise<unknown>>(),
-    createIngestTracks: vi.fn<() => Promise<unknown>>(),
-    createSession: vi.fn<() => Promise<unknown>>(),
-    isSessionActive: vi.fn<() => Promise<boolean>>(),
-    renegotiateSession: vi.fn<() => Promise<Response>>(),
-  };
-
-  class MockCallsClient {
-    closeTracks = client.closeTracks;
-    createIngestTracks = client.createIngestTracks;
-    createSession = client.createSession;
-    isSessionActive = client.isSessionActive;
-    renegotiateSession = client.renegotiateSession;
-  }
-
   return {
     CallsApiError: MockCallsApiError,
-    CallsClient: MockCallsClient,
     LiveNotFoundError: MockLiveNotFoundError,
-    client,
+    closeTracks: vi.fn<() => Promise<unknown>>(),
+    isSessionActive: vi.fn<() => Promise<boolean>>(),
+    renegotiateSession: vi.fn<() => Promise<Response>>(),
     startIngest: vi.fn<() => Promise<unknown>>(),
     startPlay: vi.fn<() => Promise<unknown>>(),
   };
@@ -75,8 +60,10 @@ const callsMocks = vi.hoisted(() => {
 vi.mock("./database", () => dbMocks);
 vi.mock("./calls", () => ({
   CallsApiError: callsMocks.CallsApiError,
-  CallsClient: callsMocks.CallsClient,
   LiveNotFoundError: callsMocks.LiveNotFoundError,
+  closeTracks: callsMocks.closeTracks,
+  isSessionActive: callsMocks.isSessionActive,
+  renegotiateSession: callsMocks.renegotiateSession,
   startIngest: callsMocks.startIngest,
   startPlay: callsMocks.startPlay,
 }));
@@ -145,11 +132,9 @@ describe("worker app", () => {
     dbMocks.shouldCheckSession.mockResolvedValue(false);
     dbMocks.updateSessionCheckTime.mockResolvedValue();
 
-    callsMocks.client.closeTracks.mockResolvedValue({});
-    callsMocks.client.createIngestTracks.mockResolvedValue({});
-    callsMocks.client.createSession.mockResolvedValue({});
-    callsMocks.client.isSessionActive.mockResolvedValue(true);
-    callsMocks.client.renegotiateSession.mockResolvedValue(new Response(null));
+    callsMocks.closeTracks.mockResolvedValue({});
+    callsMocks.isSessionActive.mockResolvedValue(true);
+    callsMocks.renegotiateSession.mockResolvedValue(new Response(null));
     callsMocks.startIngest.mockReset();
     callsMocks.startIngest.mockResolvedValue({
       sdpAnswer: "answer-sdp",
@@ -213,7 +198,7 @@ describe("worker app", () => {
       tracks: staleTracks,
       userId: "user-1",
     });
-    callsMocks.client.isSessionActive.mockResolvedValue(false);
+    callsMocks.isSessionActive.mockResolvedValue(false);
 
     const response = await app.fetch(
       new Request("http://localhost/ingest/user-1", {
@@ -235,7 +220,7 @@ describe("worker app", () => {
       "stale-session",
     );
     expect(callsMocks.startIngest).toHaveBeenCalledWith(
-      expect.any(callsMocks.CallsClient),
+      env,
       "user-1",
       "offer-sdp",
     );
@@ -270,7 +255,7 @@ describe("worker app", () => {
       ],
       userId: "user-1",
     });
-    callsMocks.client.isSessionActive.mockResolvedValue(true);
+    callsMocks.isSessionActive.mockResolvedValue(true);
 
     const response = await app.fetch(
       new Request("http://localhost/ingest/user-1", {
@@ -321,7 +306,8 @@ describe("worker app", () => {
     const response = await app.fetch(request, env, createExecutionContext());
 
     expect(response.status).toBe(200);
-    expect(callsMocks.client.closeTracks).toHaveBeenCalledWith(
+    expect(callsMocks.closeTracks).toHaveBeenCalledWith(
+      env,
       "session-1",
       tracks,
     );
@@ -347,7 +333,7 @@ describe("worker app", () => {
       ],
       userId: "user-1",
     });
-    callsMocks.client.closeTracks.mockResolvedValue({
+    callsMocks.closeTracks.mockResolvedValue({
       tracks: [{ errorCode: "failed_to_close", mid: "0" }],
     });
 
@@ -379,7 +365,7 @@ describe("worker app", () => {
       ],
       userId: "user-1",
     });
-    callsMocks.client.closeTracks.mockRejectedValue(
+    callsMocks.closeTracks.mockRejectedValue(
       new callsMocks.CallsApiError(404, "Not Found", "/tracks/close"),
     );
 
@@ -433,7 +419,7 @@ describe("worker app", () => {
     expect(await response.text()).toBe(
       "Session ID does not match the active live stream",
     );
-    expect(callsMocks.client.closeTracks).not.toHaveBeenCalled();
+    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
     expect(dbMocks.deleteTracksForSession).not.toHaveBeenCalled();
   });
 
@@ -466,7 +452,7 @@ describe("worker app", () => {
 
     expect(response.status).toBe(500);
     expect(await response.text()).toBe("Stored live track data is invalid");
-    expect(callsMocks.client.closeTracks).not.toHaveBeenCalled();
+    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
     expect(dbMocks.deleteTracksForSession).not.toHaveBeenCalled();
   });
 
@@ -487,7 +473,7 @@ describe("worker app", () => {
       userId: "streamer-1",
     });
     dbMocks.shouldCheckSession.mockResolvedValue(true);
-    callsMocks.client.isSessionActive.mockResolvedValue(false);
+    callsMocks.isSessionActive.mockResolvedValue(false);
 
     const response = await app.fetch(
       new Request("http://localhost/play/streamer-1", {
@@ -571,7 +557,7 @@ describe("worker app", () => {
       userId: "streamer-1",
     });
     dbMocks.shouldCheckSession.mockResolvedValue(true);
-    callsMocks.client.isSessionActive.mockResolvedValue(true);
+    callsMocks.isSessionActive.mockResolvedValue(true);
 
     const response = await app.fetch(
       new Request("http://localhost/play/streamer-1", {
@@ -592,7 +578,7 @@ describe("worker app", () => {
       "streamer-1",
     );
     expect(callsMocks.startPlay).toHaveBeenCalledWith(
-      expect.any(callsMocks.CallsClient),
+      env,
       "streamer-1",
       liveTracks,
       "viewer-offer",
@@ -620,13 +606,13 @@ describe("worker app", () => {
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe("SDP answer is required");
-    expect(callsMocks.client.renegotiateSession).not.toHaveBeenCalled();
+    expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
   });
 
   it("forwards the renegotiation status code from Calls", async () => {
     const env = createBindings();
 
-    callsMocks.client.renegotiateSession.mockResolvedValue(
+    callsMocks.renegotiateSession.mockResolvedValue(
       new Response(null, { status: 204 }),
     );
 
@@ -644,7 +630,8 @@ describe("worker app", () => {
     );
 
     expect(response.status).toBe(204);
-    expect(callsMocks.client.renegotiateSession).toHaveBeenCalledWith(
+    expect(callsMocks.renegotiateSession).toHaveBeenCalledWith(
+      env,
       "viewer-session",
       "viewer-answer",
     );
