@@ -1,8 +1,11 @@
 import { Context, Hono } from "hono";
-import { JWTPayload, Bindings, DiscordGuildMember } from "./types";
+import { JWTPayload, Bindings } from "./types";
 import * as db from "./database";
-import { getGuildMember } from "./discord";
-import { calcJwtTimestamps, JWT_DURATION_SECONDS } from "./jwt-utils";
+import {
+  clearAuthCookie,
+  completeDiscordLogin,
+  startDiscordLogin,
+} from "./discord-login";
 import {
   CallsApiError,
   closeTracks,
@@ -15,10 +18,8 @@ import {
 import { StatusCode } from "hono/utils/http-status";
 import { logger } from "hono/logger";
 import { bearerAuth } from "hono/bearer-auth";
-import { deleteCookie, setCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
-import { discordAuth, revokeToken } from "@hono/oauth-providers/discord";
-import { jwt, sign } from "hono/jwt";
+import { jwt } from "hono/jwt";
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -182,95 +183,19 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
   return c.text("OK", 200);
 });
 
-// Discord OAuth認証設定
-app.use("/login", async (c, next) => {
-  return discordAuth({
-    client_id: c.env.DISCORD_CLIENT_ID,
-    client_secret: c.env.DISCORD_CLIENT_SECRET,
-    scope: ["identify", "guilds", "guilds.members.read"],
-  })(c, next);
+// Discord認証開始エンドポイント
+app.get("/login", (c) => {
+  return startDiscordLogin(c);
 });
 
-// OAuth認証後のトークン取り消し処理
-app.use("/login", async (c, next) => {
-  const oauthToken = c.get("token");
-  if (!oauthToken) {
-    return c.text("Unauthorized", 401);
-  }
-  try {
-    await next();
-  } finally {
-    try {
-      await revokeToken(
-        c.env.DISCORD_CLIENT_ID,
-        c.env.DISCORD_CLIENT_SECRET,
-        oauthToken.token,
-      );
-    } catch (error) {
-      // トークン取り消しの失敗は致命的ではないので、ログのみ出力
-      console.warn("Failed to revoke OAuth token:", error);
-    }
-  }
-});
-
-// Discord認証とJWT発行エンドポイント
-// Discordユーザーを認証し、ギルドメンバーシップを確認後JWTトークンを発行
-app.get("/login", async (c) => {
-  const user = c.get("user-discord");
-  const oauthToken = c.get("token");
-  if (!user || !oauthToken) {
-    return c.text("Unauthorized", 401);
-  }
-  // ユーザーが認証済みギルドのメンバーかどうかをチェック
-  let member: DiscordGuildMember;
-  try {
-    member = await getGuildMember(oauthToken.token, c.env.AUTHORIZED_GUILD_ID);
-  } catch (error) {
-    console.error(
-      `Error fetching guild member for user ${String(user.id)}:`,
-      error,
-    );
-
-    if (error instanceof Error) {
-      return c.text(`Unauthorized: ${error.message}`, 401);
-    }
-
-    return c.text("Unauthorized: Failed to fetch guild member", 401);
-  }
-
-  const displayName =
-    member.nick || member.user.global_name || member.user.username;
-
-  await db.setUser(c.env.LIVE_DB, {
-    userId: member.user.id,
-    displayName,
-  });
-
-  const { iat, exp } = calcJwtTimestamps(JWT_DURATION_SECONDS.ONE_DAY);
-  const payload: JWTPayload = {
-    iat,
-    exp,
-    userId: member.user.id,
-    displayName,
-  };
-  const jwtToken = await sign(payload, c.env.JWT_SECRET, "HS256");
-
-  // 本番環境ではsecure: true、ローカル開発ではsecure: false
-  const isProduction = c.env.ENVIRONMENT === "production";
-
-  setCookie(c, "authtoken", jwtToken, {
-    expires: new Date(Date.now() + JWT_DURATION_SECONDS.ONE_DAY * 1000),
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: "Strict",
-  });
-  return c.redirect("/");
+// Discord認証完了エンドポイント
+// Discord OAuth code flowを完了し、ギルドメンバーシップを確認後JWTトークンを発行
+app.get("/login/callback", async (c) => {
+  return completeDiscordLogin(c);
 });
 
 app.post("/logout", async (c) => {
-  deleteCookie(c, "authtoken", {
-    secure: c.env.ENVIRONMENT === "production",
-  });
+  clearAuthCookie(c);
   return c.redirect("/");
 });
 

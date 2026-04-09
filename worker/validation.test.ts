@@ -3,6 +3,7 @@ import {
   SchemaValidationError,
   parseCloseTracksResponse,
   parseDiscordGuildMember,
+  parseDiscordOAuthToken,
   parseStoredTracksJson,
 } from "./validation";
 
@@ -67,6 +68,27 @@ describe("worker validation", () => {
         id: "user-1",
         username: "alice",
       },
+    });
+  });
+
+  it("parses Discord OAuth token responses", () => {
+    const parsed = parseDiscordOAuthToken(
+      {
+        access_token: "access-token",
+        expires_in: 3600,
+        refresh_token: "refresh-token",
+        scope: "identify guilds.members.read",
+        token_type: "Bearer",
+      },
+      "Discord OAuth token response",
+    );
+
+    expect(parsed).toEqual({
+      accessToken: "access-token",
+      expiresIn: 3600,
+      refreshToken: "refresh-token",
+      scope: "identify guilds.members.read",
+      tokenType: "Bearer",
     });
   });
 

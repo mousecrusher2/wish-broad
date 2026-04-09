@@ -73,6 +73,14 @@ export type DiscordGuildMember = {
   nick?: string | null;
 };
 
+export type DiscordOAuthToken = {
+  accessToken: string;
+  tokenType: string;
+  expiresIn: number;
+  scope: string;
+  refreshToken?: string;
+};
+
 export type User = {
   userId: string;
   displayName: string;

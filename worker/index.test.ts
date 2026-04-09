@@ -1,6 +1,11 @@
 import { sign } from "hono/jwt";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Bindings, StoredTrack } from "./types";
+import type {
+  Bindings,
+  DiscordGuildMember,
+  DiscordOAuthToken,
+  StoredTrack,
+} from "./types";
 
 const dbMocks = vi.hoisted(() => ({
   deleteTracksForSession: vi.fn<() => Promise<boolean>>(),
@@ -55,6 +60,55 @@ const callsMocks = vi.hoisted(() => {
   };
 });
 
+const discordMocks = vi.hoisted(() => {
+  class MockDiscordApiError extends Error {
+    constructor(
+      public readonly endpoint: string,
+      public readonly statusCode?: number,
+      public readonly statusText?: string,
+      public readonly responseBodyText?: string,
+      public readonly responseBodyJson?: unknown,
+    ) {
+      super("Discord API Error");
+      this.name = "DiscordApiError";
+    }
+  }
+
+  return {
+    DiscordApiError: MockDiscordApiError,
+    DISCORD_STATE_COOKIE_NAME: "discord_oauth_state",
+    buildDiscordAuthorizationUrl:
+      vi.fn<
+        (
+          env: Pick<Bindings, "DISCORD_CLIENT_ID">,
+          redirectUri: string,
+          state: string,
+        ) => string
+      >(),
+    createOAuthState: vi.fn<() => string>(),
+    exchangeCodeForToken:
+      vi.fn<
+        (
+          env: Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">,
+          code: string,
+          redirectUri: string,
+        ) => Promise<DiscordOAuthToken>
+      >(),
+    getDiscordErrorMessage: vi.fn<(error: unknown) => string>(),
+    getGuildMember:
+      vi.fn<
+        (accessToken: string, guildId: string) => Promise<DiscordGuildMember>
+      >(),
+    revokeAccessToken:
+      vi.fn<
+        (
+          env: Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">,
+          accessToken: string,
+        ) => Promise<void>
+      >(),
+  };
+});
+
 vi.mock("./database", () => dbMocks);
 vi.mock("./calls", () => ({
   CallsApiError: callsMocks.CallsApiError,
@@ -64,6 +118,17 @@ vi.mock("./calls", () => ({
   renegotiateSession: callsMocks.renegotiateSession,
   startIngest: callsMocks.startIngest,
   startPlay: callsMocks.startPlay,
+}));
+vi.mock("./discord", () => ({
+  DISCORD_STATE_COOKIE_NAME: discordMocks.DISCORD_STATE_COOKIE_NAME,
+  DISCORD_STATE_MAX_AGE_SECONDS: 600,
+  DiscordApiError: discordMocks.DiscordApiError,
+  buildDiscordAuthorizationUrl: discordMocks.buildDiscordAuthorizationUrl,
+  createOAuthState: discordMocks.createOAuthState,
+  exchangeCodeForToken: discordMocks.exchangeCodeForToken,
+  getDiscordErrorMessage: discordMocks.getDiscordErrorMessage,
+  getGuildMember: discordMocks.getGuildMember,
+  revokeAccessToken: discordMocks.revokeAccessToken,
 }));
 
 import app from "./index";
@@ -128,6 +193,37 @@ describe("worker app", () => {
     dbMocks.setTracks.mockResolvedValue();
     dbMocks.setUser.mockResolvedValue();
 
+    discordMocks.buildDiscordAuthorizationUrl.mockReset();
+    discordMocks.buildDiscordAuthorizationUrl.mockImplementation(
+      (_env, redirectUri, state) =>
+        `https://discord.com/oauth2/authorize?redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`,
+    );
+    discordMocks.createOAuthState.mockReset();
+    discordMocks.createOAuthState.mockReturnValue("oauth-state");
+    discordMocks.exchangeCodeForToken.mockReset();
+    discordMocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "discord-access-token",
+      expiresIn: 3600,
+      scope: "identify guilds.members.read",
+      tokenType: "Bearer",
+    });
+    discordMocks.getDiscordErrorMessage.mockReset();
+    discordMocks.getDiscordErrorMessage.mockReturnValue(
+      "Discord request failed",
+    );
+    discordMocks.getGuildMember.mockReset();
+    discordMocks.getGuildMember.mockResolvedValue({
+      nick: null,
+      user: {
+        discriminator: null,
+        global_name: "Alice",
+        id: "user-1",
+        username: "alice",
+      },
+    });
+    discordMocks.revokeAccessToken.mockReset();
+    discordMocks.revokeAccessToken.mockResolvedValue();
+
     callsMocks.closeTracks.mockResolvedValue({});
     callsMocks.isSessionActive.mockResolvedValue(true);
     callsMocks.renegotiateSession.mockResolvedValue(new Response(null));
@@ -149,6 +245,118 @@ describe("worker app", () => {
       sdpAnswer: "viewer-answer-sdp",
       sessionId: "viewer-session",
     });
+  });
+
+  it("redirects to Discord when login starts", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request("http://localhost/login"),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(
+      "https://discord.com/oauth2/authorize?redirect_uri=http%3A%2F%2Flocalhost%2Flogin%2Fcallback&state=oauth-state",
+    );
+    expect(response.headers.get("set-cookie")).toContain(
+      "discord_oauth_state=oauth-state",
+    );
+  });
+
+  it("rejects Discord login when the OAuth state is invalid", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request(
+        "http://localhost/login/callback?code=auth-code&state=wrong-state",
+        {
+          headers: {
+            Cookie: "discord_oauth_state=oauth-state",
+          },
+        },
+      ),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("Invalid OAuth state");
+    expect(discordMocks.exchangeCodeForToken).not.toHaveBeenCalled();
+  });
+
+  it("issues an auth cookie after a successful Discord login", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request(
+        "http://localhost/login/callback?code=auth-code&state=oauth-state",
+        {
+          headers: {
+            Cookie: "discord_oauth_state=oauth-state",
+          },
+        },
+      ),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/");
+    expect(discordMocks.exchangeCodeForToken).toHaveBeenCalledWith(
+      env,
+      "auth-code",
+      "http://localhost/login/callback",
+    );
+    expect(discordMocks.getGuildMember).toHaveBeenCalledWith(
+      "discord-access-token",
+      env.AUTHORIZED_GUILD_ID,
+    );
+    expect(dbMocks.setUser).toHaveBeenCalledWith(env.LIVE_DB, {
+      displayName: "Alice",
+      userId: "user-1",
+    });
+    expect(discordMocks.revokeAccessToken).toHaveBeenCalledWith(
+      env,
+      "discord-access-token",
+    );
+    expect(response.headers.get("set-cookie")).toContain("authtoken=");
+  });
+
+  it("rejects Discord login when the user is not in the authorized guild", async () => {
+    const env = createBindings();
+
+    discordMocks.getGuildMember.mockRejectedValue(
+      new discordMocks.DiscordApiError(
+        `https://discord.com/api/v10/users/@me/guilds/${env.AUTHORIZED_GUILD_ID}/member`,
+        404,
+        "Not Found",
+      ),
+    );
+
+    const response = await app.fetch(
+      new Request(
+        "http://localhost/login/callback?code=auth-code&state=oauth-state",
+        {
+          headers: {
+            Cookie: "discord_oauth_state=oauth-state",
+          },
+        },
+      ),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe(
+      "Unauthorized: You are not a member of the authorized Discord server",
+    );
+    expect(discordMocks.revokeAccessToken).toHaveBeenCalledWith(
+      env,
+      "discord-access-token",
+    );
+    expect(dbMocks.setUser).not.toHaveBeenCalled();
   });
 
   it("issues a live token for an authenticated user", async () => {

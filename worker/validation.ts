@@ -2,6 +2,7 @@ import * as v from "valibot";
 import {
   CloseTracksResponse,
   DiscordGuildMember,
+  DiscordOAuthToken,
   NewSessionResponse,
   NewTracksResponse,
   StoredTrack,
@@ -73,6 +74,14 @@ const discordGuildMemberSchema = v.object({
   nick: v.optional(v.nullish(v.string())),
 });
 
+const discordOAuthTokenResponseSchema = v.object({
+  access_token: v.string(),
+  token_type: v.string(),
+  expires_in: v.number(),
+  refresh_token: v.optional(v.string()),
+  scope: v.string(),
+});
+
 const liveTrackRowSchema = v.object({
   user_id: v.string(),
   session_id: v.string(),
@@ -118,6 +127,25 @@ export function parseDiscordGuildMember(
   source: string,
 ): DiscordGuildMember {
   return parseWithSchema(discordGuildMemberSchema, input, source);
+}
+
+export function parseDiscordOAuthToken(
+  input: unknown,
+  source: string,
+): DiscordOAuthToken {
+  const parsed = parseWithSchema(
+    discordOAuthTokenResponseSchema,
+    input,
+    source,
+  );
+
+  return {
+    accessToken: parsed.access_token,
+    expiresIn: parsed.expires_in,
+    refreshToken: parsed.refresh_token,
+    scope: parsed.scope,
+    tokenType: parsed.token_type,
+  };
 }
 
 export function parseStoredTracksJson(

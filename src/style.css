@@ -207,6 +207,7 @@ header {
 }
 
 .login-button {
+  display: inline-block;
   margin-top: 1rem;
   padding: 0.8rem 1.5rem;
   font-size: 1.1rem;
@@ -215,6 +216,7 @@ header {
   border: none;
   border-radius: 8px;
   cursor: pointer;
+  text-decoration: none;
   transition: background-color 0.25s;
 }
 

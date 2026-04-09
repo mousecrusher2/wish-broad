@@ -38,7 +38,6 @@
     "wrangler": "4.80.0"
   },
   "dependencies": {
-    "@hono/oauth-providers": "^0.8.5",
     "hono": "^4.12.11",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
