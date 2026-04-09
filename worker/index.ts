@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Context, Hono } from "hono";
 import { JWTPayload, Bindings, DiscordGuildMember } from "./types";
 import * as db from "./database";
 import { getGuildMember } from "./discord";
@@ -20,19 +20,31 @@ import { jwt, sign } from "hono/jwt";
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-app.onError((err, c) => {
-  // HTTPExceptionはそのままレスポンス化して返す（ログも挟まない）
-  if (err instanceof HTTPException) {
-    return err.getResponse();
-  }
-
-  // 想定外エラーのみログ出力し、500として処理
+function logUnexpectedError(err: unknown): void {
   console.error(
     "Unhandled error:",
     err,
     err instanceof Error ? err.stack : null,
   );
+}
+
+function toErrorResponse(
+  err: unknown,
+  c: Context<{ Bindings: Bindings }>,
+): Response {
+  if (err instanceof HTTPException) {
+    return err.getResponse();
+  }
+
   return c.json({ message: "Internal Server Error" }, 500);
+}
+
+app.onError((err, c) => {
+  if (!(err instanceof HTTPException)) {
+    logUnexpectedError(err);
+  }
+
+  return toErrorResponse(err, c);
 });
 
 app.use(logger());
@@ -44,9 +56,7 @@ app.use("/ingest/:userId/*", async (c, next) => {
   // userIdでデータベースからトークンを取得
   const expectedToken = await db.getLiveToken(c.env.LIVE_DB, userId);
   if (!expectedToken) {
-    throw new HTTPException(401, {
-      message: "No token found for this user ID",
-    });
+    return c.text("No token found for this user ID", 401);
   }
 
   return bearerAuth({ token: expectedToken })(c, next);
@@ -80,59 +90,41 @@ app
       appId: c.env.CALLS_APP_ID,
       appSecret: c.env.CALLS_APP_SECRET,
     });
-    try {
-      const sdpOffer = await c.req.text();
-      if (!sdpOffer || sdpOffer.trim().length === 0) {
-        throw new HTTPException(400, { message: "SDP offer is required" });
+    const sdpOffer = await c.req.text();
+    if (!sdpOffer || sdpOffer.trim().length === 0) {
+      return c.text("SDP offer is required", 400);
+    }
+
+    const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
+    if (existingLive) {
+      const isActive = await callsClient.isSessionActive(
+        existingLive.sessionId,
+      );
+      if (isActive) {
+        return c.text("A live stream is already active for this user", 400);
       }
 
-      const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
-      if (existingLive) {
-        const isActive = await callsClient.isSessionActive(
-          existingLive.sessionId,
-        );
-        if (isActive) {
-          throw new HTTPException(400, {
-            message: "A live stream is already active for this user",
-          });
-        }
-
-        await db.deleteTracksForSession(
-          c.env.LIVE_DB,
-          userId,
-          existingLive.sessionId,
-        );
-      }
-
-      const result = await startIngest(callsClient, userId, sdpOffer);
-
-      // トラック情報をデータベースに保存（session_idも含める）
-      await db.setTracks(
+      await db.deleteTracksForSession(
         c.env.LIVE_DB,
         userId,
-        result.sessionId,
-        result.tracks,
+        existingLive.sessionId,
       );
-
-      return c.body(result.sdpAnswer, 201, {
-        "content-type": "application/sdp",
-        "protocol-version": "draft-ietf-wish-whip-06",
-        etag: `"${result.sessionId}"`,
-        location: `/ingest/${userId}/${result.sessionId}`,
-      });
-    } catch (error) {
-      console.error(`Failed to start ingest for user ${userId}:`, error);
-
-      if (error instanceof HTTPException) {
-        throw error;
-      }
-
-      // サーバーエラーはそのまま例外を素通りさせる
-      throw error;
     }
+
+    const result = await startIngest(callsClient, userId, sdpOffer);
+
+    // トラック情報をデータベースに保存（session_idも含める）
+    await db.setTracks(c.env.LIVE_DB, userId, result.sessionId, result.tracks);
+
+    return c.body(result.sdpAnswer, 201, {
+      "content-type": "application/sdp",
+      "protocol-version": "draft-ietf-wish-whip-06",
+      etag: `"${result.sessionId}"`,
+      location: `/ingest/${userId}/${result.sessionId}`,
+    });
   })
   .all(async () => {
-    throw new HTTPException(400, { message: "Not supported" });
+    return new Response("Not supported", { status: 400 });
   });
 
 // ライブ配信終了エンドポイント
@@ -144,82 +136,59 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     appSecret: c.env.CALLS_APP_SECRET,
   });
 
-  try {
-    const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
-    if (!existingLive) {
-      throw new HTTPException(400, {
-        message: "No live stream found for this user",
-      });
-    }
+  const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
+  if (!existingLive) {
+    return c.text("No live stream found for this user", 400);
+  }
 
-    if (existingLive.sessionId !== sessionId) {
-      throw new HTTPException(400, {
-        message: "Session ID does not match the active live stream",
-      });
-    }
+  if (existingLive.sessionId !== sessionId) {
+    return c.text("Session ID does not match the active live stream", 400);
+  }
+
+  if (
+    existingLive.tracks.length === 0 ||
+    existingLive.tracks.some((track) => track.mid.length === 0)
+  ) {
+    return c.text("Stored live track data is invalid", 500);
+  }
+
+  try {
+    const closeResponse = await callsClient.closeTracks(
+      sessionId,
+      existingLive.tracks,
+    );
 
     if (
-      existingLive.tracks.length === 0 ||
-      existingLive.tracks.some((track) => track.mid.length === 0)
+      closeResponse.errorCode ||
+      closeResponse.tracks?.some((track) => track.errorCode)
     ) {
-      throw new HTTPException(500, {
-        message: "Stored live track data is invalid",
-      });
-    }
-
-    try {
-      const closeResponse = await callsClient.closeTracks(
-        sessionId,
-        existingLive.tracks,
+      console.error(
+        `Calls reported track close errors for user ${userId}:`,
+        closeResponse,
       );
-
-      if (
-        closeResponse.errorCode ||
-        closeResponse.tracks?.some((track) => track.errorCode)
-      ) {
-        console.error(
-          `Calls reported track close errors for user ${userId}:`,
-          closeResponse,
-        );
-        throw new HTTPException(502, {
-          message: "Failed to close live tracks",
-        });
-      }
-    } catch (error) {
-      if (error instanceof CallsApiError && error.statusCode === 404) {
-        // 既にセッションやトラックが消えている場合は、D1だけ掃除すればよい
-      } else if (error instanceof HTTPException) {
-        throw error;
-      } else if (error instanceof CallsApiError) {
-        console.error(`Failed to close live tracks for user ${userId}:`, error);
-        throw new HTTPException(502, {
-          message: "Failed to close live tracks",
-        });
-      } else {
-        throw error;
-      }
+      return c.text("Failed to close live tracks", 502);
     }
-
-    const deleted = await db.deleteTracksForSession(
-      c.env.LIVE_DB,
-      userId,
-      sessionId,
-    );
-    if (!deleted) {
-      throw new HTTPException(400, {
-        message: "Failed to delete the requested live stream",
-      });
-    }
-
-    return c.text("OK", 200);
   } catch (error) {
-    if (error instanceof HTTPException) {
+    if (error instanceof CallsApiError && error.statusCode === 404) {
+      // 既にセッションやトラックが消えている場合は、D1だけ掃除すればよい
+    } else if (error instanceof CallsApiError) {
+      console.error(`Failed to close live tracks for user ${userId}:`, error);
+      return c.text("Failed to close live tracks", 502);
+    } else {
       throw error;
     }
-
-    console.error(`Failed to delete tracks for user ${userId}:`, error);
-    throw error;
   }
+
+  const deleted = await db.deleteTracksForSession(
+    c.env.LIVE_DB,
+    userId,
+    sessionId,
+  );
+  if (!deleted) {
+    return c.text("Failed to delete the requested live stream", 400);
+  }
+
+  return c.text("OK", 200);
 });
 
 // Discord OAuth認証設定
@@ -235,7 +204,7 @@ app.use("/login", async (c, next) => {
 app.use("/login", async (c, next) => {
   const oauthToken = c.get("token");
   if (!oauthToken) {
-    throw new HTTPException(401, { message: "Unauthorized" });
+    return c.text("Unauthorized", 401);
   }
   try {
     await next();
@@ -259,7 +228,7 @@ app.get("/login", async (c) => {
   const user = c.get("user-discord");
   const oauthToken = c.get("token");
   if (!user || !oauthToken) {
-    throw new HTTPException(401, { message: "Unauthorized" });
+    return c.text("Unauthorized", 401);
   }
   // ユーザーが認証済みギルドのメンバーかどうかをチェック
   let member: DiscordGuildMember;
@@ -272,14 +241,10 @@ app.get("/login", async (c) => {
     );
 
     if (error instanceof Error) {
-      throw new HTTPException(401, {
-        message: `Unauthorized: ${error.message}`,
-      });
+      return c.text(`Unauthorized: ${error.message}`, 401);
     }
 
-    throw new HTTPException(401, {
-      message: "Unauthorized: Failed to fetch guild member",
-    });
+    return c.text("Unauthorized: Failed to fetch guild member", 401);
   }
 
   const displayName =
@@ -344,36 +309,36 @@ app
       appId: c.env.CALLS_APP_ID,
       appSecret: c.env.CALLS_APP_SECRET,
     });
-    let liveTrackRecord: db.LiveTrackRecord | null = null;
-    try {
-      liveTrackRecord = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
-      const tracks = liveTrackRecord?.tracks ?? [];
+    const liveTrackRecord = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
+    const tracks = liveTrackRecord?.tracks ?? [];
 
-      // トラックが存在し、セッションチェックが必要な場合のみチェック実行
-      if (liveTrackRecord) {
-        const shouldCheck = await db.shouldCheckSession(c.env.LIVE_DB, userId);
+    // トラックが存在し、セッションチェックが必要な場合のみチェック実行
+    if (liveTrackRecord) {
+      const shouldCheck = await db.shouldCheckSession(c.env.LIVE_DB, userId);
 
-        if (shouldCheck) {
-          // セッションアクティブチェック
-          const isActive = await callsClient.isSessionActive(
+      if (shouldCheck) {
+        // セッションアクティブチェック
+        const isActive = await callsClient.isSessionActive(
+          liveTrackRecord.sessionId,
+        );
+        if (!isActive) {
+          // セッションが終了している場合、データベースからレコードを削除
+          await db.deleteTracksForSession(
+            c.env.LIVE_DB,
+            userId,
             liveTrackRecord.sessionId,
           );
-          if (!isActive) {
-            // セッションが終了している場合、データベースからレコードを削除
-            await db.deleteTracksForSession(
-              c.env.LIVE_DB,
-              userId,
-              liveTrackRecord.sessionId,
-            );
-            throw new LiveNotFoundError(userId);
-          }
-
-          // セッションチェック時刻を更新
-          await db.updateSessionCheckTime(c.env.LIVE_DB, userId);
+          return c.text(`Live stream not found: ${userId}`, 404);
         }
-      }
 
-      const sdpOffer = await c.req.text();
+        // セッションチェック時刻を更新
+        await db.updateSessionCheckTime(c.env.LIVE_DB, userId);
+      }
+    }
+
+    const sdpOffer = await c.req.text();
+
+    try {
       const result = await startPlay(callsClient, userId, tracks, sdpOffer);
 
       return c.body(result.sdpAnswer, 201, {
@@ -388,13 +353,8 @@ app
         `Failed to start play for user ${userId} by user ${jwtPayload.userId}:`,
         error,
       );
-      if (error instanceof HTTPException) {
-        throw error;
-      }
       if (error instanceof LiveNotFoundError) {
-        throw new HTTPException(404, {
-          message: `Live stream not found: ${userId}`,
-        });
+        return c.text(`Live stream not found: ${userId}`, 404);
       }
       if (error instanceof CallsApiError && error.statusCode === 404) {
         if (liveTrackRecord) {
@@ -404,17 +364,14 @@ app
             liveTrackRecord.sessionId,
           );
         }
-        throw new HTTPException(404, {
-          message: `Live stream not found: ${userId}`,
-        });
+        return c.text(`Live stream not found: ${userId}`, 404);
       }
 
-      // サーバーエラーはそのまま例外を素通りさせる
       throw error;
     }
   })
   .all(async () => {
-    throw new HTTPException(404, { message: "Not supported" });
+    return new Response("Not supported", { status: 404 });
   });
 
 // ライブ視聴セッション管理エンドポイント
@@ -431,26 +388,13 @@ app
       appSecret: c.env.CALLS_APP_SECRET,
     });
 
-    try {
-      const sdpAnswer = await c.req.text();
-      if (!sdpAnswer || sdpAnswer.trim().length === 0) {
-        throw new HTTPException(400, { message: "SDP answer is required" });
-      }
-
-      const response = await callsClient.renegotiateSession(
-        sessionId,
-        sdpAnswer,
-      );
-      return c.body(null, response.status as StatusCode);
-    } catch (error) {
-      console.error(`Failed to renegotiate session ${sessionId}:`, error);
-      if (error instanceof HTTPException) {
-        throw error;
-      }
-
-      // サーバーエラーはそのまま例外を素通りさせる
-      throw error;
+    const sdpAnswer = await c.req.text();
+    if (!sdpAnswer || sdpAnswer.trim().length === 0) {
+      return c.text("SDP answer is required", 400);
     }
+
+    const response = await callsClient.renegotiateSession(sessionId, sdpAnswer);
+    return c.body(null, response.status as StatusCode);
   });
 
 // API routes用の認証ミドルウェア
