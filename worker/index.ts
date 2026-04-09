@@ -36,7 +36,7 @@ function toErrorResponse(
     return err.getResponse();
   }
 
-  return c.json({ message: "Internal Server Error" }, 500);
+  return c.text("Internal Server Error", 500);
 }
 
 app.onError((err, c) => {
