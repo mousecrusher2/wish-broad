@@ -20,8 +20,6 @@ const dbMocks = vi.hoisted(() => ({
   setLiveToken: vi.fn<() => Promise<void>>(),
   setTracks: vi.fn<() => Promise<void>>(),
   setUser: vi.fn<() => Promise<void>>(),
-  shouldCheckSession: vi.fn<() => Promise<boolean>>(),
-  updateSessionCheckTime: vi.fn<() => Promise<void>>(),
 }));
 
 const callsMocks = vi.hoisted(() => {
@@ -129,8 +127,6 @@ describe("worker app", () => {
     dbMocks.setLiveToken.mockResolvedValue();
     dbMocks.setTracks.mockResolvedValue();
     dbMocks.setUser.mockResolvedValue();
-    dbMocks.shouldCheckSession.mockResolvedValue(false);
-    dbMocks.updateSessionCheckTime.mockResolvedValue();
 
     callsMocks.closeTracks.mockResolvedValue({});
     callsMocks.isSessionActive.mockResolvedValue(true);
@@ -472,7 +468,6 @@ describe("worker app", () => {
       tracks: liveTracks,
       userId: "streamer-1",
     });
-    dbMocks.shouldCheckSession.mockResolvedValue(true);
     callsMocks.isSessionActive.mockResolvedValue(false);
 
     const response = await app.fetch(
@@ -540,7 +535,7 @@ describe("worker app", () => {
     );
   });
 
-  it("updates the session check time before starting play", async () => {
+  it("checks the live session before starting play", async () => {
     const env = createBindings();
     const liveTracks: StoredTrack[] = [
       {
@@ -556,7 +551,6 @@ describe("worker app", () => {
       tracks: liveTracks,
       userId: "streamer-1",
     });
-    dbMocks.shouldCheckSession.mockResolvedValue(true);
     callsMocks.isSessionActive.mockResolvedValue(true);
 
     const response = await app.fetch(
@@ -573,9 +567,9 @@ describe("worker app", () => {
     );
 
     expect(response.status).toBe(201);
-    expect(dbMocks.updateSessionCheckTime).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "streamer-1",
+    expect(callsMocks.isSessionActive).toHaveBeenCalledWith(
+      env,
+      "live-session",
     );
     expect(callsMocks.startPlay).toHaveBeenCalledWith(
       env,

@@ -299,28 +299,15 @@ app
     const liveTrackRecord = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
     const tracks = liveTrackRecord?.tracks ?? [];
 
-    // トラックが存在し、セッションチェックが必要な場合のみチェック実行
     if (liveTrackRecord) {
-      const shouldCheck = await db.shouldCheckSession(c.env.LIVE_DB, userId);
-
-      if (shouldCheck) {
-        // セッションアクティブチェック
-        const isActive = await isSessionActive(
-          c.env,
+      const isActive = await isSessionActive(c.env, liveTrackRecord.sessionId);
+      if (!isActive) {
+        await db.deleteTracksForSession(
+          c.env.LIVE_DB,
+          userId,
           liveTrackRecord.sessionId,
         );
-        if (!isActive) {
-          // セッションが終了している場合、データベースからレコードを削除
-          await db.deleteTracksForSession(
-            c.env.LIVE_DB,
-            userId,
-            liveTrackRecord.sessionId,
-          );
-          return c.text(`Live stream not found: ${userId}`, 404);
-        }
-
-        // セッションチェック時刻を更新
-        await db.updateSessionCheckTime(c.env.LIVE_DB, userId);
+        return c.text(`Live stream not found: ${userId}`, 404);
       }
     }
 

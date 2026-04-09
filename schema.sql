@@ -4,8 +4,7 @@
 CREATE TABLE IF NOT EXISTS live_tracks (
     user_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
-    tracks_json TEXT NOT NULL,
-    last_session_check DATETIME DEFAULT NULL
+    tracks_json TEXT NOT NULL
 );
 
 -- 配信用トークンを保存するテーブル

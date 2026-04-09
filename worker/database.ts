@@ -77,45 +77,6 @@ export async function deleteTracksForSession(
   return result.meta.changes > 0;
 }
 
-/**
- * セッションチェックが必要かどうかを判定
- * 最後のチェックから10秒以上経過している場合のみtrue
- */
-export async function shouldCheckSession(
-  database: D1Database,
-  userId: string,
-): Promise<boolean> {
-  const result = await database
-    .prepare("SELECT last_session_check FROM live_tracks WHERE user_id = ?")
-    .bind(userId)
-    .first();
-
-  if (!result || !result.last_session_check) {
-    return true; // チェック記録がない場合はチェックが必要
-  }
-
-  const lastCheck = new Date(result.last_session_check as string);
-  const now = new Date();
-  const diffInSeconds = (now.getTime() - lastCheck.getTime()) / 1000;
-
-  return diffInSeconds >= 10; // 10秒以上経過していればチェックが必要
-}
-
-/**
- * セッションチェック時刻を更新
- */
-export async function updateSessionCheckTime(
-  database: D1Database,
-  userId: string,
-): Promise<void> {
-  await database
-    .prepare(
-      "UPDATE live_tracks SET last_session_check = CURRENT_TIMESTAMP WHERE user_id = ?",
-    )
-    .bind(userId)
-    .run();
-}
-
 // 配信用トークンの管理機能
 export async function setLiveToken(
   database: D1Database,
