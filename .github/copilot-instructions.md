@@ -1,22 +1,64 @@
 # Wish Broad Copilot Instructions
 
-- **Big Picture**: Cloudflare Worker (Hono) under `worker/` serves auth, API, and WHIP/WHEP signaling; React + Vite front-end under `src/` consumes the Worker APIs. Player is WebRTC-first, so connectivity flows span both halves.
-- **Worker Entry**: `worker/index.ts` wires routes. Follow the existing pattern: declare middleware (`app.use`) before handlers, throw `HTTPException` on client errors, let unexpected errors bubble to the global `onError` logger.
-- **Auth Flow**: `/login` uses `discordAuth` middleware, validates guild membership via `worker/discord.ts`, stores users in D1, signs JWT with `hono/jwt`, and sets the `authtoken` cookie. Front-end access always happens via `fetch` to `/api/*` with the cookie; avoid inventing alternate auth paths.
-- **JWT Usage**: Any new protected route should reuse `jwt({ secret: c.env.JWT_SECRET, cookie: "authtoken", alg: "HS256" })` like existing `/play/*` and `/api/*`. Payload structure is fixed by `JWTPayload` in `worker/types.ts`.
-- **Discord Edge Cases**: Discord errors sometimes return HTML (e.g., rate-limit “error code: 1015”), so wrap `response.json()` in `try/catch` just like `checkCallsApiResponse` already does. Surface meaningful HTTP errors via `HTTPException` for the client.
-- **Cloudflare Calls Integration**: `worker/calls.ts` is the single abstraction over the Calls REST API. Use `startIngest` for publishers, `startPlay` for viewers, and respect the structured response objects. Always call `checkCallsApiResponse` before reading `response.json()` to keep error handling consistent.
-- **Session State**: Track metadata lives in D1 (`schema.sql`). Access D1 only through `worker/database.ts` helpers (`setTracks`, `shouldCheckSession`, etc.) to keep schema knowledge centralized.
-- **Tokens**: Livestream ingest tokens are generated server-side (`/api/me/livetoken`). If you extend token behavior, maintain the POST returns `{ success: true, token }` and GET returns `{ hasToken }` conventions; front-end hooks assume those shapes (note the current typo `hastoken`).
-- **React Layout**: `src/App.tsx` routes users based on `useAuth`. Player logic lives in `WHEPPlayer` with hooks under `src/hooks/` handling reconnects, health checks, and WebRTC lifecycles. When adding UI, prefer composing new hooks/components rather than stuffing `WHEPPlayer`.
-- **Networking from UI**: The UI always calls Worker routes relative to origin (`/api/...`, `/play/...`) and expects JSON unless the route returns SDP strings. Keep `credentials: "include"` when touching protected APIs.
-- **Styling & Structure**: Styling sits in `src/style.css`; components are function-based with TypeScript props in `src/types.ts`. Follow existing naming (PascalCase components, camelCase hooks).
-- **Build & Dev**: Use `pnpm dev` for the Vite front-end, `pnpm dev:worker` (local-only) or `pnpm dev:full` (wrangler edges) for Worker. Production builds run `pnpm build` which compiles TypeScript then bundles via Vite. Wrangler config/bindings live in `wrangler.jsonc` and `.dev.vars`.
-- **D1 Management**: Schema is in `schema.sql`. Apply locally with `wrangler d1 execute <binding> --file=schema.sql`. Never handcraft SQL strings outside `worker/database.ts`.
-- **Env Vars**: Bindings are typed by `worker/types.ts::Bindings`. Update that type whenever adding Wrangler vars so `c.env` stays type-safe.
-- **Testing & Logging**: No automated tests yet; rely on manual verification. Worker logs go to Cloudflare (wrangler dev prints console). Prefer `console.error`/`console.warn` with useful context, as seen in existing handlers.
-- **Deployment**: `pnpm deploy` calls `wrangler deploy --minify`. Ensure `dist/` is fresh (run build) and that D1 migrations are up-to-date before deploying.
-- **Adding Routes**: Place new Worker APIs under `/api/*` with JWT middleware, return JSON via `c.json`. For WHIP/WHEP, match existing headers (e.g., `protocol-version`, `application/sdp`).
-- **Front-to-Worker Contract**: `/api/me` returns `{ userId, displayName }`, `/api/lives` proxies `db.getAllLives`. Keep responses stable or update hooks/components that rely on them.
-- **Error Messaging**: Favor user-friendly Japanese strings on the front-end (see hooks/components). Backend messages can be English but should remain actionable.
-- **Resource Cleanup**: WebRTC hooks rely on `cleanupConnection` and effect cleanups in `WHEPPlayer`. When touching connection logic, update both the hook and the teardown paths to prevent media leaks.
+## Build, test, and lint commands
+
+- `pnpm dev` - Vite client dev server.
+- `pnpm dev:worker` - Worker-only local runtime (`wrangler dev --local`).
+- `pnpm dev:full` - Integrated Wrangler dev flow.
+- `pnpm build` - TypeScript compile + Vite build.
+- `pnpm check` - Type-check + ESLint (repo lint gate).
+- `pnpm test` - Run all Worker tests with Vitest.
+- `pnpm test:watch` - Vitest watch mode.
+- `pnpm exec vitest run worker/index.test.ts` - Run a single test file.
+- `pnpm exec vitest run worker/index.test.ts -t "issues a live token for an authenticated user"` - Run one test case.
+
+## High-level architecture
+
+- Runtime split: Cloudflare Worker backend (`worker/`) plus React + Vite frontend (`src/`), bundled together via `@cloudflare/vite-plugin` (`vite.config.ts`) and deployed with `wrangler.jsonc`.
+- Worker routing lives in `worker/index.ts`:
+  - `/login`, `/login/callback`, `/logout` for Discord OAuth.
+  - `/ingest/:userId*` for WHIP ingest (publisher side).
+  - `/play/:userId*` for WHEP playback (viewer side).
+  - `/api/*` for authenticated app APIs (`/api/me`, `/api/lives`, `/api/me/livetoken`).
+- Auth flow spans `worker/discord-login.ts` and `worker/discord.ts`: OAuth code exchange, guild-membership check, D1 user upsert, JWT cookie (`authtoken`) issuance.
+- Cloudflare Calls integration is centralized in `worker/calls.ts` (`startIngest`, `startPlay`, `renegotiateSession`, `closeTracks`).
+- Data persistence uses D1 tables in `schema.sql` (`live_tracks`, `live_tokens`, `users`), accessed through `worker/database.ts`.
+- External response validation and stored JSON parsing are handled by Valibot schemas in `worker/validation.ts`.
+- End-to-end auth path:
+  - UI hits `/api/me` (`useAuth`) to resolve `authenticated` vs `unauthenticated`.
+  - `/login` starts Discord OAuth; `/login/callback` exchanges code, verifies guild membership, upserts user in D1, then sets `authtoken` cookie.
+  - `/api/*` and `/play/*` are protected by cookie JWT middleware.
+- End-to-end publish path (WHIP):
+  - OBS posts SDP offer to `/ingest/:userId` with bearer token from `/api/me/livetoken`.
+  - Worker checks for existing stream state in D1, validates/stale-cleans session, then calls `startIngest`.
+  - Returned track metadata is persisted to `live_tracks`; response is SDP answer plus WHIP headers (`location`, `etag`, protocol headers).
+- End-to-end playback path (WHEP):
+  - `WHEPPlayer` (`useWebRTCLoad`) POSTs to `/play/:userId` to get SDP answer and session `location`.
+  - Hook PATCHes session URL with local SDP answer and attaches remote tracks to `<video>`.
+  - Reconnect/health behavior is coordinated by `useReconnection` + `usePageVisibility`; connection refs/state come from `useWebRTCConnection`.
+- Session cleanup behavior:
+  - `DELETE /ingest/:userId/:sessionId` closes tracks via Calls and then removes D1 rows.
+  - Viewer startup also removes stale D1 records if Calls reports a dead session.
+- Frontend flow:
+  - `src/App.tsx` gates UI with `useAuth` (`/api/me`).
+  - `src/WHEPPlayer.tsx` composes stream selection, playback controls, and OBS setup.
+  - WebRTC logic is split into hooks: state/refs (`useWebRTCConnection`), negotiation/loading (`useWebRTCLoad`), reconnect/health-check orchestration (`useReconnection`), visibility awareness (`usePageVisibility`).
+  - SWR hooks (`useLiveStreams`, `useLiveToken`) own `/api/lives` and `/api/me/livetoken` data state.
+
+## Key conventions for this repository
+
+- Keep Worker API calls relative from the frontend (`/api/...`, `/play/...`, `/ingest/...`) and include `credentials: "include"` on protected requests.
+- Keep D1 SQL and table knowledge in `worker/database.ts`; route handlers should call DB helpers, not embed raw SQL.
+- Keep Cloudflare Calls HTTP logic in `worker/calls.ts`; route handlers orchestrate it rather than issuing direct Calls API requests.
+- Parse/validate external payloads through `worker/validation.ts` helpers instead of trusting raw JSON.
+- Keep JWT behavior consistent: protected routes use `jwt({ secret: c.env.JWT_SECRET, cookie: "authtoken", alg: "HS256" })` and payload shape from `worker/types.ts::JWTPayload`.
+- If you add/change Worker bindings, update `worker/types.ts::Bindings` and run `pnpm cf-typegen`.
+- Preserve existing API contracts consumed by hooks/components:
+  - `GET /api/me` -> `{ userId, displayName }`
+  - `GET /api/me/livetoken` -> `{ hasToken }`
+  - `POST /api/me/livetoken` -> `{ success: true, token }`
+  - `GET /api/lives` -> `Live[]`
+- For WHIP/WHEP signaling routes, preserve SDP response/body handling and protocol headers (`content-type`, `protocol-version`, `location`, `etag`).
+- D1 schema source of truth is `schema.sql`; apply local schema changes with `wrangler d1 execute <binding> --file=schema.sql`.
+- Frontend user-facing messages are Japanese; keep new UI copy aligned.
+- WebRTC changes must update both setup and teardown paths (`cleanupConnection`, timeout cleanup, effect cleanup) to avoid stale peer connections or timers.
