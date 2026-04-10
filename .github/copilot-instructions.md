@@ -34,7 +34,8 @@
   - Returned track metadata is persisted to `live_tracks`; response is SDP answer plus WHIP headers (`location`, `etag`, protocol headers).
 - End-to-end playback path (WHEP):
   - `WHEPPlayer` uses `src/player/WHEPClient.ts` (React-independent playback/session lifecycle).
-  - `WHEPClient` POSTs to `/play/:userId`, PATCHes the returned session URL with the SDP answer, and pushes remote tracks into the video element.
+  - `WHEPClient` sends a local SDP offer to `POST /play/:userId`; backend returns SDP with `x-session-description-type` header.
+  - If the response type is `answer`, client applies it directly. If it is `offer`, client answers via `PATCH /play/:userId/:sessionId`.
   - Connection recovery is explicit/manual from UI controls; there is no automatic page-visibility or health-check reconnection layer.
 - Session cleanup behavior:
   - `DELETE /ingest/:userId/:sessionId` closes tracks via Calls and then removes D1 rows.

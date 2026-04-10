@@ -99,7 +99,9 @@ export class WHEPClient {
       }
 
       this.setStreamState(true);
-      void this.videoElement.play().catch(() => undefined);
+      void this.videoElement.play().catch((error) => {
+        console.warn("Autoplay failed:", error);
+      });
     };
   }
 
@@ -122,8 +124,34 @@ export class WHEPClient {
         window.location.origin,
       );
 
+      const pc = new RTCPeerConnection({
+        bundlePolicy: "max-bundle",
+      });
+      this.pc = pc;
+      this.remoteStream = new MediaStream();
+      this.videoElement.srcObject = this.remoteStream;
+
+      this.attachConnectionListeners(pc);
+      this.attachTrackListener(pc);
+
+      pc.addTransceiver("video", { direction: "recvonly" });
+      pc.addTransceiver("audio", { direction: "recvonly" });
+
+      const localOffer = await pc.createOffer();
+      await pc.setLocalDescription(localOffer);
+      await waitForIceGatheringComplete(pc);
+
+      const localOfferSdp = pc.localDescription?.sdp;
+      if (!localOfferSdp) {
+        throw new Error("Failed to create local SDP offer");
+      }
+
       const offerResponse = await fetch(resourceUrl, {
         method: "POST",
+        headers: {
+          "Content-Type": "application/sdp",
+        },
+        body: localOfferSdp,
         signal: abortController.signal,
       });
       if (!offerResponse.ok) {
@@ -138,41 +166,59 @@ export class WHEPClient {
       }
       this.sessionLocation = sessionLocation;
 
-      const offerSdp = await offerResponse.text();
+      const remoteOfferSdp = await offerResponse.text();
+      if (remoteOfferSdp.trim().length === 0) {
+        throw new Error("Empty SDP response");
+      }
 
-      const pc = new RTCPeerConnection({
-        bundlePolicy: "max-bundle",
-      });
-      this.pc = pc;
-      this.remoteStream = new MediaStream();
-      this.videoElement.srcObject = this.remoteStream;
+      const sessionDescriptionTypeHeader =
+        offerResponse.headers.get("x-session-description-type");
+      const sessionDescriptionType =
+        sessionDescriptionTypeHeader?.toLowerCase() === "offer"
+          ? "offer"
+          : "answer";
 
-      this.attachConnectionListeners(pc);
-      this.attachTrackListener(pc);
-
-      await pc.setRemoteDescription(
-        new RTCSessionDescription({
-          type: "offer",
-          sdp: offerSdp,
-        }),
-      );
-
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await waitForIceGatheringComplete(pc);
-
-      const sessionUrl = new URL(resourceUrl);
-      sessionUrl.pathname = sessionLocation;
-
-      const patchResponse = await fetch(sessionUrl, {
-        method: "PATCH",
-        body: answer.sdp ?? "",
-        signal: abortController.signal,
-      });
-      if (!patchResponse.ok) {
-        throw new Error(
-          `Failed to submit SDP answer: ${String(patchResponse.status)}`,
+      if (sessionDescriptionType === "answer") {
+        await pc.setRemoteDescription(
+          new RTCSessionDescription({
+            type: "answer",
+            sdp: remoteOfferSdp,
+          }),
         );
+      } else {
+        await pc.setLocalDescription({ type: "rollback" });
+        await pc.setRemoteDescription(
+          new RTCSessionDescription({
+            type: "offer",
+            sdp: remoteOfferSdp,
+          }),
+        );
+
+        const localAnswer = await pc.createAnswer();
+        await pc.setLocalDescription(localAnswer);
+        await waitForIceGatheringComplete(pc);
+
+        const localAnswerSdp = pc.localDescription?.sdp;
+        if (!localAnswerSdp) {
+          throw new Error("Failed to create local SDP answer");
+        }
+
+        const sessionUrl = new URL(resourceUrl);
+        sessionUrl.pathname = sessionLocation;
+
+        const patchResponse = await fetch(sessionUrl, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/sdp",
+          },
+          body: localAnswerSdp,
+          signal: abortController.signal,
+        });
+        if (!patchResponse.ok) {
+          throw new Error(
+            `Failed to submit SDP answer: ${String(patchResponse.status)}`,
+          );
+        }
       }
     } catch (error) {
       if (abortController.signal.aborted) {

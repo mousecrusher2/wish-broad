@@ -240,11 +240,13 @@ app
 
     try {
       const result = await startPlay(c.env, userId, tracks, sdpOffer);
+      const sdpType = result.sdpType ?? "answer";
 
       return c.body(result.sdpAnswer, 201, {
-        "access-control-expose-headers": "location",
+        "access-control-expose-headers": "location,x-session-description-type",
         "content-type": "application/sdp",
         "protocol-version": "draft-ietf-wish-whep-00",
+        "x-session-description-type": sdpType,
         etag: `"${result.sessionId}"`,
         location: `/play/${userId}/${result.sessionId}`,
       });

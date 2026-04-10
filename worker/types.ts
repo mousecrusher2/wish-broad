@@ -4,12 +4,18 @@ export type NewSessionResponse = {
 
 export type NewTrackResponse = {
   trackName: string;
-  mid: string;
+  mid?: string;
+  sessionId?: string;
+  errorCode?: string;
+  errorDescription?: string;
 };
 
 export type NewTracksResponse = {
-  tracks: NewTrackResponse[];
-  sessionDescription: SessionDescription;
+  errorCode?: string;
+  errorDescription?: string;
+  requiresImmediateRenegotiation?: boolean;
+  tracks?: NewTrackResponse[];
+  sessionDescription?: SessionDescription;
 };
 
 export type SessionDescription = {

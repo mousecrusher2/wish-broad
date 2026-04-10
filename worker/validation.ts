@@ -29,12 +29,18 @@ const newSessionResponseSchema = v.object({
 
 const newTrackResponseSchema = v.object({
   trackName: v.string(),
-  mid: v.string(),
+  mid: v.optional(v.string()),
+  sessionId: v.optional(v.string()),
+  errorCode: v.optional(v.string()),
+  errorDescription: v.optional(v.string()),
 });
 
 const newTracksResponseSchema = v.object({
-  tracks: v.array(newTrackResponseSchema),
-  sessionDescription: sessionDescriptionSchema,
+  errorCode: v.optional(v.string()),
+  errorDescription: v.optional(v.string()),
+  requiresImmediateRenegotiation: v.optional(v.boolean()),
+  tracks: v.optional(v.array(newTrackResponseSchema)),
+  sessionDescription: v.optional(sessionDescriptionSchema),
 });
 
 const storedTrackSchema = v.object({

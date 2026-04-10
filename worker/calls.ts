@@ -10,6 +10,7 @@ import {
   parseCloseTracksResponse,
   parseNewSessionResponse,
   parseNewTracksResponse,
+  SchemaValidationError,
 } from "./validation";
 
 // カスタムエラークラス
@@ -62,6 +63,7 @@ async function checkCallsApiResponse(
 }
 
 type CallsEnv = Pick<Bindings, "CALLS_APP_ID" | "CALLS_APP_SECRET">;
+type TrackLocatorRequest = Pick<TrackLocator, "location" | "sessionId" | "trackName">;
 
 function getEndpoint(env: CallsEnv, path: string): string {
   return `https://rtc.live.cloudflare.com/v1/apps/${env.CALLS_APP_ID}${path}`;
@@ -71,6 +73,49 @@ function getHeaders(env: CallsEnv): Record<string, string> {
   return {
     Authorization: `Bearer ${env.CALLS_APP_SECRET}`,
   };
+}
+
+function normalizeTrackLocator(track: TrackLocator): TrackLocatorRequest {
+  return {
+    location: track.location,
+    sessionId: track.sessionId,
+    trackName: track.trackName,
+  };
+}
+
+function isInactiveSessionError(error: unknown): boolean {
+  return (
+    error instanceof CallsApiError &&
+    (error.statusCode === 404 || error.statusCode === 410)
+  );
+}
+
+function hasTracksResponseErrors(response: NewTracksResponse): boolean {
+  if (response.errorCode || response.errorDescription) {
+    return true;
+  }
+
+  return !!response.tracks?.some((track) => track.errorCode);
+}
+
+function parseNewTracksOrThrow(
+  responseBody: unknown,
+  endpoint: string,
+  source: string,
+): NewTracksResponse {
+  try {
+    return parseNewTracksResponse(responseBody, source);
+  } catch (error) {
+    if (error instanceof SchemaValidationError) {
+      throw new CallsApiError(
+        502,
+        "Invalid Calls response schema",
+        endpoint,
+        responseBody,
+      );
+    }
+    throw error;
+  }
 }
 
 /**
@@ -118,8 +163,9 @@ export async function createIngestTracks(
 
   await checkCallsApiResponse(response, endpoint);
   const responseBody: unknown = await response.json();
-  return parseNewTracksResponse(
+  return parseNewTracksOrThrow(
     responseBody,
+    endpoint,
     "Calls createIngestTracks response",
   );
 }
@@ -133,17 +179,18 @@ export async function connectToTracks(
   tracks: TrackLocator[],
   sdpOffer?: string,
 ): Promise<NewTracksResponse> {
+  const normalizedTracks = tracks.map(normalizeTrackLocator);
   const body =
-    sdpOffer && sdpOffer.length > 0
+    sdpOffer && sdpOffer.trim().length > 0
       ? {
           sessionDescription: {
             type: "offer",
             sdp: sdpOffer,
           },
-          tracks: tracks,
+          tracks: normalizedTracks,
         }
       : {
-          tracks: tracks,
+          tracks: normalizedTracks,
         };
 
   const endpoint = getEndpoint(env, `/sessions/${sessionId}/tracks/new`);
@@ -158,7 +205,20 @@ export async function connectToTracks(
 
   await checkCallsApiResponse(response, endpoint);
   const responseBody: unknown = await response.json();
-  return parseNewTracksResponse(responseBody, "Calls connectToTracks response");
+  const parsedResponse = parseNewTracksOrThrow(
+    responseBody,
+    endpoint,
+    "Calls connectToTracks response",
+  );
+  if (hasTracksResponseErrors(parsedResponse)) {
+    throw new CallsApiError(
+      502,
+      "Calls returned track negotiation errors",
+      endpoint,
+      responseBody,
+    );
+  }
+  return parsedResponse;
 }
 
 /**
@@ -236,7 +296,7 @@ export async function isSessionActive(
     await checkCallsApiResponse(response, endpoint);
     return true; // ステータスコード200ならセッションはアクティブ
   } catch (error) {
-    if (error instanceof CallsApiError && error.statusCode === 404) {
+    if (isInactiveSessionError(error)) {
       return false; // セッションが見つからない場合は非アクティブ
     }
     throw error; // その他のエラーは再スロー
@@ -291,6 +351,7 @@ export async function startPlay(
 ): Promise<{
   sessionId: string;
   sdpAnswer: string;
+  sdpType: "answer" | "offer";
 }> {
   if (tracks.length === 0) {
     throw new LiveNotFoundError(liveId);
@@ -306,8 +367,27 @@ export async function startPlay(
     tracks,
     sdpOffer,
   );
+  const sdpAnswer = tracksResult.sessionDescription?.sdp;
+  const sdpType = tracksResult.sessionDescription?.type;
+  if (!sdpAnswer) {
+    throw new CallsApiError(
+      502,
+      "Calls response did not include SDP for playback",
+      getEndpoint(env, `/sessions/${sessionResult.sessionId}/tracks/new`),
+      tracksResult,
+    );
+  }
+  if (sdpType !== "answer" && sdpType !== "offer") {
+    throw new CallsApiError(
+      502,
+      "Calls response did not include valid SDP type for playback",
+      getEndpoint(env, `/sessions/${sessionResult.sessionId}/tracks/new`),
+      tracksResult,
+    );
+  }
   return {
     sessionId: sessionResult.sessionId,
-    sdpAnswer: tracksResult.sessionDescription.sdp,
+    sdpAnswer,
+    sdpType,
   };
 }
