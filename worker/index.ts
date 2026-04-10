@@ -306,78 +306,92 @@ app.use("/play/*", async (c, next) => {
 
 // ライブ視聴開始エンドポイント（WHEP）
 // 視聴者からのSDP Offerを受け取り、配信されているトラックへの接続セッションを作成
-app
-  .post("/play/:userId", async (c) => {
-    const { userId } = c.req.param();
+app.get("/play/:userId", async () => {
+  return createEmptySuccessResponse();
+});
 
-    // JWTペイロードからユーザー情報を取得してログ出力
-    const jwtPayload = c.get("jwtPayload") as JWTPayload;
-    console.log(
-      `User ${jwtPayload.displayName} (${jwtPayload.userId}) is trying to play user: ${userId}`,
+app.post("/play/:userId", async (c) => {
+  const { userId } = c.req.param();
+
+  // JWTペイロードからユーザー情報を取得してログ出力
+  const jwtPayload = c.get("jwtPayload") as JWTPayload;
+  console.log(
+    `User ${jwtPayload.displayName} (${jwtPayload.userId}) is trying to play user: ${userId}`,
+  );
+
+  // Calls APIクライアントを初期化
+  const liveTrackRecord = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
+  const tracks = liveTrackRecord?.tracks ?? [];
+
+  if (liveTrackRecord) {
+    const isActive = await isSessionActive(c.env, liveTrackRecord.sessionId);
+    if (!isActive) {
+      await db.deleteTracksForSession(
+        c.env.LIVE_DB,
+        userId,
+        liveTrackRecord.sessionId,
+      );
+      return c.text(`Live stream not found: ${userId}`, 404);
+    }
+  }
+
+  if (!isSdpContentType(c.req.header("content-type"))) {
+    return c.text("Content-Type must be application/sdp", 415);
+  }
+
+  const sdpOffer = await c.req.text();
+  if (!sdpOffer || sdpOffer.trim().length === 0) {
+    return c.text("SDP offer is required", 400);
+  }
+
+  try {
+    const result = await startPlay(c.env, userId, tracks, sdpOffer);
+    const status = result.sdpType === "offer" ? 406 : 201;
+
+    return c.body(result.sdpAnswer, status, {
+      "content-type": "application/sdp",
+      etag: `"${result.sessionId}"`,
+      location: createPlaySessionLocation(
+        c.req.url,
+        userId,
+        result.sessionId,
+        result.tracks,
+      ),
+    });
+  } catch (error) {
+    console.error(
+      `Failed to start play for user ${userId} by user ${jwtPayload.userId}:`,
+      error,
     );
-
-    // Calls APIクライアントを初期化
-    const liveTrackRecord = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
-    const tracks = liveTrackRecord?.tracks ?? [];
-
-    if (liveTrackRecord) {
-      const isActive = await isSessionActive(c.env, liveTrackRecord.sessionId);
-      if (!isActive) {
+    if (error instanceof LiveNotFoundError) {
+      return c.text(`Live stream not found: ${userId}`, 404);
+    }
+    if (error instanceof CallsApiError && error.statusCode === 404) {
+      if (liveTrackRecord) {
         await db.deleteTracksForSession(
           c.env.LIVE_DB,
           userId,
           liveTrackRecord.sessionId,
         );
-        return c.text(`Live stream not found: ${userId}`, 404);
       }
+      return c.text(`Live stream not found: ${userId}`, 404);
     }
-
-    const sdpOffer = await c.req.text();
-    if (!sdpOffer || sdpOffer.trim().length === 0) {
-      return c.text("SDP offer is required", 400);
-    }
-
-    try {
-      const result = await startPlay(c.env, userId, tracks, sdpOffer);
-      const status = result.sdpType === "offer" ? 406 : 201;
-
-      return c.body(result.sdpAnswer, status, {
-        "content-type": "application/sdp",
-        etag: `"${result.sessionId}"`,
-        location: createPlaySessionLocation(
-          c.req.url,
-          userId,
-          result.sessionId,
-          result.tracks,
-        ),
-      });
-    } catch (error) {
-      console.error(
-        `Failed to start play for user ${userId} by user ${jwtPayload.userId}:`,
-        error,
+    if (isCallsPublisherError(error)) {
+      return c.text(
+        getCallsErrorText(error, "Failed to negotiate playback session"),
+        error.statusCode as 400 | 415 | 422,
       );
-      if (error instanceof LiveNotFoundError) {
-        return c.text(`Live stream not found: ${userId}`, 404);
-      }
-      if (error instanceof CallsApiError && error.statusCode === 404) {
-        if (liveTrackRecord) {
-          await db.deleteTracksForSession(
-            c.env.LIVE_DB,
-            userId,
-            liveTrackRecord.sessionId,
-          );
-        }
-        return c.text(`Live stream not found: ${userId}`, 404);
-      }
-
-      throw error;
     }
-  })
-  .all(async () => {
-    return new Response("Not supported", { status: 404 });
-  });
+
+    throw error;
+  }
+});
 
 // ライブ視聴セッション管理エンドポイント
+app.get("/play/:userId/:sessionId", async () => {
+  return createEmptySuccessResponse();
+});
+
 app
   .delete("/play/:userId/:sessionId", async (c) => {
     const { sessionId } = c.req.param();
@@ -411,12 +425,28 @@ app
   .patch(async (c) => {
     const { sessionId } = c.req.param();
 
+    if (!isSdpContentType(c.req.header("content-type"))) {
+      return c.text("Content-Type must be application/sdp", 415);
+    }
+
     const sdpAnswer = await c.req.text();
     if (!sdpAnswer || sdpAnswer.trim().length === 0) {
       return c.text("SDP answer is required", 400);
     }
 
-    await renegotiateSession(c.env, sessionId, sdpAnswer);
+    try {
+      await renegotiateSession(c.env, sessionId, sdpAnswer);
+    } catch (error) {
+      if (isCallsPublisherError(error)) {
+        return c.text(
+          getCallsErrorText(error, "Failed to submit WHEP answer"),
+          error.statusCode as 400 | 415 | 422,
+        );
+      }
+
+      throw error;
+    }
+
     return c.body(null, 204);
   });
 

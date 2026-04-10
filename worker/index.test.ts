@@ -889,6 +889,105 @@ describe("worker app", () => {
     expect(callsMocks.startPlay).not.toHaveBeenCalled();
   });
 
+  it("returns 204 for GET on the WHEP endpoint", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request("http://localhost/play/streamer-1", {
+        headers: {
+          Cookie: await createAuthCookie(env),
+        },
+        method: "GET",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe("");
+  });
+
+  it("returns 204 for GET on the WHEP session resource", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request("http://localhost/play/streamer-1/viewer-session", {
+        headers: {
+          Cookie: await createAuthCookie(env),
+        },
+        method: "GET",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe("");
+  });
+
+  it("rejects WHEP offers when Content-Type is not application/sdp", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request("http://localhost/play/streamer-1", {
+        body: "viewer-offer",
+        headers: {
+          Cookie: await createAuthCookie(env),
+          "Content-Type": "text/plain",
+        },
+        method: "POST",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(415);
+    expect(await response.text()).toBe("Content-Type must be application/sdp");
+    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+  });
+
+  it("returns Calls client errors for invalid WHEP offers", async () => {
+    const env = createBindings();
+    const liveTracks: StoredTrack[] = [
+      {
+        location: "remote",
+        mid: "0",
+        sessionId: "live-session",
+        trackName: "video",
+      },
+    ];
+
+    dbMocks.getLiveTrackRecord.mockResolvedValue({
+      sessionId: "live-session",
+      tracks: liveTracks,
+      userId: "streamer-1",
+    });
+    callsMocks.startPlay.mockRejectedValue(
+      new callsMocks.CallsApiError(
+        422,
+        "Unprocessable Content",
+        "/tracks/new",
+        "Malformed SDP offer",
+      ),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/play/streamer-1", {
+        body: "viewer-offer",
+        headers: {
+          Cookie: await createAuthCookie(env),
+          "Content-Type": "application/sdp",
+        },
+        method: "POST",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.text()).toBe("Malformed SDP offer");
+  });
+
   it("checks the live session before starting play", async () => {
     const env = createBindings();
     const liveTracks: StoredTrack[] = [
@@ -1052,6 +1151,56 @@ describe("worker app", () => {
     expect(response.status).toBe(400);
     expect(await response.text()).toBe("SDP answer is required");
     expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects WHEP answers when Content-Type is not application/sdp", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request("http://localhost/play/streamer-1/viewer-session", {
+        body: "viewer-answer",
+        headers: {
+          Cookie: await createAuthCookie(env),
+          "Content-Type": "text/plain",
+        },
+        method: "PATCH",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(415);
+    expect(await response.text()).toBe("Content-Type must be application/sdp");
+    expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
+  });
+
+  it("returns Calls client errors for invalid WHEP answers", async () => {
+    const env = createBindings();
+
+    callsMocks.renegotiateSession.mockRejectedValue(
+      new callsMocks.CallsApiError(
+        422,
+        "Unprocessable Content",
+        "/renegotiate",
+        "Malformed SDP answer",
+      ),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/play/streamer-1/viewer-session", {
+        body: "viewer-answer",
+        headers: {
+          Cookie: await createAuthCookie(env),
+          "Content-Type": "application/sdp",
+        },
+        method: "PATCH",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.text()).toBe("Malformed SDP answer");
   });
 
   it("returns 204 after successful WHEP renegotiation", async () => {
