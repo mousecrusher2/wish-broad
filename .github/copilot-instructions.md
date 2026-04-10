@@ -33,16 +33,16 @@
   - Worker checks for existing stream state in D1, validates/stale-cleans session, then calls `startIngest`.
   - Returned track metadata is persisted to `live_tracks`; response is SDP answer plus WHIP headers (`location`, `etag`, protocol headers).
 - End-to-end playback path (WHEP):
-  - `WHEPPlayer` (`useWebRTCLoad`) POSTs to `/play/:userId` to get SDP answer and session `location`.
-  - Hook PATCHes session URL with local SDP answer and attaches remote tracks to `<video>`.
-  - Reconnect/health behavior is coordinated by `useReconnection` + `usePageVisibility`; connection refs/state come from `useWebRTCConnection`.
+  - `WHEPPlayer` uses `src/player/WHEPClient.ts` (React-independent playback/session lifecycle).
+  - `WHEPClient` POSTs to `/play/:userId`, PATCHes the returned session URL with the SDP answer, and pushes remote tracks into the video element.
+  - Connection recovery is explicit/manual from UI controls; there is no automatic page-visibility or health-check reconnection layer.
 - Session cleanup behavior:
   - `DELETE /ingest/:userId/:sessionId` closes tracks via Calls and then removes D1 rows.
   - Viewer startup also removes stale D1 records if Calls reports a dead session.
 - Frontend flow:
   - `src/App.tsx` gates UI with `useAuth` (`/api/me`).
   - `src/WHEPPlayer.tsx` composes stream selection, playback controls, and OBS setup.
-  - WebRTC logic is split into hooks: state/refs (`useWebRTCConnection`), negotiation/loading (`useWebRTCLoad`), reconnect/health-check orchestration (`useReconnection`), visibility awareness (`usePageVisibility`).
+  - WebRTC negotiation/session lifecycle lives in `src/player/WHEPClient.ts`; React owns only UI state and user actions.
   - SWR hooks (`useLiveStreams`, `useLiveToken`) own `/api/lives` and `/api/me/livetoken` data state.
 
 ## Key conventions for this repository

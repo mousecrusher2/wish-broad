@@ -1,33 +1,20 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { WHEPPlayerProps } from "./types";
 import { useLiveStreams } from "./useLiveStreams";
 import { OBSStreamingInfo } from "./OBSStreamingInfo";
-import { useWebRTCConnection } from "./hooks/useWebRTCConnection";
-import { useReconnection } from "./hooks/useReconnection";
-import { useWebRTCLoad } from "./hooks/useWebRTCLoad";
-import { usePageVisibility } from "./hooks/usePageVisibility";
 import { ConnectionControls } from "./components/ConnectionControls";
 import { StreamSelection } from "./components/StreamSelection";
 import { VideoPlayer } from "./components/VideoPlayer";
+import { WHEPClient, type WHEPConnectionStatus } from "./player/WHEPClient";
 
 export function WHEPPlayer({ user }: WHEPPlayerProps) {
   const [resource, setResource] = useState("");
-  const isVisible = usePageVisibility();
-
-  // WebRTC接続状態とrefを管理
-  const [connectionState, connectionRefs, connectionActions] =
-    useWebRTCConnection();
-  const { connectionStatus, isLoading, reconnectAttempt, streamUrl } =
-    connectionState;
-  const { pcRef, videoRef, currentResourceRef } = connectionRefs;
-  const {
-    setConnectionStatus,
-    setIsLoading,
-    setReconnectAttempt,
-    setStreamUrl,
-    cleanupConnection,
-    setupConnectionEventListeners,
-  } = connectionActions;
+  const [connectionStatus, setConnectionStatus] =
+    useState<WHEPConnectionStatus>("disconnected");
+  const [isLoading, setIsLoading] = useState(false);
+  const [streamUrl, setStreamUrl] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const playerRef = useRef<WHEPClient | null>(null);
 
   // ライブストリーム取得
   const {
@@ -36,89 +23,63 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
     error: streamsError,
     refresh,
   } = useLiveStreams();
-  // 再接続とヘルスチェック機能
-  const reconnectionHook = useReconnection(
-    connectionStatus,
-    reconnectAttempt,
-    setConnectionStatus,
-    setReconnectAttempt,
-    setIsLoading,
-    pcRef,
-    videoRef,
-    currentResourceRef,
-  );
-  const {
-    refs: reconnectionRefs,
-    cleanupTimeouts,
-    attemptReconnect,
-    startHealthCheck,
-    updateHealthCheckInterval,
-  } = reconnectionHook; // WebRTC接続処理
-  const load = useWebRTCLoad(
-    connectionStatus,
-    setIsLoading,
-    setConnectionStatus,
-    setStreamUrl,
-    pcRef,
-    videoRef,
-    reconnectionRefs.isReconnectingRef,
-    currentResourceRef,
-    setReconnectAttempt,
-    reconnectionRefs.pendingTimeoutsRef,
-    reconnectionRefs.muteTimeoutRef,
-    cleanupConnection,
-    attemptReconnect,
-    startHealthCheck,
-    setupConnectionEventListeners,
-  );
 
-  // クリーンアップ処理を拡張
-  const enhancedCleanupConnection = useCallback(() => {
-    cleanupTimeouts();
-    cleanupConnection();
-  }, [cleanupTimeouts, cleanupConnection]);
-  // 手動再接続ボタン用の関数
-  const handleReconnect = useCallback(() => {
-    if (resource) {
-      setReconnectAttempt(0);
-      // isReconnectingRefの変更は避ける
-      void load(resource);
+  useEffect(() => {
+    if (!videoRef.current) {
+      return;
     }
-  }, [resource, setReconnectAttempt, load]);
 
-  // 手動切断ボタン用の関数
+    const player = new WHEPClient(videoRef.current, {
+      onStatusChange: (status) => {
+        setConnectionStatus(status);
+      },
+      onStreamChange: (hasStream) => {
+        setStreamUrl(hasStream ? "active" : null);
+      },
+    });
+
+    playerRef.current = player;
+
+    return () => {
+      void player.dispose();
+      playerRef.current = null;
+    };
+  }, []);
+
+  const load = useCallback(async (resourceToLoad: string) => {
+    const player = playerRef.current;
+    if (!player || !resourceToLoad.trim()) {
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      await player.connect(resourceToLoad);
+    } catch (error) {
+      console.error("Failed to load stream:", error);
+      alert("ストリームの読み込みに失敗しました");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  const handleReconnect = useCallback(() => {
+    void load(resource);
+  }, [resource, load]);
+
   const handleDisconnect = useCallback(() => {
-    enhancedCleanupConnection();
-  }, [enhancedCleanupConnection]);
+    const player = playerRef.current;
+    if (!player) {
+      return;
+    }
+
+    void player.disconnect();
+  }, []);
 
   const handleLoadClick = useCallback(() => {
-    if (resource) {
-      void load(resource);
-    }
+    void load(resource);
   }, [resource, load]);
-  // コンポーネントのアンマウント時のクリーンアップ
-  useEffect(() => {
-    return () => {
-      enhancedCleanupConnection();
-    };
-  }, [enhancedCleanupConnection]);
-  // Page Visibilityの変更に応答してヘルスチェック間隔を調整
-  useEffect(() => {
-    if (resource && connectionStatus === "connected") {
-      // 既存のヘルスチェックがある場合、間隔を更新
-      const reconnectWrapper = (resourceToUse: string) => {
-        void attemptReconnect(resourceToUse, load);
-      };
-      updateHealthCheckInterval(reconnectWrapper);
-    }
-  }, [
-    isVisible,
-    resource,
-    connectionStatus,
-    updateHealthCheckInterval,
-    attemptReconnect,
-    load,
-  ]);
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
@@ -158,7 +119,6 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
       />
       <ConnectionControls
         connectionStatus={connectionStatus}
-        reconnectAttempt={reconnectAttempt}
         hasResource={!!resource.trim()}
         onReconnect={handleReconnect}
         onDisconnect={handleDisconnect}

@@ -1,8 +1,7 @@
-import type { ConnectionStatus } from "../hooks/useWebRTCConnection";
+import type { WHEPConnectionStatus } from "../player/WHEPClient";
 
 interface ConnectionControlsProps {
-  connectionStatus: ConnectionStatus;
-  reconnectAttempt: number;
+  connectionStatus: WHEPConnectionStatus;
   hasResource: boolean;
   onReconnect: () => void;
   onDisconnect: () => void;
@@ -10,13 +9,12 @@ interface ConnectionControlsProps {
 
 export function ConnectionControls({
   connectionStatus,
-  reconnectAttempt,
   hasResource,
   onReconnect,
   onDisconnect,
 }: ConnectionControlsProps) {
   const statusClasses: Record<
-    ConnectionStatus,
+    WHEPConnectionStatus,
     {
       dot: string;
       panel: string;
@@ -43,11 +41,6 @@ export function ConnectionControls({
       panel: "border-rose-400/20 bg-rose-500/10",
       text: "text-rose-100",
     },
-    reconnecting: {
-      dot: "bg-amber-400",
-      panel: "border-amber-400/20 bg-amber-500/10",
-      text: "text-amber-50",
-    },
   };
 
   const getStatusText = () => {
@@ -58,8 +51,6 @@ export function ConnectionControls({
         return "接続済み";
       case "failed":
         return "接続失敗";
-      case "reconnecting":
-        return `再接続中... (試行回数: ${String(reconnectAttempt)})`;
       default:
         return "未接続";
     }
