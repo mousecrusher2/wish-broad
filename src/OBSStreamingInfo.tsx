@@ -6,20 +6,30 @@ type OBSStreamingInfoProps = {
   user: User;
 };
 
+type LiveTokenState = ReturnType<typeof useLiveToken>["state"];
+type CopyStatus = "none" | "url" | "token";
+
 type TokenSectionProps = {
-  state: ReturnType<typeof useLiveToken>["state"];
+  state: LiveTokenState;
+  showToken: boolean;
   onRetry: () => void;
   onCreateToken: () => void;
   onShowToken: () => void;
   onHideToken: () => void;
-  copyStatus: "none" | "url" | "token";
-  copyToClipboard: (text: string, type: "url" | "token") => Promise<void>;
+  copyStatus: CopyStatus;
+  copyToClipboard: (
+    text: string,
+    type: Exclude<CopyStatus, "none">,
+  ) => Promise<void>;
 };
 
 type StreamingUrlSectionProps = {
   streamingUrl: string;
-  copyStatus: "none" | "url" | "token";
-  copyToClipboard: (text: string, type: "url" | "token") => Promise<void>;
+  copyStatus: CopyStatus;
+  copyToClipboard: (
+    text: string,
+    type: Exclude<CopyStatus, "none">,
+  ) => Promise<void>;
 };
 
 const fieldLabelClasses =
@@ -72,8 +82,149 @@ function StreamingUrlSection({
   );
 }
 
-function TokenSection({
+function LoadingTokenState() {
+  return <p className="text-sm text-amber-200">読み込み中...</p>;
+}
+
+function ErrorTokenState({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-sm text-rose-200">❌ {message}</p>
+      <button onClick={onRetry} type="button" className={dangerButtonClasses}>
+        再試行
+      </button>
+    </div>
+  );
+}
+
+function EmptyTokenState({ onCreateToken }: { onCreateToken: () => void }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-sm font-medium text-amber-100">
+        ⚠️ Bearerトークンが発行されていません
+      </p>
+      <button
+        onClick={onCreateToken}
+        className={primaryButtonClasses}
+        type="button"
+      >
+        🔑 Bearerトークンを発行
+      </button>
+    </div>
+  );
+}
+
+function VisibleTokenField({
+  token,
+  copyStatus,
+  copyToClipboard,
+  onHideToken,
+}: {
+  token: string;
+  copyStatus: CopyStatus;
+  copyToClipboard: (
+    text: string,
+    type: Exclude<CopyStatus, "none">,
+  ) => Promise<void>;
+  onHideToken: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className={inlineFieldClasses}>
+        <input
+          type="text"
+          value={token}
+          readOnly
+          className={fieldInputClasses}
+        />
+        <button
+          onClick={() => {
+            void copyToClipboard(token, "token");
+          }}
+          className={copyButtonClasses}
+          type="button"
+        >
+          {copyStatus === "token" ? "✅ コピー済み" : "📋 コピー"}
+        </button>
+      </div>
+      <button
+        onClick={onHideToken}
+        className={neutralButtonClasses}
+        type="button"
+      >
+        🙈 非表示
+      </button>
+    </div>
+  );
+}
+
+function AvailableTokenState({
+  token,
+  showToken,
+  onCreateToken,
+  onShowToken,
+  onHideToken,
+  copyStatus,
+  copyToClipboard,
+}: {
+  token: string | null;
+  showToken: boolean;
+  onCreateToken: () => void;
+  onShowToken: () => void;
+  onHideToken: () => void;
+  copyStatus: CopyStatus;
+  copyToClipboard: (
+    text: string,
+    type: Exclude<CopyStatus, "none">,
+  ) => Promise<void>;
+}) {
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-sm font-medium text-emerald-200">
+        ✅ Bearerトークンが発行済みです
+      </p>
+      {token && showToken && (
+        <VisibleTokenField
+          token={token}
+          copyStatus={copyStatus}
+          copyToClipboard={copyToClipboard}
+          onHideToken={onHideToken}
+        />
+      )}
+      {token && !showToken && (
+        <button
+          onClick={onShowToken}
+          className={neutralButtonClasses}
+          type="button"
+        >
+          👁️ トークンを表示
+        </button>
+      )}
+      {!token && (
+        <p className="text-sm leading-6 text-slate-300">
+          既存のトークンは再表示できません。必要な場合は新しいトークンを発行してください。
+        </p>
+      )}
+      <button
+        onClick={onCreateToken}
+        className={warningButtonClasses}
+        type="button"
+      >
+        🔄 新しいトークンを発行
+      </button>
+    </div>
+  );
+}
+
+function TokenStateContent({
   state,
+  showToken,
   onRetry,
   onCreateToken,
   onShowToken,
@@ -81,91 +232,54 @@ function TokenSection({
   copyStatus,
   copyToClipboard,
 }: TokenSectionProps) {
-  const token =
-    state.status === "available" && state.token ? state.token : undefined;
+  switch (state.status) {
+    case "loading":
+      return <LoadingTokenState />;
+    case "error":
+      return <ErrorTokenState message={state.message} onRetry={onRetry} />;
+    case "available":
+      return (
+        <AvailableTokenState
+          token={state.token}
+          showToken={showToken}
+          onCreateToken={onCreateToken}
+          onShowToken={onShowToken}
+          onHideToken={onHideToken}
+          copyStatus={copyStatus}
+          copyToClipboard={copyToClipboard}
+        />
+      );
+    case "none":
+      return <EmptyTokenState onCreateToken={onCreateToken} />;
+  }
+}
 
+function TokenSection({
+  state,
+  showToken,
+  onRetry,
+  onCreateToken,
+  onShowToken,
+  onHideToken,
+  copyStatus,
+  copyToClipboard,
+}: TokenSectionProps) {
   return (
     <div className="space-y-2">
       <div className={subtleCardClasses}>
         <label className={fieldLabelClasses}>
           Bearerトークン (Stream Key):
         </label>
-        {state.status === "loading" ? (
-          <p className="text-sm text-amber-200">読み込み中...</p>
-        ) : state.status === "error" ? (
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-rose-200">❌ {state.message}</p>
-            <button
-              onClick={onRetry}
-              type="button"
-              className={dangerButtonClasses}
-            >
-              再試行
-            </button>
-          </div>
-        ) : state.status === "available" ? (
-          <div className="flex flex-col gap-4">
-            <p className="text-sm font-medium text-emerald-200">
-              ✅ Bearerトークンが発行済みです
-            </p>
-            {token ? (
-              <div className="flex flex-col gap-3">
-                <div className={inlineFieldClasses}>
-                  <input
-                    type="text"
-                    value={token}
-                    readOnly
-                    className={fieldInputClasses}
-                  />
-                  <button
-                    onClick={() => {
-                      void copyToClipboard(token, "token");
-                    }}
-                    className={copyButtonClasses}
-                    type="button"
-                  >
-                    {copyStatus === "token" ? "✅ コピー済み" : "📋 コピー"}
-                  </button>
-                </div>
-                <button
-                  onClick={onHideToken}
-                  className={neutralButtonClasses}
-                  type="button"
-                >
-                  🙈 非表示
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={onShowToken}
-                className={neutralButtonClasses}
-                type="button"
-              >
-                👁️ トークンを表示
-              </button>
-            )}
-            <button
-              onClick={onCreateToken}
-              className={warningButtonClasses}
-              type="button"
-            >
-              🔄 新しいトークンを発行
-            </button>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-4">
-            <p className="text-sm font-medium text-amber-100">
-              ⚠️ Bearerトークンが発行されていません
-            </p>
-            <button
-              onClick={onCreateToken}
-              className={primaryButtonClasses}
-              type="button"
-            >
-              🔑 Bearerトークンを発行
-            </button>
-          </div>
-        )}
+        <TokenStateContent
+          state={state}
+          showToken={showToken}
+          onRetry={onRetry}
+          onCreateToken={onCreateToken}
+          onShowToken={onShowToken}
+          onHideToken={onHideToken}
+          copyStatus={copyStatus}
+          copyToClipboard={copyToClipboard}
+        />
       </div>
     </div>
   );
@@ -188,10 +302,8 @@ function OBSInstructions() {
 
 export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
   const { state, fetchTokenStatus, createToken } = useLiveToken();
-  const [, setShowToken] = useState(false);
-  const [copyStatus, setCopyStatus] = useState<"none" | "url" | "token">(
-    "none",
-  );
+  const [showToken, setShowToken] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<CopyStatus>("none");
   const [showOBSSettings, setShowOBSSettings] = useState(false);
 
   const streamingUrl = `${window.location.origin}/ingest/${user.userId}`;
@@ -246,8 +358,10 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
           />
           <TokenSection
             state={state}
+            showToken={showToken}
             onRetry={() => {
               void fetchTokenStatus();
+              setShowToken(false);
             }}
             onCreateToken={() => {
               void handleCreateToken();
