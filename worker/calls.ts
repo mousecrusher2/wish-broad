@@ -63,7 +63,10 @@ async function checkCallsApiResponse(
 }
 
 type CallsEnv = Pick<Bindings, "CALLS_APP_ID" | "CALLS_APP_SECRET">;
-type TrackLocatorRequest = Pick<TrackLocator, "location" | "sessionId" | "trackName">;
+type TrackLocatorRequest = Pick<
+  TrackLocator,
+  "location" | "sessionId" | "trackName"
+>;
 
 function getEndpoint(env: CallsEnv, path: string): string {
   return `https://rtc.live.cloudflare.com/v1/apps/${env.CALLS_APP_ID}${path}`;

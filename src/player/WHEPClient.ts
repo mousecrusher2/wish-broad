@@ -32,7 +32,10 @@ async function waitForIceGatheringComplete(
   await new Promise<void>((resolve) => {
     const onGatheringStateChange = () => {
       if (pc.iceGatheringState === "complete") {
-        pc.removeEventListener("icegatheringstatechange", onGatheringStateChange);
+        pc.removeEventListener(
+          "icegatheringstatechange",
+          onGatheringStateChange,
+        );
         resolve();
       }
     };
@@ -182,8 +185,9 @@ export class WHEPClient {
         throw new Error("Empty SDP response");
       }
 
-      const sessionDescriptionTypeHeader =
-        offerResponse.headers.get("x-session-description-type");
+      const sessionDescriptionTypeHeader = offerResponse.headers.get(
+        "x-session-description-type",
+      );
       const sessionDescriptionType =
         sessionDescriptionTypeHeader?.toLowerCase() === "offer"
           ? "offer"
@@ -258,7 +262,10 @@ export class WHEPClient {
     this.sessionLocation = null;
 
     if (notifyServer && currentSessionLocation) {
-      const sessionUrl = new URL(currentSessionLocation, window.location.origin);
+      const sessionUrl = new URL(
+        currentSessionLocation,
+        window.location.origin,
+      );
       try {
         await fetch(sessionUrl, { method: "DELETE" });
       } catch (error) {

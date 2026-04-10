@@ -1,13 +1,11 @@
 import { forwardRef } from "react";
 
 interface VideoPlayerProps {
-  streamUrl: string | null;
+  hasStream: boolean;
 }
 
 export const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
-  ({ streamUrl }, ref) => {
-    const hasStream = streamUrl !== null;
-
+  ({ hasStream }, ref) => {
     return (
       <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur">
         <div className="mb-4">

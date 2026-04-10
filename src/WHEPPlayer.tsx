@@ -1,20 +1,24 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { WHEPPlayerProps } from "./types";
 import { useLiveStreams } from "./useLiveStreams";
 import { OBSStreamingInfo } from "./OBSStreamingInfo";
 import { ConnectionControls } from "./components/ConnectionControls";
 import { StreamSelection } from "./components/StreamSelection";
 import { VideoPlayer } from "./components/VideoPlayer";
-import { WHEPClient, type WHEPConnectionStatus } from "./player/WHEPClient";
+import type { WHEPConnectionStatus } from "./player/WHEPClient";
+import {
+  WHEPPlayerController,
+  type WHEPPlayerControllerHandle,
+} from "./player/WHEPPlayerController";
 
 export function WHEPPlayer({ user }: WHEPPlayerProps) {
   const [resource, setResource] = useState("");
   const [connectionStatus, setConnectionStatus] =
     useState<WHEPConnectionStatus>("disconnected");
+  const [hasStream, setHasStream] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const playerRef = useRef<WHEPClient | null>(null);
+  const controllerRef = useRef<WHEPPlayerControllerHandle | null>(null);
 
   // ライブストリーム取得
   const {
@@ -24,61 +28,25 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
     refresh,
   } = useLiveStreams();
 
-  useEffect(() => {
-    if (!videoRef.current) {
-      return;
-    }
-
-    const player = new WHEPClient(videoRef.current, {
-      onStatusChange: (status) => {
-        setConnectionStatus(status);
-      },
-      onStreamChange: (hasStream) => {
-        setStreamUrl(hasStream ? "active" : null);
-      },
-    });
-
-    playerRef.current = player;
-
-    return () => {
-      void player.dispose();
-      playerRef.current = null;
-    };
+  const load = useCallback((resourceToLoad: string) => {
+    void controllerRef.current?.connect(resourceToLoad);
   }, []);
 
-  const load = useCallback(async (resourceToLoad: string) => {
-    const player = playerRef.current;
-    if (!player || !resourceToLoad.trim()) {
-      return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      await player.connect(resourceToLoad);
-    } catch (error) {
-      console.error("Failed to load stream:", error);
-      alert("ストリームの読み込みに失敗しました");
-    } finally {
-      setIsLoading(false);
-    }
+  const handlePlayerError = useCallback((error: Error) => {
+    console.error("Failed to load stream:", error);
+    alert("ストリームの読み込みに失敗しました");
   }, []);
 
   const handleReconnect = useCallback(() => {
-    void load(resource);
+    load(resource);
   }, [resource, load]);
 
   const handleDisconnect = useCallback(() => {
-    const player = playerRef.current;
-    if (!player) {
-      return;
-    }
-
-    void player.disconnect();
+    void controllerRef.current?.disconnect();
   }, []);
 
   const handleLoadClick = useCallback(() => {
-    void load(resource);
+    load(resource);
   }, [resource, load]);
 
   return (
@@ -123,7 +91,15 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
         onReconnect={handleReconnect}
         onDisconnect={handleDisconnect}
       />
-      <VideoPlayer ref={videoRef} streamUrl={streamUrl} />
+      <WHEPPlayerController
+        ref={controllerRef}
+        videoRef={videoRef}
+        onError={handlePlayerError}
+        onLoadingChange={setIsLoading}
+        onStatusChange={setConnectionStatus}
+        onStreamChange={setHasStream}
+      />
+      <VideoPlayer ref={videoRef} hasStream={hasStream} />
       <OBSStreamingInfo user={user} />
     </div>
   );
