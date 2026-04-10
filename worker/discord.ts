@@ -265,11 +265,7 @@ export async function revokeAccessToken(
 }
 
 export function getDiscordErrorMessage(error: DiscordApiError): string {
-  if (
-    error.responseBodyJson &&
-    typeof error.responseBodyJson === "object" &&
-    error.responseBodyJson !== null
-  ) {
+  if (error.responseBodyJson && typeof error.responseBodyJson === "object") {
     const body = error.responseBodyJson as Record<string, unknown>;
     for (const key of ["error_description", "error", "message"]) {
       if (typeof body[key] === "string" && body[key].trim().length > 0) {

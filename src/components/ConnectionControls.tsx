@@ -7,6 +7,11 @@ interface ConnectionControlsProps {
   onDisconnect: () => void;
 }
 
+function assertUnreachableStatus(status: never): never {
+  void status;
+  throw new Error("Unexpected connection status");
+}
+
 export function ConnectionControls({
   connectionStatus,
   hasResource,
@@ -45,15 +50,17 @@ export function ConnectionControls({
 
   const getStatusText = () => {
     switch (connectionStatus) {
+      case "disconnected":
+        return "未接続";
       case "connecting":
         return "接続中...";
       case "connected":
         return "接続済み";
       case "failed":
         return "接続失敗";
-      default:
-        return "未接続";
     }
+
+    return assertUnreachableStatus(connectionStatus);
   };
   const styles = statusClasses[connectionStatus];
 

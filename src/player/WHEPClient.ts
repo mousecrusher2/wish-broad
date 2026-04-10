@@ -9,6 +9,11 @@ type WHEPClientCallbacks = {
   onStreamChange?: (hasStream: boolean) => void;
 };
 
+function assertUnreachableConnectionState(state: never): never {
+  void state;
+  throw new Error("Unexpected connection state");
+}
+
 function normalizeError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
@@ -68,6 +73,10 @@ export class WHEPClient {
       }
 
       switch (pc.connectionState) {
+        case "new":
+          this.setStatus("disconnected");
+          this.setStreamState(false);
+          break;
         case "connected":
           this.setStatus("connected");
           break;
@@ -82,6 +91,8 @@ export class WHEPClient {
           this.setStatus("disconnected");
           this.setStreamState(false);
           break;
+        default:
+          assertUnreachableConnectionState(pc.connectionState);
       }
     };
   }
@@ -198,7 +209,7 @@ export class WHEPClient {
         await pc.setLocalDescription(localAnswer);
         await waitForIceGatheringComplete(pc);
 
-        const localAnswerSdp = pc.localDescription?.sdp;
+        const localAnswerSdp = pc.localDescription.sdp;
         if (!localAnswerSdp) {
           throw new Error("Failed to create local SDP answer");
         }

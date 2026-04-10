@@ -31,6 +31,18 @@ function logUnexpectedError(err: unknown): void {
   );
 }
 
+function runMiddleware(
+  middleware: unknown,
+  c: unknown,
+  next: unknown,
+): Promise<Response | void> {
+  const typedMiddleware = middleware as (
+    context: unknown,
+    next: unknown,
+  ) => Promise<Response | void>;
+  return typedMiddleware(c, next);
+}
+
 function toErrorResponse(
   err: unknown,
   c: Context<{ Bindings: Bindings }>,
@@ -62,7 +74,7 @@ app.use("/ingest/:userId/*", async (c, next) => {
     return c.text("No token found for this user ID", 401);
   }
 
-  return bearerAuth({ token: expectedToken })(c, next);
+  return runMiddleware(bearerAuth({ token: expectedToken }), c, next);
 });
 
 // WHIP配信用のCORSプリフライトリクエスト処理
@@ -201,11 +213,15 @@ app.post("/logout", async (c) => {
 
 // ライブ視聴用エンドポイントの認証ミドルウェア
 app.use("/play/*", async (c, next) => {
-  return jwt({
-    secret: c.env.JWT_SECRET,
-    cookie: "authtoken",
-    alg: "HS256",
-  })(c, next);
+  return runMiddleware(
+    jwt({
+      secret: c.env.JWT_SECRET,
+      cookie: "authtoken",
+      alg: "HS256",
+    }),
+    c,
+    next,
+  );
 });
 
 // ライブ視聴開始エンドポイント（WHEP）
@@ -240,7 +256,7 @@ app
 
     try {
       const result = await startPlay(c.env, userId, tracks, sdpOffer);
-      const sdpType = result.sdpType ?? "answer";
+      const sdpType = result.sdpType;
 
       return c.body(result.sdpAnswer, 201, {
         "access-control-expose-headers": "location,x-session-description-type",
@@ -295,11 +311,15 @@ app
 
 // API routes用の認証ミドルウェア
 app.use("/api/*", async (c, next) => {
-  return jwt({
-    secret: c.env.JWT_SECRET,
-    cookie: "authtoken",
-    alg: "HS256",
-  })(c, next);
+  return runMiddleware(
+    jwt({
+      secret: c.env.JWT_SECRET,
+      cookie: "authtoken",
+      alg: "HS256",
+    }),
+    c,
+    next,
+  );
 });
 
 // ユーザー情報を取得するAPIエンドポイント

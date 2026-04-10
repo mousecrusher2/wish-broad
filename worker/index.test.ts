@@ -244,6 +244,7 @@ describe("worker app", () => {
     callsMocks.startPlay.mockResolvedValue({
       sdpAnswer: "viewer-answer-sdp",
       sessionId: "viewer-session",
+      sdpType: "answer",
     });
   });
 
@@ -372,10 +373,7 @@ describe("worker app", () => {
 
     expect(response.status).toBe(200);
 
-    const body = (await response.json()) as {
-      success: boolean;
-      token: string;
-    };
+    const body = await response.json();
 
     expect(body.success).toBe(true);
     expect(body.token).toMatch(/^[0-9a-f]{64}$/u);
