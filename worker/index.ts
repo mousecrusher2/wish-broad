@@ -73,6 +73,35 @@ function isInactiveCallsSessionError(error: unknown): boolean {
   );
 }
 
+function isSdpContentType(contentType: string | undefined): boolean {
+  if (!contentType) {
+    return false;
+  }
+
+  return contentType.split(";")[0]?.trim().toLowerCase() === "application/sdp";
+}
+
+function isCallsPublisherError(error: unknown): error is CallsApiError {
+  return (
+    error instanceof CallsApiError &&
+    (error.statusCode === 400 ||
+      error.statusCode === 415 ||
+      error.statusCode === 422)
+  );
+}
+
+function getCallsErrorText(error: CallsApiError, fallback: string): string {
+  if (typeof error.responseBody === "string" && error.responseBody.length > 0) {
+    return error.responseBody;
+  }
+
+  return fallback;
+}
+
+function createEmptySuccessResponse(): Response {
+  return new Response(null, { status: 204 });
+}
+
 function logUnexpectedError(err: unknown): void {
   console.error(
     "Unhandled error:",
@@ -127,47 +156,38 @@ app.use("/ingest/:userId/*", async (c, next) => {
   return runMiddleware(bearerAuth({ token: expectedToken }), c, next);
 });
 
-// WHIP配信用のCORSプリフライトリクエスト処理
-app.options("/ingest/:userId/:settionId?", async () => {
-  return new Response(null, {
-    status: 204,
-    headers: {
-      "accept-post": "application/sdp",
-      "access-control-allow-credentials": "true",
-      "access-control-allow-headers": "content-type,authorization,if-match",
-      "access-control-allow-methods": "PATCH,POST,PUT,DELETE,OPTIONS",
-      "access-control-allow-origin": "*",
-      "access-control-expose-headers":
-        "x-thunderclap,location,link,accept-post,accept-patch,etag",
-      link: '<stun:stun.cloudflare.com:3478>; rel="ice-server"',
-    },
-  });
+app.get("/ingest/:userId", async () => {
+  return createEmptySuccessResponse();
 });
 
 // ライブ配信開始エンドポイント（WHIP）
 // 配信者からのSDP Offerを受け取り、Cloudflareセッションを作成
-app
-  .post("/ingest/:userId", async (c) => {
-    const { userId } = c.req.param();
-    const sdpOffer = await c.req.text();
-    if (!sdpOffer || sdpOffer.trim().length === 0) {
-      return c.text("SDP offer is required", 400);
+app.post("/ingest/:userId", async (c) => {
+  const { userId } = c.req.param();
+  if (!isSdpContentType(c.req.header("content-type"))) {
+    return c.text("Content-Type must be application/sdp", 415);
+  }
+
+  const sdpOffer = await c.req.text();
+  if (!sdpOffer || sdpOffer.trim().length === 0) {
+    return c.text("SDP offer is required", 400);
+  }
+
+  const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
+  if (existingLive) {
+    const isActive = await isSessionActive(c.env, existingLive.sessionId);
+    if (isActive) {
+      return c.text("A live stream is already active for this user", 400);
     }
 
-    const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
-    if (existingLive) {
-      const isActive = await isSessionActive(c.env, existingLive.sessionId);
-      if (isActive) {
-        return c.text("A live stream is already active for this user", 400);
-      }
+    await db.deleteTracksForSession(
+      c.env.LIVE_DB,
+      userId,
+      existingLive.sessionId,
+    );
+  }
 
-      await db.deleteTracksForSession(
-        c.env.LIVE_DB,
-        userId,
-        existingLive.sessionId,
-      );
-    }
-
+  try {
     const result = await startIngest(c.env, userId, sdpOffer);
 
     // トラック情報をデータベースに保存（session_idも含める）
@@ -175,17 +195,27 @@ app
 
     return c.body(result.sdpAnswer, 201, {
       "content-type": "application/sdp",
-      "protocol-version": "draft-ietf-wish-whip-06",
       etag: `"${result.sessionId}"`,
       location: `/ingest/${userId}/${result.sessionId}`,
     });
-  })
-  .all(async () => {
-    return new Response("Not supported", { status: 400 });
-  });
+  } catch (error) {
+    if (isCallsPublisherError(error)) {
+      return c.text(
+        getCallsErrorText(error, "Failed to negotiate ingest session"),
+        error.statusCode as 400 | 415 | 422,
+      );
+    }
+
+    throw error;
+  }
+});
 
 // ライブ配信終了エンドポイント
 // 配信セッションを削除し、関連データを清理
+app.get("/ingest/:userId/:sessionId", async () => {
+  return createEmptySuccessResponse();
+});
+
 app.delete("/ingest/:userId/:sessionId", async (c) => {
   const { userId, sessionId } = c.req.param();
 

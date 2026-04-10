@@ -427,6 +427,7 @@ describe("worker app", () => {
     );
 
     expect(response.status).toBe(201);
+    expect(response.headers.get("protocol-version")).toBeNull();
     expect(dbMocks.deleteTracksForSession).toHaveBeenCalledWith(
       env.LIVE_DB,
       "user-1",
@@ -451,6 +452,121 @@ describe("worker app", () => {
       ],
     );
     expect(response.headers.get("location")).toBe("/ingest/user-1/new-session");
+  });
+
+  it("returns 204 for GET on the WHIP endpoint", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1", {
+        headers: {
+          Authorization: "Bearer live-token",
+        },
+        method: "GET",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe("");
+  });
+
+  it("returns 204 for GET on the WHIP session resource", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1/session-1", {
+        headers: {
+          Authorization: "Bearer live-token",
+        },
+        method: "GET",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe("");
+  });
+
+  it("rejects ingest when Content-Type is not application/sdp", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1", {
+        body: "offer-sdp",
+        headers: {
+          Authorization: "Bearer live-token",
+          "Content-Type": "text/plain",
+        },
+        method: "POST",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(415);
+    expect(await response.text()).toBe("Content-Type must be application/sdp");
+    expect(callsMocks.startIngest).not.toHaveBeenCalled();
+  });
+
+  it("returns Calls client errors for invalid ingest offers", async () => {
+    const env = createBindings();
+
+    callsMocks.startIngest.mockRejectedValue(
+      new callsMocks.CallsApiError(
+        422,
+        "Unprocessable Content",
+        "/tracks/new",
+        "Malformed SDP offer",
+      ),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1", {
+        body: "offer-sdp",
+        headers: {
+          Authorization: "Bearer live-token",
+          "Content-Type": "application/sdp",
+        },
+        method: "POST",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.text()).toBe("Malformed SDP offer");
+  });
+
+  it("keeps Calls auth failures as worker errors during ingest", async () => {
+    const env = createBindings();
+
+    callsMocks.startIngest.mockRejectedValue(
+      new callsMocks.CallsApiError(
+        401,
+        "Unauthorized",
+        "/sessions/new",
+        "Calls auth failed",
+      ),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1", {
+        body: "offer-sdp",
+        headers: {
+          Authorization: "Bearer live-token",
+          "Content-Type": "application/sdp",
+        },
+        method: "POST",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe("Internal Server Error");
   });
 
   it("rejects a new ingest when the user already has an active live", async () => {
