@@ -26,7 +26,7 @@ export function StreamSelection({
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1 space-y-5">
           <div>
-            <p className="text-sm font-medium uppercase tracking-[0.3em] text-cyan-300/80">
+            <p className="text-sm font-medium tracking-[0.3em] text-cyan-300/80 uppercase">
               Stream Browser
             </p>
             <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white">

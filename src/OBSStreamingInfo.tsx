@@ -218,7 +218,7 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
     <section className="rounded-[2rem] border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <p className="text-sm font-medium uppercase tracking-[0.3em] text-cyan-300/80">
+          <p className="text-sm font-medium tracking-[0.3em] text-cyan-300/80 uppercase">
             Broadcast Setup
           </p>
           <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white">
