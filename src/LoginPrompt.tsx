@@ -1,7 +1,7 @@
 export function LoginPrompt() {
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-3xl items-center justify-center px-6 py-16">
-      <div className="w-full rounded-[2rem] border border-white/10 bg-slate-900/75 p-8 text-center shadow-2xl shadow-black/30 backdrop-blur sm:p-10">
+      <div className="w-full rounded-4xl border border-white/10 bg-slate-900/75 p-8 text-center shadow-2xl shadow-black/30 backdrop-blur sm:p-10">
         <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
           ANGOU BROADCAST
         </h1>

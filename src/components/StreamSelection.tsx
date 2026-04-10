@@ -22,7 +22,7 @@ export function StreamSelection({
   streamsLoading,
 }: StreamSelectionProps) {
   return (
-    <section className="rounded-[2rem] border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur">
+    <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur">
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1 space-y-5">
           <div>

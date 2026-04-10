@@ -68,7 +68,7 @@ export function ConnectionControls({
 
   return (
     <section
-      className={`rounded-[2rem] border p-4 shadow-xl shadow-black/20 backdrop-blur sm:p-5 ${styles.panel}`}
+      className={`rounded-4xl border p-4 shadow-xl shadow-black/20 backdrop-blur sm:p-5 ${styles.panel}`}
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <span

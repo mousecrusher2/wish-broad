@@ -215,7 +215,7 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
   };
 
   return (
-    <section className="rounded-[2rem] border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur">
+    <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur">
       <div className="flex items-center justify-between gap-4">
         <div>
           <p className="text-sm font-medium tracking-[0.3em] text-cyan-300/80 uppercase">
@@ -229,7 +229,7 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
           onClick={() => {
             setShowOBSSettings(!showOBSSettings);
           }}
-          className="inline-flex items-center justify-center rounded-full bg-gradient-to-r from-cyan-400 via-blue-500 to-emerald-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:brightness-110"
+          className="inline-flex items-center justify-center rounded-full bg-linear-to-r from-cyan-400 via-blue-500 to-emerald-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:brightness-110"
           type="button"
         >
           {showOBSSettings ? "📺 OBS配信設定を隠す" : "📺 OBS配信設定を表示"}

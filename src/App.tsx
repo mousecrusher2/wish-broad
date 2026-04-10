@@ -6,7 +6,7 @@ import { WHEPPlayer } from "./WHEPPlayer";
 const screenShellClasses =
   "mx-auto flex min-h-screen w-full max-w-3xl items-center justify-center px-6 py-16";
 const panelClasses =
-  "w-full rounded-[2rem] border border-white/10 bg-slate-900/75 p-8 text-center shadow-2xl shadow-black/30 backdrop-blur sm:p-10";
+  "w-full rounded-4xl border border-white/10 bg-slate-900/75 p-8 text-center shadow-2xl shadow-black/30 backdrop-blur sm:p-10";
 const titleClasses =
   "text-3xl font-semibold tracking-tight text-white sm:text-4xl";
 const bodyClasses = "mt-3 text-sm leading-7 text-slate-300 sm:text-base";
@@ -49,7 +49,7 @@ function AppContent() {
 
 function App() {
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(34,211,238,0.16),_transparent_30%),linear-gradient(180deg,#020617_0%,#0f172a_55%,#020617_100%)] text-slate-100">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.16),transparent_30%),linear-gradient(180deg,#020617_0%,#0f172a_55%,#020617_100%)] text-slate-100">
       <Suspense
         fallback={
           <div className={screenShellClasses}>

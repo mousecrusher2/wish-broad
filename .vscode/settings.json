@@ -1,0 +1,10 @@
+{
+  "editor.quickSuggestions": {
+    "strings": "on"
+  },
+  "files.associations": {
+    "*.css": "tailwindcss"
+  },
+  "tailwindCSS.experimental.configFile": "src/style.css",
+  "tailwindCSS.lint.recommendedVariantOrder": "ignore"
+}

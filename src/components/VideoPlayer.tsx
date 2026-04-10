@@ -7,7 +7,7 @@ interface VideoPlayerProps {
 export const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
   ({ streamUrl }, ref) => {
     return (
-      <section className="rounded-[2rem] border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur">
+      <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur">
         <div className="mb-4">
           <p className="text-sm font-medium tracking-[0.3em] text-cyan-300/80 uppercase">
             Playback
@@ -17,7 +17,7 @@ export const VideoPlayer = forwardRef<HTMLVideoElement, VideoPlayerProps>(
           </h2>
         </div>
         <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/70 shadow-2xl shadow-black/30">
-          <div className="absolute inset-x-0 top-0 z-10 h-1 bg-gradient-to-r from-cyan-400 via-blue-500 to-emerald-400" />
+          <div className="absolute inset-x-0 top-0 z-10 h-1 bg-linear-to-r from-cyan-400 via-blue-500 to-emerald-400" />
           {streamUrl ? (
             <video
               ref={ref}
