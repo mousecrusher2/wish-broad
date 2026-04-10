@@ -1,5 +1,5 @@
 import { Context, Hono } from "hono";
-import { JWTPayload, Bindings } from "./types";
+import { JWTPayload, Bindings, StoredTrack } from "./types";
 import * as db from "./database";
 import {
   clearAuthCookie,
@@ -15,13 +15,63 @@ import {
   startPlay,
   LiveNotFoundError,
 } from "./calls";
-import { StatusCode } from "hono/utils/http-status";
 import { logger } from "hono/logger";
 import { bearerAuth } from "hono/bearer-auth";
 import { HTTPException } from "hono/http-exception";
 import { jwt } from "hono/jwt";
 
 const app = new Hono<{ Bindings: Bindings }>();
+
+function hasCloseTrackErrors(
+  response: Awaited<ReturnType<typeof closeTracks>>,
+) {
+  return (
+    !!response.errorCode || !!response.tracks?.some((track) => track.errorCode)
+  );
+}
+
+function createPlaySessionLocation(
+  requestUrl: string,
+  userId: string,
+  sessionId: string,
+  tracks: StoredTrack[],
+): string {
+  const origin = new URL(requestUrl).origin;
+  const sessionUrl = new URL(
+    `/play/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}`,
+    origin,
+  );
+
+  for (const track of tracks) {
+    sessionUrl.searchParams.append("mid", track.mid);
+  }
+
+  return sessionUrl.toString();
+}
+
+function getRequestedTrackMids(requestUrl: string): string[] {
+  const mids = new URL(requestUrl).searchParams.getAll("mid");
+  return [...new Set(mids.map((mid) => mid.trim()).filter(Boolean))];
+}
+
+function createWhepCloseTracks(
+  sessionId: string,
+  mids: string[],
+): StoredTrack[] {
+  return mids.map((mid) => ({
+    location: "remote" as const,
+    mid,
+    sessionId,
+    trackName: mid,
+  }));
+}
+
+function isInactiveCallsSessionError(error: unknown): boolean {
+  return (
+    error instanceof CallsApiError &&
+    (error.statusCode === 404 || error.statusCode === 410)
+  );
+}
 
 function logUnexpectedError(err: unknown): void {
   console.error(
@@ -253,18 +303,23 @@ app
     }
 
     const sdpOffer = await c.req.text();
+    if (!sdpOffer || sdpOffer.trim().length === 0) {
+      return c.text("SDP offer is required", 400);
+    }
 
     try {
       const result = await startPlay(c.env, userId, tracks, sdpOffer);
-      const sdpType = result.sdpType;
+      const status = result.sdpType === "offer" ? 406 : 201;
 
-      return c.body(result.sdpAnswer, 201, {
-        "access-control-expose-headers": "location,x-session-description-type",
+      return c.body(result.sdpAnswer, status, {
         "content-type": "application/sdp",
-        "protocol-version": "draft-ietf-wish-whep-00",
-        "x-session-description-type": sdpType,
         etag: `"${result.sessionId}"`,
-        location: `/play/${userId}/${result.sessionId}`,
+        location: createPlaySessionLocation(
+          c.req.url,
+          userId,
+          result.sessionId,
+          result.tracks,
+        ),
       });
     } catch (error) {
       console.error(
@@ -295,7 +350,33 @@ app
 // ライブ視聴セッション管理エンドポイント
 app
   .delete("/play/:userId/:sessionId", async (c) => {
-    return c.body("OK", 200);
+    const { sessionId } = c.req.param();
+    const mids = getRequestedTrackMids(c.req.url);
+    if (mids.length === 0) {
+      return c.text("WHEP session track mids are required", 400);
+    }
+
+    try {
+      const closeResponse = await closeTracks(
+        c.env,
+        sessionId,
+        createWhepCloseTracks(sessionId, mids),
+      );
+      if (hasCloseTrackErrors(closeResponse)) {
+        console.error(
+          `Calls reported WHEP session close errors for session ${sessionId}:`,
+          closeResponse,
+        );
+        return c.text("Failed to close WHEP session", 502);
+      }
+    } catch (error) {
+      if (!isInactiveCallsSessionError(error)) {
+        console.error(`Failed to close WHEP session ${sessionId}:`, error);
+        return c.text("Failed to close WHEP session", 502);
+      }
+    }
+
+    return c.body(null, 200);
   }) // ICE候補やセッション再交渉用のPATCHエンドポイント
   .patch(async (c) => {
     const { sessionId } = c.req.param();
@@ -305,8 +386,8 @@ app
       return c.text("SDP answer is required", 400);
     }
 
-    const response = await renegotiateSession(c.env, sessionId, sdpAnswer);
-    return c.body(null, response.status as StatusCode);
+    await renegotiateSession(c.env, sessionId, sdpAnswer);
+    return c.body(null, 204);
   });
 
 // API routes用の認証ミドルウェア

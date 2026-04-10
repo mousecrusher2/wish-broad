@@ -137,7 +137,7 @@ function createExecutionContext(): ExecutionContext {
   return {
     passThroughOnException() {},
     waitUntil() {},
-  } as ExecutionContext;
+  } as unknown as ExecutionContext;
 }
 
 function createBindings(): Bindings {
@@ -245,6 +245,14 @@ describe("worker app", () => {
       sdpAnswer: "viewer-answer-sdp",
       sessionId: "viewer-session",
       sdpType: "answer",
+      tracks: [
+        {
+          location: "remote",
+          mid: "0",
+          sessionId: "viewer-session",
+          trackName: "video",
+        },
+      ],
     });
   });
 
@@ -373,7 +381,10 @@ describe("worker app", () => {
 
     expect(response.status).toBe(200);
 
-    const body = await response.json();
+    const body: {
+      success: boolean;
+      token: string;
+    } = await response.json();
 
     expect(body.success).toBe(true);
     expect(body.token).toMatch(/^[0-9a-f]{64}$/u);
@@ -741,6 +752,27 @@ describe("worker app", () => {
     );
   });
 
+  it("returns 400 for an empty WHEP offer", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request("http://localhost/play/streamer-1", {
+        body: "",
+        headers: {
+          Cookie: await createAuthCookie(env),
+          "Content-Type": "application/sdp",
+        },
+        method: "POST",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("SDP offer is required");
+    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+  });
+
   it("checks the live session before starting play", async () => {
     const env = createBindings();
     const liveTracks: StoredTrack[] = [
@@ -783,9 +815,106 @@ describe("worker app", () => {
       liveTracks,
       "viewer-offer",
     );
+    expect(response.headers.get("access-control-expose-headers")).toBeNull();
+    expect(response.headers.get("accept-patch")).toBeNull();
     expect(response.headers.get("location")).toBe(
-      "/play/streamer-1/viewer-session",
+      "http://localhost/play/streamer-1/viewer-session?mid=0",
     );
+  });
+
+  it("returns a WHEP counter-offer with 406", async () => {
+    const env = createBindings();
+    const liveTracks: StoredTrack[] = [
+      {
+        location: "remote",
+        mid: "0",
+        sessionId: "live-session",
+        trackName: "video",
+      },
+    ];
+
+    dbMocks.getLiveTrackRecord.mockResolvedValue({
+      sessionId: "live-session",
+      tracks: liveTracks,
+      userId: "streamer-1",
+    });
+    callsMocks.startPlay.mockResolvedValue({
+      sdpAnswer: "viewer-counter-offer-sdp",
+      sessionId: "viewer-session",
+      sdpType: "offer",
+      tracks: [
+        {
+          location: "remote",
+          mid: "0",
+          sessionId: "viewer-session",
+          trackName: "video",
+        },
+      ],
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/play/streamer-1", {
+        body: "viewer-offer",
+        headers: {
+          Cookie: await createAuthCookie(env),
+          "Content-Type": "application/sdp",
+        },
+        method: "POST",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(406);
+    expect(await response.text()).toBe("viewer-counter-offer-sdp");
+    expect(response.headers.get("location")).toBe(
+      "http://localhost/play/streamer-1/viewer-session?mid=0",
+    );
+    expect(response.headers.get("x-session-description-type")).toBeNull();
+  });
+
+  it("closes WHEP playback tracks on DELETE", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request("http://localhost/play/streamer-1/viewer-session?mid=0", {
+        headers: {
+          Cookie: await createAuthCookie(env),
+        },
+        method: "DELETE",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(callsMocks.closeTracks).toHaveBeenCalledWith(env, "viewer-session", [
+      {
+        location: "remote",
+        mid: "0",
+        sessionId: "viewer-session",
+        trackName: "0",
+      },
+    ]);
+  });
+
+  it("rejects WHEP playback DELETE without track mids", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request("http://localhost/play/streamer-1/viewer-session", {
+        headers: {
+          Cookie: await createAuthCookie(env),
+        },
+        method: "DELETE",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("WHEP session track mids are required");
+    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
   });
 
   it("returns 400 for an empty renegotiation SDP answer", async () => {
@@ -809,11 +938,11 @@ describe("worker app", () => {
     expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
   });
 
-  it("forwards the renegotiation status code from Calls", async () => {
+  it("returns 204 after successful WHEP renegotiation", async () => {
     const env = createBindings();
 
     callsMocks.renegotiateSession.mockResolvedValue(
-      new Response(null, { status: 204 }),
+      new Response(null, { status: 200 }),
     );
 
     const response = await app.fetch(

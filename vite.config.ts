@@ -1,7 +1,8 @@
 import { defineConfig, type PluginOption } from "vite";
 import { cloudflare } from "@cloudflare/vite-plugin";
+import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
-import react from "@vitejs/plugin-react";
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { visualizer } from "rollup-plugin-visualizer";
 
 const ReactCompilerConfig = {
@@ -12,9 +13,8 @@ export default defineConfig(({ mode }) => {
   const isAnalyzeMode = mode === "analyze";
   const plugins: PluginOption[] = [
     tailwindcss(),
-    react({
-      babel: { plugins: ["babel-plugin-react-compiler", ReactCompilerConfig] },
-    }),
+    react(),
+    babel({ presets: [reactCompilerPreset(ReactCompilerConfig)] }),
     cloudflare(),
   ];
 

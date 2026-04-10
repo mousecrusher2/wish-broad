@@ -4,10 +4,24 @@ export type WHEPConnectionStatus =
   | "connected"
   | "failed";
 
-type WHEPClientCallbacks = {
+type WHEPSessionCallbacks = {
   onStatusChange?: (status: WHEPConnectionStatus) => void;
   onStreamChange?: (hasStream: boolean) => void;
 };
+
+type WHEPSessionOptions = {
+  callbacks?: WHEPSessionCallbacks;
+  resourceUserId: string;
+  videoElement: HTMLVideoElement;
+};
+
+type ServerSessionState =
+  | { kind: "pending" }
+  | { kind: "registered"; location: string };
+
+type WhepSessionResponse =
+  | { kind: "accepted"; sdp: string; sessionUrl: URL }
+  | { kind: "counterOffer"; sdp: string; sessionUrl: URL };
 
 function assertUnreachableState(state: never): never {
   void state;
@@ -24,6 +38,45 @@ function normalizeError(error: unknown): Error {
 
 function createAbortError(): Error {
   return new Error("WHEP connection was aborted");
+}
+
+async function readSdpResponse(response: Response): Promise<string> {
+  const contentType = response.headers.get("content-type");
+  if (!contentType?.toLowerCase().startsWith("application/sdp")) {
+    throw new Error("Unexpected WHEP SDP response content type");
+  }
+
+  const sdp = await response.text();
+  if (sdp.trim().length === 0) {
+    throw new Error("Empty SDP response");
+  }
+
+  return sdp;
+}
+
+async function parseWhepSessionResponse(
+  response: Response,
+  resourceUrl: URL,
+): Promise<WhepSessionResponse> {
+  if (response.status !== 201 && response.status !== 406) {
+    throw new Error(
+      `Unexpected WHEP session response: ${String(response.status)}`,
+    );
+  }
+
+  const sessionLocation = response.headers.get("location");
+  if (!sessionLocation) {
+    throw new Error("Missing WHEP session location header");
+  }
+
+  const sessionUrl = new URL(sessionLocation, resourceUrl);
+  const sdp = await readSdpResponse(response);
+
+  if (response.status === 406) {
+    return { kind: "counterOffer", sdp, sessionUrl };
+  }
+
+  return { kind: "accepted", sdp, sessionUrl };
 }
 
 function isIceGatheringFinished(pc: RTCPeerConnection): boolean {
@@ -74,20 +127,47 @@ async function waitForIceGatheringComplete(
   });
 }
 
-export class WHEPClient {
-  private pc: RTCPeerConnection | null = null;
-  private remoteStream: MediaStream | null = null;
-  private status: WHEPConnectionStatus = "disconnected";
+export class WHEPSession {
+  private readonly abortController = new AbortController();
+  private readonly callbacks: WHEPSessionCallbacks;
+  private readonly eventListenerCleanups: Array<() => void> = [];
+  private readonly pc = new RTCPeerConnection({ bundlePolicy: "max-bundle" });
+  private readonly remoteStream = new MediaStream();
+  private readonly remoteTrackCleanups = new Map<
+    MediaStreamTrack,
+    () => void
+  >();
+  private readonly resourceUserId: string;
+  private readonly videoElement: HTMLVideoElement;
+  private cleanupPromise: Promise<void> | null = null;
+  private disposed = false;
   private hasStream = false;
-  private connectAbortController: AbortController | null = null;
-  private sessionLocation: string | null = null;
-  private eventListenerCleanups: Array<() => void> = [];
-  private remoteTrackCleanups = new Map<MediaStreamTrack, () => void>();
+  private localResourcesReleased = false;
+  private registrationPromise: Promise<WhepSessionResponse> | null = null;
+  private serverSession: ServerSessionState = { kind: "pending" };
+  private status: WHEPConnectionStatus = "disconnected";
 
-  constructor(
-    private readonly videoElement: HTMLVideoElement,
-    private readonly callbacks: WHEPClientCallbacks = {},
-  ) {}
+  constructor({
+    callbacks = {},
+    resourceUserId,
+    videoElement,
+  }: WHEPSessionOptions) {
+    const trimmedResourceUserId = resourceUserId.trim();
+    if (trimmedResourceUserId.length === 0) {
+      throw new Error("Resource user id is required");
+    }
+
+    this.callbacks = callbacks;
+    this.resourceUserId = trimmedResourceUserId;
+    this.videoElement = videoElement;
+    this.videoElement.srcObject = this.remoteStream;
+
+    this.attachConnectionListeners();
+    this.attachTrackListener();
+    this.attachMediaStreamListeners();
+    this.pc.addTransceiver("video", { direction: "recvonly" });
+    this.pc.addTransceiver("audio", { direction: "recvonly" });
+  }
 
   private setStatus(nextStatus: WHEPConnectionStatus): void {
     if (this.status === nextStatus) {
@@ -109,10 +189,9 @@ export class WHEPClient {
 
   private deriveIceConnectionStatus(
     state: RTCIceConnectionState,
-  ): WHEPConnectionStatus | null {
+  ): WHEPConnectionStatus {
     switch (state) {
       case "new":
-        return null;
       case "checking":
       case "disconnected":
         return "connecting";
@@ -128,18 +207,20 @@ export class WHEPClient {
     }
   }
 
-  private deriveConnectionStatus(pc: RTCPeerConnection): WHEPConnectionStatus {
-    const iceStatus = this.deriveIceConnectionStatus(pc.iceConnectionState);
+  private deriveConnectionStatus(): WHEPConnectionStatus {
+    const iceStatus = this.deriveIceConnectionStatus(
+      this.pc.iceConnectionState,
+    );
 
-    if (pc.signalingState === "closed" || iceStatus === "disconnected") {
+    if (this.pc.signalingState === "closed") {
       return "disconnected";
     }
 
-    if (pc.connectionState === "failed" || iceStatus === "failed") {
-      return "failed";
+    if (iceStatus === "failed" || iceStatus === "disconnected") {
+      return iceStatus;
     }
 
-    switch (pc.connectionState) {
+    switch (this.pc.connectionState) {
       case "new":
       case "connecting":
       case "disconnected":
@@ -155,16 +236,16 @@ export class WHEPClient {
       case "closed":
         return "disconnected";
       default:
-        return assertUnreachableState(pc.connectionState);
+        return assertUnreachableState(this.pc.connectionState);
     }
   }
 
-  private refreshConnectionStatus(pc: RTCPeerConnection): void {
-    if (this.pc !== pc) {
+  private refreshConnectionStatus(): void {
+    if (this.disposed) {
       return;
     }
 
-    const nextStatus = this.deriveConnectionStatus(pc);
+    const nextStatus = this.deriveConnectionStatus();
     this.setStatus(nextStatus);
 
     if (nextStatus === "failed" || nextStatus === "disconnected") {
@@ -176,13 +257,12 @@ export class WHEPClient {
   }
 
   private refreshStreamState(): void {
-    const remoteStream = this.remoteStream;
-    if (!remoteStream) {
+    if (this.disposed) {
       this.setStreamState(false);
       return;
     }
 
-    const hasLiveUnmutedTrack = remoteStream.getTracks().some((track) => {
+    const hasLiveUnmutedTrack = this.remoteStream.getTracks().some((track) => {
       return track.readyState === "live" && !track.muted;
     });
 
@@ -190,24 +270,22 @@ export class WHEPClient {
   }
 
   private addPeerConnectionListener<K extends keyof RTCPeerConnectionEventMap>(
-    pc: RTCPeerConnection,
     type: K,
     listener: (event: RTCPeerConnectionEventMap[K]) => void,
   ): void {
-    pc.addEventListener(type, listener);
+    this.pc.addEventListener(type, listener);
     this.eventListenerCleanups.push(() => {
-      pc.removeEventListener(type, listener);
+      this.pc.removeEventListener(type, listener);
     });
   }
 
   private addMediaStreamListener<K extends keyof MediaStreamEventMap>(
-    stream: MediaStream,
     type: K,
     listener: (event: MediaStreamEventMap[K]) => void,
   ): void {
-    stream.addEventListener(type, listener);
+    this.remoteStream.addEventListener(type, listener);
     this.eventListenerCleanups.push(() => {
-      stream.removeEventListener(type, listener);
+      this.remoteStream.removeEventListener(type, listener);
     });
   }
 
@@ -223,8 +301,8 @@ export class WHEPClient {
   }
 
   private cleanupEventListeners(): void {
-    const cleanups = this.eventListenerCleanups;
-    this.eventListenerCleanups = [];
+    const cleanups = [...this.eventListenerCleanups];
+    this.eventListenerCleanups.length = 0;
 
     for (const cleanup of cleanups) {
       cleanup();
@@ -233,27 +311,19 @@ export class WHEPClient {
     this.remoteTrackCleanups.clear();
   }
 
-  private attachConnectionListeners(pc: RTCPeerConnection): void {
+  private attachConnectionListeners(): void {
     const refreshStatus = () => {
-      this.refreshConnectionStatus(pc);
+      this.refreshConnectionStatus();
     };
 
-    this.addPeerConnectionListener(pc, "connectionstatechange", refreshStatus);
-    this.addPeerConnectionListener(
-      pc,
-      "iceconnectionstatechange",
-      refreshStatus,
-    );
-    this.addPeerConnectionListener(
-      pc,
-      "icegatheringstatechange",
-      refreshStatus,
-    );
-    this.addPeerConnectionListener(pc, "signalingstatechange", refreshStatus);
-    this.addPeerConnectionListener(pc, "icecandidate", refreshStatus);
-    this.addPeerConnectionListener(pc, "negotiationneeded", refreshStatus);
-    this.addPeerConnectionListener(pc, "icecandidateerror", (event) => {
-      if (this.pc !== pc) {
+    this.addPeerConnectionListener("connectionstatechange", refreshStatus);
+    this.addPeerConnectionListener("iceconnectionstatechange", refreshStatus);
+    this.addPeerConnectionListener("icegatheringstatechange", refreshStatus);
+    this.addPeerConnectionListener("signalingstatechange", refreshStatus);
+    this.addPeerConnectionListener("icecandidate", refreshStatus);
+    this.addPeerConnectionListener("negotiationneeded", refreshStatus);
+    this.addPeerConnectionListener("icecandidateerror", (event) => {
+      if (this.disposed) {
         return;
       }
 
@@ -266,13 +336,13 @@ export class WHEPClient {
     });
   }
 
-  private attachTrackListener(pc: RTCPeerConnection): void {
-    this.addPeerConnectionListener(pc, "track", (event) => {
-      if (this.pc !== pc || !this.remoteStream) {
+  private attachTrackListener(): void {
+    this.addPeerConnectionListener("track", (event) => {
+      if (this.disposed) {
         return;
       }
 
-      this.attachRemoteTrackListeners(event.track, this.remoteStream);
+      this.attachRemoteTrackListeners(event.track);
       this.remoteStream.addTrack(event.track);
 
       if (this.videoElement.srcObject !== this.remoteStream) {
@@ -286,18 +356,18 @@ export class WHEPClient {
     });
   }
 
-  private attachMediaStreamListeners(stream: MediaStream): void {
-    this.addMediaStreamListener(stream, "addtrack", (event) => {
-      if (this.remoteStream !== stream) {
+  private attachMediaStreamListeners(): void {
+    this.addMediaStreamListener("addtrack", (event) => {
+      if (this.disposed) {
         return;
       }
 
-      this.attachRemoteTrackListeners(event.track, stream);
+      this.attachRemoteTrackListeners(event.track);
       this.refreshStreamState();
     });
 
-    this.addMediaStreamListener(stream, "removetrack", (event) => {
-      if (this.remoteStream !== stream) {
+    this.addMediaStreamListener("removetrack", (event) => {
+      if (this.disposed) {
         return;
       }
 
@@ -306,30 +376,20 @@ export class WHEPClient {
     });
   }
 
-  private attachRemoteTrackListeners(
-    track: MediaStreamTrack,
-    stream: MediaStream,
-  ): void {
+  private attachRemoteTrackListeners(track: MediaStreamTrack): void {
     if (this.remoteTrackCleanups.has(track)) {
       return;
     }
 
     const cleanups = [
       this.addMediaStreamTrackListener(track, "mute", () => {
-        if (this.remoteStream === stream) {
-          this.refreshStreamState();
-        }
+        this.refreshStreamState();
       }),
       this.addMediaStreamTrackListener(track, "unmute", () => {
-        if (this.remoteStream === stream) {
-          this.refreshStreamState();
-        }
+        this.refreshStreamState();
       }),
       this.addMediaStreamTrackListener(track, "ended", () => {
-        if (this.remoteStream === stream) {
-          this.refreshStreamState();
-        }
-
+        this.refreshStreamState();
         this.cleanupRemoteTrack(track);
       }),
     ];
@@ -355,180 +415,162 @@ export class WHEPClient {
     this.remoteTrackCleanups.get(track)?.();
   }
 
-  async connect(resourceUserId: string): Promise<void> {
-    const trimmedResourceUserId = resourceUserId.trim();
-    if (trimmedResourceUserId.length === 0) {
-      throw new Error("Resource user id is required");
+  private releaseLocalResources(): void {
+    if (this.localResourcesReleased) {
+      return;
     }
 
-    await this.disconnect();
+    this.localResourcesReleased = true;
+    this.cleanupEventListeners();
+    this.pc.close();
 
-    const abortController = new AbortController();
-    this.connectAbortController = abortController;
-    this.setStatus("connecting");
-    this.setStreamState(false);
-
-    try {
-      const resourceUrl = new URL(
-        `/play/${encodeURIComponent(trimmedResourceUserId)}`,
-        window.location.origin,
-      );
-
-      const pc = new RTCPeerConnection({
-        bundlePolicy: "max-bundle",
-      });
-      this.pc = pc;
-      this.remoteStream = new MediaStream();
-      this.videoElement.srcObject = this.remoteStream;
-
-      this.attachConnectionListeners(pc);
-      this.attachTrackListener(pc);
-      this.attachMediaStreamListeners(this.remoteStream);
-
-      pc.addTransceiver("video", { direction: "recvonly" });
-      pc.addTransceiver("audio", { direction: "recvonly" });
-
-      const localOffer = await pc.createOffer();
-      await pc.setLocalDescription(localOffer);
-      await waitForIceGatheringComplete(pc, abortController.signal);
-
-      const localOfferSdp = pc.localDescription?.sdp;
-      if (!localOfferSdp) {
-        throw new Error("Failed to create local SDP offer");
-      }
-
-      const offerResponse = await fetch(resourceUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/sdp",
-        },
-        body: localOfferSdp,
-        signal: abortController.signal,
-      });
-      if (!offerResponse.ok) {
-        throw new Error(
-          `Failed to create play session: ${String(offerResponse.status)}`,
-        );
-      }
-
-      const sessionLocation = offerResponse.headers.get("location");
-      if (!sessionLocation) {
-        throw new Error("Missing session location header");
-      }
-      this.sessionLocation = sessionLocation;
-
-      const remoteOfferSdp = await offerResponse.text();
-      if (remoteOfferSdp.trim().length === 0) {
-        throw new Error("Empty SDP response");
-      }
-
-      const sessionDescriptionTypeHeader = offerResponse.headers.get(
-        "x-session-description-type",
-      );
-      const sessionDescriptionType =
-        sessionDescriptionTypeHeader?.toLowerCase() === "offer"
-          ? "offer"
-          : "answer";
-
-      if (sessionDescriptionType === "answer") {
-        await pc.setRemoteDescription(
-          new RTCSessionDescription({
-            type: "answer",
-            sdp: remoteOfferSdp,
-          }),
-        );
-      } else {
-        await pc.setLocalDescription({ type: "rollback" });
-        await pc.setRemoteDescription(
-          new RTCSessionDescription({
-            type: "offer",
-            sdp: remoteOfferSdp,
-          }),
-        );
-
-        const localAnswer = await pc.createAnswer();
-        await pc.setLocalDescription(localAnswer);
-        await waitForIceGatheringComplete(pc, abortController.signal);
-
-        const localAnswerSdp = pc.localDescription.sdp;
-        if (!localAnswerSdp) {
-          throw new Error("Failed to create local SDP answer");
-        }
-
-        const sessionUrl = new URL(resourceUrl);
-        sessionUrl.pathname = sessionLocation;
-
-        const patchResponse = await fetch(sessionUrl, {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/sdp",
-          },
-          body: localAnswerSdp,
-          signal: abortController.signal,
-        });
-        if (!patchResponse.ok) {
-          throw new Error(
-            `Failed to submit SDP answer: ${String(patchResponse.status)}`,
-          );
-        }
-      }
-    } catch (error) {
-      if (abortController.signal.aborted) {
-        return;
-      }
-
-      await this.disconnect({ notifyServer: false });
-      this.setStatus("failed");
-      throw normalizeError(error);
-    } finally {
-      if (this.connectAbortController === abortController) {
-        this.connectAbortController = null;
-      }
-    }
-  }
-
-  async disconnect(options?: { notifyServer?: boolean }): Promise<void> {
-    const notifyServer = options?.notifyServer ?? true;
-
-    if (this.connectAbortController) {
-      this.connectAbortController.abort();
-      this.connectAbortController = null;
-    }
-
-    const currentSessionLocation = this.sessionLocation;
-    this.sessionLocation = null;
-
-    if (notifyServer && currentSessionLocation) {
-      const sessionUrl = new URL(
-        currentSessionLocation,
-        window.location.origin,
-      );
-      try {
-        await fetch(sessionUrl, { method: "DELETE" });
-      } catch (error) {
-        console.warn("Failed to close WHEP session:", error);
-      }
-    }
-
-    if (this.pc) {
-      this.cleanupEventListeners();
-      this.pc.close();
-      this.pc = null;
-    }
-
-    if (this.remoteStream) {
-      this.remoteStream.getTracks().forEach((track) => {
-        track.stop();
-      });
-      this.remoteStream = null;
-    }
+    this.remoteStream.getTracks().forEach((track) => {
+      track.stop();
+    });
 
     this.videoElement.srcObject = null;
     this.setStreamState(false);
     this.setStatus("disconnected");
   }
 
-  async dispose(): Promise<void> {
-    await this.disconnect();
+  private async deleteRegisteredSession(): Promise<void> {
+    if (this.serverSession.kind !== "registered") {
+      return;
+    }
+
+    const sessionUrl = new URL(
+      this.serverSession.location,
+      window.location.origin,
+    );
+    try {
+      await fetch(sessionUrl, { method: "DELETE" });
+    } catch (error) {
+      console.warn("Failed to close WHEP session:", error);
+    }
+  }
+
+  private async cleanupServerSession(): Promise<void> {
+    const registrationResult = this.registrationPromise
+      ? await this.registrationPromise.catch(() => null)
+      : null;
+
+    if (
+      this.serverSession.kind !== "registered" &&
+      registrationResult !== null
+    ) {
+      this.serverSession = {
+        kind: "registered",
+        location: registrationResult.sessionUrl.toString(),
+      };
+    }
+
+    await this.deleteRegisteredSession();
+  }
+
+  async start(): Promise<void> {
+    this.setStatus("connecting");
+    this.setStreamState(false);
+
+    try {
+      const resourceUrl = new URL(
+        `/play/${encodeURIComponent(this.resourceUserId)}`,
+        window.location.origin,
+      );
+
+      const localOffer = await this.pc.createOffer();
+      await this.pc.setLocalDescription(localOffer);
+      await waitForIceGatheringComplete(this.pc, this.abortController.signal);
+
+      const localOfferSdp = this.pc.localDescription?.sdp;
+      if (!localOfferSdp) {
+        throw new Error("Failed to create local SDP offer");
+      }
+
+      this.registrationPromise = fetch(resourceUrl, {
+        method: "POST",
+        headers: {
+          Accept: "application/sdp",
+          "Content-Type": "application/sdp",
+        },
+        body: localOfferSdp,
+      }).then((offerResponse) =>
+        parseWhepSessionResponse(offerResponse, resourceUrl),
+      );
+      const sessionResponse = await this.registrationPromise;
+      this.serverSession = {
+        kind: "registered",
+        location: sessionResponse.sessionUrl.toString(),
+      };
+
+      if (this.disposed) {
+        return;
+      }
+
+      if (sessionResponse.kind === "accepted") {
+        await this.pc.setRemoteDescription(
+          new RTCSessionDescription({
+            type: "answer",
+            sdp: sessionResponse.sdp,
+          }),
+        );
+      } else {
+        await this.pc.setLocalDescription({ type: "rollback" });
+        await this.pc.setRemoteDescription(
+          new RTCSessionDescription({
+            type: "offer",
+            sdp: sessionResponse.sdp,
+          }),
+        );
+
+        const localAnswer = await this.pc.createAnswer();
+        await this.pc.setLocalDescription(localAnswer);
+        await waitForIceGatheringComplete(this.pc, this.abortController.signal);
+
+        const localAnswerSdp = this.pc.localDescription.sdp;
+        if (!localAnswerSdp) {
+          throw new Error("Failed to create local SDP answer");
+        }
+
+        const patchResponse = await fetch(sessionResponse.sessionUrl, {
+          method: "PATCH",
+          headers: {
+            Accept: "application/sdp",
+            "Content-Type": "application/sdp",
+          },
+          body: localAnswerSdp,
+          signal: this.abortController.signal,
+        });
+        if (patchResponse.status !== 204) {
+          throw new Error(
+            `Unexpected WHEP answer response: ${String(patchResponse.status)}`,
+          );
+        }
+      }
+    } catch (error) {
+      if (this.abortController.signal.aborted || this.disposed) {
+        return;
+      }
+
+      await this.dispose({ notifyServer: true });
+      this.setStatus("failed");
+      throw normalizeError(error);
+    }
+  }
+
+  async dispose(options?: { notifyServer?: boolean }): Promise<void> {
+    const notifyServer = options?.notifyServer ?? true;
+
+    if (this.cleanupPromise) {
+      await this.cleanupPromise;
+      return;
+    }
+
+    this.disposed = true;
+    this.abortController.abort();
+    this.releaseLocalResources();
+    this.cleanupPromise = notifyServer
+      ? this.cleanupServerSession()
+      : Promise.resolve();
+    await this.cleanupPromise;
   }
 }

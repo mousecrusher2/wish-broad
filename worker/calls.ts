@@ -327,18 +327,44 @@ export async function startIngest(
     sessionResult.sessionId,
     sdpOffer,
   );
+  const ingestEndpoint = getEndpoint(
+    env,
+    `/sessions/${sessionResult.sessionId}/tracks/new`,
+  );
+  const responseTracks = tracksResult.tracks;
+  const sdpAnswer = tracksResult.sessionDescription?.sdp;
+
+  if (!responseTracks || responseTracks.length === 0 || !sdpAnswer) {
+    throw new CallsApiError(
+      502,
+      "Calls response did not include ingest tracks or SDP",
+      ingestEndpoint,
+      tracksResult,
+    );
+  }
 
   // トラック情報を整理
-  const tracks = tracksResult.tracks.map((track) => ({
-    location: "remote" as const,
-    sessionId: sessionResult.sessionId,
-    trackName: track.trackName,
-    mid: track.mid,
-  }));
+  const tracks = responseTracks.map((track) => {
+    if (!track.mid) {
+      throw new CallsApiError(
+        502,
+        "Calls response did not include track MID",
+        ingestEndpoint,
+        tracksResult,
+      );
+    }
+
+    return {
+      location: "remote" as const,
+      sessionId: sessionResult.sessionId,
+      trackName: track.trackName,
+      mid: track.mid,
+    };
+  });
 
   return {
     sessionId: sessionResult.sessionId,
-    sdpAnswer: tracksResult.sessionDescription.sdp,
+    sdpAnswer,
     tracks,
   };
 }
@@ -355,6 +381,7 @@ export async function startPlay(
   sessionId: string;
   sdpAnswer: string;
   sdpType: "answer" | "offer";
+  tracks: StoredTrack[];
 }> {
   if (tracks.length === 0) {
     throw new LiveNotFoundError(liveId);
@@ -372,10 +399,19 @@ export async function startPlay(
   );
   const sdpAnswer = tracksResult.sessionDescription?.sdp;
   const sdpType = tracksResult.sessionDescription?.type;
+  const responseTracks = tracksResult.tracks;
   if (!sdpAnswer) {
     throw new CallsApiError(
       502,
       "Calls response did not include SDP for playback",
+      getEndpoint(env, `/sessions/${sessionResult.sessionId}/tracks/new`),
+      tracksResult,
+    );
+  }
+  if (!responseTracks || responseTracks.length === 0) {
+    throw new CallsApiError(
+      502,
+      "Calls response did not include playback tracks",
       getEndpoint(env, `/sessions/${sessionResult.sessionId}/tracks/new`),
       tracksResult,
     );
@@ -388,9 +424,29 @@ export async function startPlay(
       tracksResult,
     );
   }
+
+  const playbackTracks = responseTracks.map((track) => {
+    if (!track.mid) {
+      throw new CallsApiError(
+        502,
+        "Calls response did not include playback track MID",
+        getEndpoint(env, `/sessions/${sessionResult.sessionId}/tracks/new`),
+        tracksResult,
+      );
+    }
+
+    return {
+      location: "remote" as const,
+      mid: track.mid,
+      sessionId: sessionResult.sessionId,
+      trackName: track.trackName,
+    };
+  });
+
   return {
     sessionId: sessionResult.sessionId,
     sdpAnswer,
     sdpType,
+    tracks: playbackTracks,
   };
 }

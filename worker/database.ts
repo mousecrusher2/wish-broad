@@ -100,7 +100,7 @@ export async function getLiveToken(
     .bind(userId)
     .first();
 
-  return result ? (result.token as string) : null;
+  return result ? (result["token"] as string) : null;
 }
 
 export async function hasLiveToken(
@@ -138,8 +138,8 @@ export async function getUser(
   }
 
   return {
-    userId: result.user_id as string,
-    displayName: result.display_name as string,
+    userId: result["user_id"] as string,
+    displayName: result["display_name"] as string,
   };
 }
 
@@ -152,8 +152,8 @@ export async function getAllLives(database: D1Database): Promise<Live[]> {
 
   return results.results.map((row) => ({
     owner: {
-      userId: row.user_id as string,
-      displayName: row.display_name as string,
+      userId: row["user_id"] as string,
+      displayName: row["display_name"] as string,
     },
   }));
 }

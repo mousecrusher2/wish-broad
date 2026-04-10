@@ -4,18 +4,18 @@ export type NewSessionResponse = {
 
 export type NewTrackResponse = {
   trackName: string;
-  mid?: string;
-  sessionId?: string;
-  errorCode?: string;
-  errorDescription?: string;
+  mid?: string | undefined;
+  sessionId?: string | undefined;
+  errorCode?: string | undefined;
+  errorDescription?: string | undefined;
 };
 
 export type NewTracksResponse = {
-  errorCode?: string;
-  errorDescription?: string;
-  requiresImmediateRenegotiation?: boolean;
-  tracks?: NewTrackResponse[];
-  sessionDescription?: SessionDescription;
+  errorCode?: string | undefined;
+  errorDescription?: string | undefined;
+  requiresImmediateRenegotiation?: boolean | undefined;
+  tracks?: NewTrackResponse[] | undefined;
+  sessionDescription?: SessionDescription | undefined;
 };
 
 export type SessionDescription = {
@@ -35,18 +35,18 @@ export type StoredTrack = TrackLocator & {
 
 export type CloseTrackResult = {
   mid: string;
-  errorCode?: string;
-  errorDescription?: string;
-  sessionId?: string;
-  trackName?: string;
+  errorCode?: string | undefined;
+  errorDescription?: string | undefined;
+  sessionId?: string | undefined;
+  trackName?: string | undefined;
 };
 
 export type CloseTracksResponse = {
-  errorCode?: string;
-  errorDescription?: string;
-  requiresImmediateRenegotiation?: boolean;
-  sessionDescription?: SessionDescription;
-  tracks?: CloseTrackResult[];
+  errorCode?: string | undefined;
+  errorDescription?: string | undefined;
+  requiresImmediateRenegotiation?: boolean | undefined;
+  sessionDescription?: SessionDescription | undefined;
+  tracks?: CloseTrackResult[] | undefined;
 };
 
 export type JWTPayload = {
@@ -63,20 +63,20 @@ export type Bindings = {
   DISCORD_CLIENT_ID: string;
   DISCORD_CLIENT_SECRET: string;
   AUTHORIZED_GUILD_ID: string;
-  ENVIRONMENT?: string; // "development" | "production"
+  ENVIRONMENT?: string | undefined; // "development" | "production"
   LIVE_DB: D1Database;
 };
 
 export type DiscordUser = {
   id: string;
   username: string;
-  discriminator?: string | null;
-  global_name?: string | null;
+  discriminator?: string | null | undefined;
+  global_name?: string | null | undefined;
 };
 
 export type DiscordGuildMember = {
   user: DiscordUser;
-  nick?: string | null;
+  nick?: string | null | undefined;
 };
 
 export type DiscordOAuthToken = {
@@ -84,7 +84,7 @@ export type DiscordOAuthToken = {
   tokenType: string;
   expiresIn: number;
   scope: string;
-  refreshToken?: string;
+  refreshToken?: string | undefined;
 };
 
 export type User = {
