@@ -6,11 +6,12 @@ import type {
   DiscordOAuthToken,
   StoredTrack,
 } from "./types";
+import { hashTokenWithPepper } from "./token-hash";
 
 const dbMocks = vi.hoisted(() => ({
   deleteTracksForSession: vi.fn<() => Promise<boolean>>(),
   getAllLives: vi.fn<() => Promise<unknown[]>>(),
-  getLiveToken: vi.fn<() => Promise<string | null>>(),
+  getLiveTokenHash: vi.fn<() => Promise<string | null>>(),
   getLiveTrackRecord: vi.fn<
     () => Promise<{
       userId: string;
@@ -150,6 +151,7 @@ function createBindings(): Bindings {
     ENVIRONMENT: "test",
     JWT_SECRET: "test-jwt-secret",
     LIVE_DB: {} as D1Database,
+    LIVE_TOKEN_PEPPER: "test-live-token-pepper",
   };
 }
 
@@ -176,7 +178,7 @@ async function createAuthCookie(
 }
 
 describe("worker app", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -184,7 +186,9 @@ describe("worker app", () => {
 
     dbMocks.deleteTracksForSession.mockResolvedValue(true);
     dbMocks.getAllLives.mockResolvedValue([]);
-    dbMocks.getLiveToken.mockResolvedValue("live-token");
+    dbMocks.getLiveTokenHash.mockResolvedValue(
+      await hashTokenWithPepper("test-live-token-pepper", "live-token"),
+    );
     dbMocks.getLiveTrackRecord.mockResolvedValue(null);
     dbMocks.getTracks.mockResolvedValue([]);
     dbMocks.getUser.mockResolvedValue(null);
@@ -388,11 +392,36 @@ describe("worker app", () => {
 
     expect(body.success).toBe(true);
     expect(body.token).toMatch(/^[0-9a-f]{64}$/u);
+    const expectedTokenHash = await hashTokenWithPepper(
+      env.LIVE_TOKEN_PEPPER,
+      body.token,
+    );
     expect(dbMocks.setLiveToken).toHaveBeenCalledWith(
       env.LIVE_DB,
       "user-1",
-      body.token,
+      expectedTokenHash,
     );
+  });
+
+  it("rejects ingest when the bearer token does not match the stored hash", async () => {
+    const env = createBindings();
+
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1", {
+        body: "offer-sdp",
+        headers: {
+          Authorization: "Bearer wrong-token",
+          "Content-Type": "application/sdp",
+        },
+        method: "POST",
+      }),
+      env,
+      createExecutionContext(),
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe("Unauthorized");
+    expect(callsMocks.startIngest).not.toHaveBeenCalled();
   });
 
   it("starts ingest after removing a stale live row", async () => {

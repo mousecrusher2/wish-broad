@@ -81,26 +81,26 @@ export async function deleteTracksForSession(
 export async function setLiveToken(
   database: D1Database,
   userId: string,
-  token: string,
+  tokenHash: string,
 ): Promise<void> {
   await database
     .prepare(
-      "INSERT OR REPLACE INTO live_tokens (user_id, token) VALUES (?, ?)",
+      "INSERT OR REPLACE INTO live_tokens (user_id, token_hash) VALUES (?, ?)",
     )
-    .bind(userId, token)
+    .bind(userId, tokenHash)
     .run();
 }
 
-export async function getLiveToken(
+export async function getLiveTokenHash(
   database: D1Database,
   userId: string,
 ): Promise<string | null> {
   const result = await database
-    .prepare("SELECT token FROM live_tokens WHERE user_id = ?")
+    .prepare("SELECT token_hash FROM live_tokens WHERE user_id = ?")
     .bind(userId)
     .first();
 
-  return result ? (result["token"] as string) : null;
+  return result ? (result["token_hash"] as string) : null;
 }
 
 export async function hasLiveToken(

@@ -15,10 +15,12 @@ import {
   startPlay,
   LiveNotFoundError,
 } from "./calls";
+import { createLiveToken } from "./live-token";
+import { hashedBearerAuth } from "./hashed-bearer-auth";
 import { logger } from "hono/logger";
-import { bearerAuth } from "hono/bearer-auth";
 import { HTTPException } from "hono/http-exception";
 import { jwt } from "hono/jwt";
+import { hashTokenWithPepper } from "./token-hash";
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -144,17 +146,16 @@ app.onError((err, c) => {
 app.use(logger());
 
 // 配信取り込み用エンドポイントの認証ミドルウェア
-app.use("/ingest/:userId/*", async (c, next) => {
-  const { userId } = c.req.param();
-
-  // userIdでデータベースからトークンを取得
-  const expectedToken = await db.getLiveToken(c.env.LIVE_DB, userId);
-  if (!expectedToken) {
-    return c.text("No token found for this user ID", 401);
-  }
-
-  return runMiddleware(bearerAuth({ token: expectedToken }), c, next);
-});
+app.use(
+  "/ingest/:userId/*",
+  hashedBearerAuth<{ Bindings: Bindings }, "/ingest/:userId/*">({
+    pepper: (c) => c.env.LIVE_TOKEN_PEPPER,
+    token: (c) => {
+      const { userId } = c.req.param();
+      return db.getLiveTokenHash(c.env.LIVE_DB, userId);
+    },
+  }),
+);
 
 app.get("/ingest/:userId", async () => {
   return createEmptySuccessResponse();
@@ -479,18 +480,15 @@ app.get("/api/me", async (c) => {
 // トークンは作成時にのみ表示される
 app.post("/api/me/livetoken", async (c) => {
   const jwtPayload = c.get("jwtPayload") as JWTPayload;
-  const userId = jwtPayload.userId; // ランダムなトークンを生成（32バイト）
-  const randomBytes = new Uint8Array(32);
-  crypto.getRandomValues(randomBytes);
-  const token = Array.from(randomBytes, (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
+  const userId = jwtPayload.userId;
+  const token = createLiveToken();
   try {
+    const tokenHash = await hashTokenWithPepper(c.env.LIVE_TOKEN_PEPPER, token);
     // データベースに保存（既存があれば上書き）
-    await db.setLiveToken(c.env.LIVE_DB, userId, token);
+    await db.setLiveToken(c.env.LIVE_DB, userId, tokenHash);
     return c.json({
       success: true,
-      token: token,
+      token,
     });
   } catch (error) {
     console.error("Failed to save live token:", error);
