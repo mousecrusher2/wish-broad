@@ -4,6 +4,7 @@ import {
   WHEPSession,
   WHEPSessionError,
   type WHEPConnectionStatus,
+  type WHEPSessionSnapshot,
 } from "./WHEPClient";
 import {
   createRetryResolutionState,
@@ -61,6 +62,10 @@ type PendingAttempt = {
 };
 
 const POST_CONNECT_RECONNECT_GRACE_MS = 3_000;
+const DISCONNECTED_RECONNECT_GRACE_MS = 3_000;
+const NO_STREAM_RECONNECT_GRACE_MS = 3_000;
+const FROZEN_PLAYBACK_RECONNECT_GRACE_MS = 6_000;
+const SESSION_HEALTH_CHECK_INTERVAL_MS = 2_000;
 
 function noop(): void {}
 
@@ -172,6 +177,12 @@ export function WHEPVideoPlayer({
   const attemptStartedAtRef = useRef<number | null>(null);
   const initialLoadTokenRef = useRef(0);
   const pendingAttemptRef = useRef<PendingAttempt | null>(null);
+  const disconnectedReconnectTimerRef = useRef<number | null>(null);
+  const frozenPlaybackStateRef = useRef<{
+    lastCurrentTime: number;
+    lastProgressAt: number;
+    noStreamSinceAt: number | null;
+  } | null>(null);
   const postConnectReconnectTimerRef = useRef<number | null>(null);
   const retryStateRef = useRef<RetryState | null>(null);
   const retryScheduledAtRef = useRef<number | null>(null);
@@ -204,6 +215,20 @@ export function WHEPVideoPlayer({
     postConnectReconnectTimerRef.current = null;
   }, []);
 
+  const clearDisconnectedReconnectTimer = useCallback(() => {
+    const disconnectedTimerId = disconnectedReconnectTimerRef.current;
+    if (disconnectedTimerId === null) {
+      return;
+    }
+
+    window.clearTimeout(disconnectedTimerId);
+    disconnectedReconnectTimerRef.current = null;
+  }, []);
+
+  const clearFrozenPlaybackState = useCallback(() => {
+    frozenPlaybackStateRef.current = null;
+  }, []);
+
   const clearRetryTimer = useCallback(() => {
     const retryTimerId = retryTimerRef.current;
     retryScheduledAtRef.current = null;
@@ -227,6 +252,8 @@ export function WHEPVideoPlayer({
   const stopPlayback = useCallback(
     (options?: { resetState?: boolean }) => {
       clearPostConnectReconnectTimer();
+      clearDisconnectedReconnectTimer();
+      clearFrozenPlaybackState();
       clearRetryTimer();
       attemptStartedAtRef.current = null;
       pendingAttemptRef.current = null;
@@ -241,7 +268,13 @@ export function WHEPVideoPlayer({
 
       setPlaybackState(createIdlePlaybackState());
     },
-    [clearPostConnectReconnectTimer, clearRetryTimer, replaceSession],
+    [
+      clearDisconnectedReconnectTimer,
+      clearFrozenPlaybackState,
+      clearPostConnectReconnectTimer,
+      clearRetryTimer,
+      replaceSession,
+    ],
   );
 
   const finalizePlayback = useCallback(
@@ -311,7 +344,13 @@ export function WHEPVideoPlayer({
         attemptCount: retryState.attemptCount + 1,
       };
 
-      void startPlaybackAttemptRef.current?.(resourceUserId, "retry");
+      const startPlaybackAttempt = startPlaybackAttemptRef.current;
+      if (!startPlaybackAttempt) {
+        retryAttemptInFlightRef.current = false;
+        return;
+      }
+
+      void startPlaybackAttempt(resourceUserId, "retry");
     },
     [clearRetryTimer, finalizePlayback],
   );
@@ -449,6 +488,125 @@ export function WHEPVideoPlayer({
     [scheduleReconnect],
   );
 
+  const armDisconnectedReconnect = useCallback(
+    (
+      resourceUserId: string,
+      session: WHEPSession,
+      sessionAttemptId: number,
+    ) => {
+      if (targetResourceRef.current !== resourceUserId) {
+        return;
+      }
+
+      if (
+        disconnectedReconnectTimerRef.current !== null ||
+        retryAttemptInFlightRef.current ||
+        retryStateRef.current !== null
+      ) {
+        return;
+      }
+
+      disconnectedReconnectTimerRef.current = window.setTimeout(() => {
+        disconnectedReconnectTimerRef.current = null;
+        if (
+          attemptIdRef.current !== sessionAttemptId ||
+          targetResourceRef.current !== resourceUserId ||
+          sessionRef.current !== session
+        ) {
+          return;
+        }
+
+        if (session.getSnapshot().status !== "disconnected") {
+          return;
+        }
+
+        attemptIdRef.current += 1;
+        sessionRef.current = null;
+        void session.dispose({ notifyServer: true });
+        scheduleReconnect(resourceUserId, "transient", { immediate: true });
+      }, DISCONNECTED_RECONNECT_GRACE_MS);
+    },
+    [scheduleReconnect],
+  );
+
+  const shouldReconnectForFrozenPlayback = useCallback(
+    (snapshot: WHEPSessionSnapshot): boolean => {
+      if (!videoElement) {
+        clearFrozenPlaybackState();
+        return false;
+      }
+
+      if (
+        snapshot.status !== "connected" ||
+        videoElement.ended ||
+        document.visibilityState !== "visible"
+      ) {
+        clearFrozenPlaybackState();
+        return false;
+      }
+
+      const now = Date.now();
+      const currentTime = videoElement.currentTime;
+      const state = frozenPlaybackStateRef.current;
+      if (!state) {
+        frozenPlaybackStateRef.current = {
+          lastCurrentTime: currentTime,
+          lastProgressAt: now,
+          noStreamSinceAt: snapshot.hasStream ? null : now,
+        };
+        return false;
+      }
+
+      if (!snapshot.hasStream) {
+        const noStreamSinceAt = state.noStreamSinceAt ?? now;
+        frozenPlaybackStateRef.current = {
+          ...state,
+          lastCurrentTime: currentTime,
+          noStreamSinceAt,
+        };
+        return now - noStreamSinceAt >= NO_STREAM_RECONNECT_GRACE_MS;
+      }
+
+      if (state.noStreamSinceAt !== null) {
+        frozenPlaybackStateRef.current = {
+          lastCurrentTime: currentTime,
+          lastProgressAt: now,
+          noStreamSinceAt: null,
+        };
+        return false;
+      }
+
+      if (
+        videoElement.paused &&
+        videoElement.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA
+      ) {
+        frozenPlaybackStateRef.current = {
+          lastCurrentTime: currentTime,
+          lastProgressAt: now,
+          noStreamSinceAt: null,
+        };
+        return false;
+      }
+
+      if (currentTime > state.lastCurrentTime + 0.01) {
+        frozenPlaybackStateRef.current = {
+          lastCurrentTime: currentTime,
+          lastProgressAt: now,
+          noStreamSinceAt: null,
+        };
+        return false;
+      }
+
+      frozenPlaybackStateRef.current = {
+        ...state,
+        lastCurrentTime: currentTime,
+        noStreamSinceAt: null,
+      };
+      return now - state.lastProgressAt >= FROZEN_PLAYBACK_RECONNECT_GRACE_MS;
+    },
+    [clearFrozenPlaybackState, videoElement],
+  );
+
   const handleAttemptFailure = useCallback(
     (resourceUserId: string, mode: "initial" | "retry", error: Error) => {
       if (targetResourceRef.current !== resourceUserId) {
@@ -462,7 +620,7 @@ export function WHEPVideoPlayer({
           normalizedError instanceof WHEPSessionError &&
           normalizedError.statusCode === 404
         ) {
-          finalizePlayback("ended", resourceUserId);
+          scheduleReconnect(resourceUserId, "notFound", { immediate: true });
           return;
         }
 
@@ -533,6 +691,8 @@ export function WHEPVideoPlayer({
 
             if (status === "connected") {
               startupPending = false;
+              clearDisconnectedReconnectTimer();
+              clearFrozenPlaybackState();
               clearPostConnectReconnectTimer();
               clearRetryTimer();
               attemptStartedAtRef.current = null;
@@ -549,6 +709,8 @@ export function WHEPVideoPlayer({
             }
 
             if (status === "connecting") {
+              clearDisconnectedReconnectTimer();
+              clearFrozenPlaybackState();
               if (!startupPending) {
                 armPostConnectReconnect(
                   resourceUserId,
@@ -575,6 +737,22 @@ export function WHEPVideoPlayer({
               return;
             }
 
+            if (status === "disconnected") {
+              clearPostConnectReconnectTimer();
+              clearFrozenPlaybackState();
+              setPlaybackState((currentPlaybackState) => ({
+                ...currentPlaybackState,
+                connectionStatus: "disconnected",
+                hasStream: false,
+                message: getPhaseMessage("reconnecting"),
+                phase: "reconnecting",
+              }));
+              armDisconnectedReconnect(resourceUserId, session, sessionAttemptId);
+              return;
+            }
+
+            clearDisconnectedReconnectTimer();
+            clearFrozenPlaybackState();
             clearPostConnectReconnectTimer();
             setPlaybackState((currentPlaybackState) => ({
               ...currentPlaybackState,
@@ -633,7 +811,10 @@ export function WHEPVideoPlayer({
       }
     },
     [
+      armDisconnectedReconnect,
       armPostConnectReconnect,
+      clearDisconnectedReconnectTimer,
+      clearFrozenPlaybackState,
       clearPostConnectReconnectTimer,
       clearRetryTimer,
       handleAttemptFailure,
@@ -682,7 +863,8 @@ export function WHEPVideoPlayer({
     [clearPostConnectReconnectTimer, clearRetryTimer, startPlaybackAttempt],
   );
 
-  const handleResume = useCallback(() => {
+  const handleResume = useCallback((options?: { allowConnectingTimeout?: boolean }) => {
+    const allowConnectingTimeout = options?.allowConnectingTimeout ?? true;
     const resourceUserId = targetResourceRef.current;
     if (!resourceUserId) {
       return;
@@ -722,27 +904,42 @@ export function WHEPVideoPlayer({
     }
 
     const snapshot = session.getSnapshot();
+    if (
+      snapshot.status === "disconnected" &&
+      disconnectedReconnectTimerRef.current !== null
+    ) {
+      return;
+    }
+
+    if (shouldReconnectForFrozenPlayback(snapshot)) {
+      attemptIdRef.current += 1;
+      sessionRef.current = null;
+      void session.dispose({ notifyServer: true });
+      scheduleReconnect(resourceUserId, "transient", { immediate: true });
+      return;
+    }
+
     if (snapshot.status === "connecting" && snapshot.expectedRemoteTrackCount > 0) {
       armPostConnectReconnect(resourceUserId, session, attemptIdRef.current);
       return;
     }
 
-    if (
-      shouldReconnectOnResume(snapshot, {
-        connectingStartedAt: attemptStartedAtRef.current,
-      })
-    ) {
+    const reconnectOptions = allowConnectingTimeout
+      ? { connectingStartedAt: attemptStartedAtRef.current }
+      : undefined;
+    if (shouldReconnectOnResume(snapshot, reconnectOptions)) {
       attemptIdRef.current += 1;
       sessionRef.current = null;
       void session.dispose({ notifyServer: true });
       scheduleReconnect(resourceUserId, "transient", { immediate: true });
     }
   }, [
-    armPostConnectReconnect,
-    finalizePlayback,
-    scheduleReconnect,
-    startRetryAttempt,
-  ]);
+      armPostConnectReconnect,
+      finalizePlayback,
+      scheduleReconnect,
+      shouldReconnectForFrozenPlayback,
+      startRetryAttempt,
+    ]);
 
   useEffect(() => {
     onHandlersChange?.({ load, disconnect });
@@ -785,17 +982,36 @@ export function WHEPVideoPlayer({
         handleResume();
       }
     };
+    const handlePageShow = () => {
+      handleResume();
+    };
+    const handleFocus = () => {
+      handleResume();
+    };
+    const handleOnline = () => {
+      handleResume();
+    };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("pageshow", handleResume);
-    window.addEventListener("focus", handleResume);
-    window.addEventListener("online", handleResume);
+    window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("online", handleOnline);
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("pageshow", handleResume);
-      window.removeEventListener("focus", handleResume);
-      window.removeEventListener("online", handleResume);
+      window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [handleResume]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      handleResume({ allowConnectingTimeout: false });
+    }, SESSION_HEALTH_CHECK_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
     };
   }, [handleResume]);
 

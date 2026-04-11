@@ -4,6 +4,7 @@ import type { WHEPPlaybackPhase } from "../player/WHEPVideoPlayer";
 interface ConnectionControlsProps {
   connectionPhase: WHEPPlaybackPhase;
   connectionStatus: WHEPConnectionStatus;
+  hasStream: boolean;
   hasResource: boolean;
   onReconnect: () => void;
   onDisconnect: () => void;
@@ -18,6 +19,7 @@ function assertUnreachableStatus(status: never): never {
 export function ConnectionControls({
   connectionPhase,
   connectionStatus,
+  hasStream,
   hasResource,
   onReconnect,
   onDisconnect,
@@ -74,7 +76,9 @@ export function ConnectionControls({
       case "connecting":
         return "接続中...";
       case "connected":
-        return "接続済み";
+        return connectionPhase === "connected" && !hasStream
+          ? "接続済み（映像待機中）"
+          : "接続済み";
       case "failed":
         return "接続失敗";
     }
@@ -86,7 +90,8 @@ export function ConnectionControls({
     hasResource &&
     (connectionPhase === "idle" ||
       connectionPhase === "ended" ||
-      connectionPhase === "error");
+      connectionPhase === "error" ||
+      (connectionPhase === "connected" && !hasStream));
 
   return (
     <section

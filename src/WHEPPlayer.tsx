@@ -114,6 +114,7 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
       <ConnectionControls
         connectionPhase={playbackState.phase}
         connectionStatus={playbackState.connectionStatus}
+        hasStream={playbackState.hasStream}
         hasResource={!!resource.trim()}
         onReconnect={handleReconnect}
         onDisconnect={handleDisconnect}

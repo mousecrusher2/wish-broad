@@ -308,8 +308,9 @@ export class WHEPSession {
     switch (state) {
       case "new":
       case "checking":
-      case "disconnected":
         return "connecting";
+      case "disconnected":
+        return "disconnected";
       case "connected":
       case "completed":
         return "connected";

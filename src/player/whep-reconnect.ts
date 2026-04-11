@@ -3,7 +3,7 @@ import { WHEPSessionError, type WHEPSessionSnapshot } from "./WHEPClient";
 const WHEP_RECONNECT_BASE_DELAY_MS = 500;
 
 export const WHEP_CONNECTING_RESUME_GRACE_MS = 10_000;
-export const WHEP_RECONNECT_WINDOW_MS = 10_000;
+export const WHEP_RECONNECT_WINDOW_MS = 30_000;
 
 export type WHEPRetryFailureKind =
   | "error"
