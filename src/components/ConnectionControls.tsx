@@ -1,10 +1,13 @@
 import type { WHEPConnectionStatus } from "../player/WHEPClient";
+import type { WHEPPlaybackPhase } from "../player/WHEPVideoPlayer";
 
 interface ConnectionControlsProps {
+  connectionPhase: WHEPPlaybackPhase;
   connectionStatus: WHEPConnectionStatus;
   hasResource: boolean;
   onReconnect: () => void;
   onDisconnect: () => void;
+  statusMessage: string | null;
 }
 
 function assertUnreachableStatus(status: never): never {
@@ -13,19 +16,26 @@ function assertUnreachableStatus(status: never): never {
 }
 
 export function ConnectionControls({
+  connectionPhase,
   connectionStatus,
   hasResource,
   onReconnect,
   onDisconnect,
+  statusMessage,
 }: ConnectionControlsProps) {
   const statusClasses: Record<
-    WHEPConnectionStatus,
+    WHEPPlaybackPhase,
     {
       dot: string;
       panel: string;
       text: string;
     }
   > = {
+    idle: {
+      dot: "bg-slate-500",
+      panel: "border-white/10 bg-slate-900/70",
+      text: "text-slate-200",
+    },
     connected: {
       dot: "bg-emerald-400",
       panel: "border-emerald-400/20 bg-emerald-500/10",
@@ -36,12 +46,17 @@ export function ConnectionControls({
       panel: "border-amber-400/20 bg-amber-500/10",
       text: "text-amber-50",
     },
-    disconnected: {
+    reconnecting: {
+      dot: "bg-amber-400",
+      panel: "border-amber-400/20 bg-amber-500/10",
+      text: "text-amber-50",
+    },
+    ended: {
       dot: "bg-slate-500",
       panel: "border-white/10 bg-slate-900/70",
       text: "text-slate-200",
     },
-    failed: {
+    error: {
       dot: "bg-rose-400",
       panel: "border-rose-400/20 bg-rose-500/10",
       text: "text-rose-100",
@@ -49,6 +64,10 @@ export function ConnectionControls({
   };
 
   const getStatusText = () => {
+    if (statusMessage) {
+      return statusMessage;
+    }
+
     switch (connectionStatus) {
       case "disconnected":
         return "未接続";
@@ -62,7 +81,12 @@ export function ConnectionControls({
 
     return assertUnreachableStatus(connectionStatus);
   };
-  const styles = statusClasses[connectionStatus];
+  const styles = statusClasses[connectionPhase];
+  const showReconnectButton =
+    hasResource &&
+    (connectionPhase === "idle" ||
+      connectionPhase === "ended" ||
+      connectionPhase === "error");
 
   return (
     <section
@@ -77,18 +101,16 @@ export function ConnectionControls({
           />
           {getStatusText()}
         </span>
-        {hasResource &&
-          (connectionStatus === "failed" ||
-            connectionStatus === "disconnected") && (
-            <button
-              onClick={onReconnect}
-              type="button"
-              className="inline-flex items-center justify-center rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20"
-            >
-              手動再接続
-            </button>
-          )}
-        {connectionStatus === "connected" &&
+        {showReconnectButton && (
+          <button
+            onClick={onReconnect}
+            type="button"
+            className="inline-flex items-center justify-center rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20"
+          >
+            手動再接続
+          </button>
+        )}
+        {connectionPhase === "connected" &&
           window.location.hostname === "localhost" && (
             <button
               onClick={onDisconnect}

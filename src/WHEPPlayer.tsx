@@ -4,9 +4,9 @@ import { useLiveStreams } from "./useLiveStreams";
 import { OBSStreamingInfo } from "./OBSStreamingInfo";
 import { ConnectionControls } from "./components/ConnectionControls";
 import { StreamSelection } from "./components/StreamSelection";
-import type { WHEPConnectionStatus } from "./player/WHEPClient";
 import {
   WHEPVideoPlayer,
+  type WHEPPlaybackState,
   type WHEPVideoPlayerHandlers,
 } from "./player/WHEPVideoPlayer";
 
@@ -17,11 +17,23 @@ const noopWHEPVideoPlayerHandlers: WHEPVideoPlayerHandlers = {
   disconnect: noop,
 };
 
+function createIdlePlaybackState(): WHEPPlaybackState {
+  return {
+    connectionStatus: "disconnected",
+    hasStream: false,
+    message: null,
+    phase: "idle",
+    resourceUserId: null,
+    retryCount: 0,
+  };
+}
+
 export function WHEPPlayer({ user }: WHEPPlayerProps) {
-  const [resource, setResource] = useState("");
-  const [connectionStatus, setConnectionStatus] =
-    useState<WHEPConnectionStatus>("disconnected");
   const [isLoading, setIsLoading] = useState(false);
+  const [resource, setResource] = useState("");
+  const [playbackState, setPlaybackState] = useState<WHEPPlaybackState>(
+    createIdlePlaybackState,
+  );
   const [playerHandlers, setPlayerHandlers] = useState<WHEPVideoPlayerHandlers>(
     noopWHEPVideoPlayerHandlers,
   );
@@ -50,7 +62,6 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
 
   const handlePlayerError = useCallback((error: Error) => {
     console.error("Failed to load stream:", error);
-    alert("ストリームの読み込みに失敗しました");
   }, []);
 
   const handleReconnect = useCallback(() => {
@@ -64,7 +75,6 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
   const handleLoadClick = useCallback(() => {
     load(resource);
   }, [resource, load]);
-
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
       <header className="flex flex-col gap-4 rounded-4xl border border-white/10 bg-slate-900/70 px-5 py-5 shadow-xl shadow-black/20 backdrop-blur md:flex-row md:items-center md:justify-between">
@@ -102,16 +112,18 @@ export function WHEPPlayer({ user }: WHEPPlayerProps) {
         streamsLoading={streamsLoading}
       />
       <ConnectionControls
-        connectionStatus={connectionStatus}
+        connectionPhase={playbackState.phase}
+        connectionStatus={playbackState.connectionStatus}
         hasResource={!!resource.trim()}
         onReconnect={handleReconnect}
         onDisconnect={handleDisconnect}
+        statusMessage={playbackState.message}
       />
       <WHEPVideoPlayer
         onError={handlePlayerError}
         onHandlersChange={handlePlayerHandlersChange}
         onLoadingChange={setIsLoading}
-        onStatusChange={setConnectionStatus}
+        onPlaybackStateChange={setPlaybackState}
       />
       <OBSStreamingInfo user={user} />
     </div>
