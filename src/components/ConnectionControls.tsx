@@ -1,5 +1,5 @@
 import type { WHEPConnectionStatus } from "../player/WHEPClient";
-import type { WHEPPlaybackPhase } from "../player/WHEPVideoPlayer";
+import type { WHEPPlaybackPhase } from "../player/whep-playback";
 
 interface ConnectionControlsProps {
   connectionPhase: WHEPPlaybackPhase;

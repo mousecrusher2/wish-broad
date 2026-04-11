@@ -2,7 +2,7 @@ import type { Live } from "../types";
 
 interface StreamSelectionProps {
   resource: string;
-  setResource: (resource: string) => void;
+  onResourceChange: (resource: string) => void;
   streams: Live[];
   isLoading: boolean;
   error: string | null;
@@ -13,7 +13,7 @@ interface StreamSelectionProps {
 
 export function StreamSelection({
   resource,
-  setResource,
+  onResourceChange,
   streams,
   isLoading,
   error,
@@ -73,7 +73,7 @@ export function StreamSelection({
                       value={stream.owner.userId}
                       checked={isSelected}
                       onChange={(e) => {
-                        setResource(e.target.value);
+                        onResourceChange(e.target.value);
                       }}
                       className="mt-1 size-4 accent-cyan-400"
                     />

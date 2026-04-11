@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { useAuth } from "./useAuth";
 import { LoginPrompt } from "./LoginPrompt";
-import { WHEPPlayer } from "./WHEPPlayer";
+import { WHEPPlayerPage } from "./WHEPPlayerPage";
 
 const screenShellClasses =
   "mx-auto flex min-h-screen w-full max-w-3xl items-center justify-center px-6 py-16";
@@ -17,7 +17,7 @@ function AppContent() {
   const auth = useAuth();
 
   if (auth.status === "authenticated") {
-    return <WHEPPlayer user={auth.user} />;
+    return <WHEPPlayerPage user={auth.user} />;
   }
 
   if (auth.status === "error") {
