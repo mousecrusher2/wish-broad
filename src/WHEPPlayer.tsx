@@ -18,10 +18,12 @@ function VideoPlaceholder({ message }: { message: string }) {
 }
 
 export function WHEPPlayer({
+  loadSequence,
   onSnapshotChange,
   resourceUserId,
   snapshot,
 }: {
+  loadSequence: number;
   onSnapshotChange: (snapshot: WHEPPlaybackControllerSnapshot) => void;
   resourceUserId: string | null;
   snapshot: WHEPPlayerSnapshot;
@@ -62,7 +64,7 @@ export function WHEPPlayer({
     }
 
     controller.load(trimmedResourceUserId);
-  }, [controller, resourceUserId]);
+  }, [controller, loadSequence, resourceUserId]);
 
   const videoRef = useCallback(
     (videoElement: HTMLVideoElement | null) => {

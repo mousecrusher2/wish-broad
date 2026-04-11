@@ -4,8 +4,6 @@ import { OBSStreamingInfo } from "./OBSStreamingInfo";
 import { ConnectionControls } from "./components/ConnectionControls";
 import { StreamSelection } from "./components/StreamSelection";
 import { WHEPPlayer } from "./WHEPPlayer";
-import { useWHEPPlayerContext } from "./WHEPPlayerContext";
-import { WHEPPlayerProvider } from "./WHEPPlayerProvider";
 import type { WHEPPlaybackControllerSnapshot } from "./player/WHEPPlaybackController";
 import { createIdlePlaybackState } from "./player/whep-playback";
 import { useLiveStreams } from "./useLiveStreams";
@@ -18,8 +16,9 @@ function createIdleSnapshot(): WHEPPlaybackControllerSnapshot {
 }
 
 function WHEPPlayerPageContent({ user }: { user: User }) {
-  const { resource, setResource } = useWHEPPlayerContext();
+  const [resource, setResource] = useState("");
   const [activeResource, setActiveResource] = useState<string | null>(null);
+  const [loadSequence, setLoadSequence] = useState(0);
   const [playerSnapshot, setPlayerSnapshot] = useState<WHEPPlaybackControllerSnapshot>(
     createIdleSnapshot,
   );
@@ -42,19 +41,23 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
     }
 
     setActiveResource(trimmedResource);
+    setLoadSequence((currentValue) => currentValue + 1);
   }, [resource]);
 
   const handleReconnect = useCallback(() => {
-    const trimmedResource = resource.trim();
-    if (trimmedResource.length === 0) {
+    const reconnectTargetResource =
+      activeResource?.trim() ?? resource.trim();
+    if (reconnectTargetResource.length === 0) {
       return;
     }
 
-    setActiveResource(trimmedResource);
-  }, [resource]);
+    setActiveResource(reconnectTargetResource);
+    setLoadSequence((currentValue) => currentValue + 1);
+  }, [activeResource, resource]);
 
   const handleDisconnect = useCallback(() => {
     setActiveResource(null);
+    setLoadSequence((currentValue) => currentValue + 1);
   }, []);
 
   const { isLoading, playbackState } = playerSnapshot;
@@ -110,6 +113,7 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
       <WHEPPlayer
         onSnapshotChange={setPlayerSnapshot}
         resourceUserId={activeResource}
+        loadSequence={loadSequence}
         snapshot={playerSnapshot}
       />
 
@@ -119,9 +123,5 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
 }
 
 export function WHEPPlayerPage({ user }: { user: User }) {
-  return (
-    <WHEPPlayerProvider>
-      <WHEPPlayerPageContent user={user} />
-    </WHEPPlayerProvider>
-  );
+  return <WHEPPlayerPageContent user={user} />;
 }
