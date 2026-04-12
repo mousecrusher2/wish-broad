@@ -43,12 +43,7 @@ export function WHEPPlayer({
 
     return () => {
       controller.unsetSnapshotSubscriber(subscriber);
-    };
-  }, [controller]);
-
-  useEffect(() => {
-    return () => {
-      controller.dispose();
+      controller.disconnect();
     };
   }, [controller]);
 
