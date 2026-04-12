@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useEffectEvent, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  useState,
+} from "react";
 import {
   WHEPPlaybackController,
   type WHEPPlaybackControllerSnapshot,
@@ -29,6 +35,7 @@ export function WHEPPlayer({
   snapshot: WHEPPlayerSnapshot;
 }) {
   const [controller] = useState(() => new WHEPPlaybackController());
+  const disposeTokenRef = useRef(0);
   const handleSnapshotChange = useEffectEvent(
     (nextSnapshot: WHEPPlaybackControllerSnapshot) => {
       onSnapshotChange(nextSnapshot);
@@ -43,7 +50,19 @@ export function WHEPPlayer({
 
     return () => {
       controller.unsetSnapshotSubscriber(subscriber);
-      controller.disconnect();
+    };
+  }, [controller]);
+
+  useEffect(() => {
+    disposeTokenRef.current += 1;
+    const disposeToken = disposeTokenRef.current;
+
+    return () => {
+      queueMicrotask(() => {
+        if (disposeTokenRef.current === disposeToken) {
+          controller.dispose();
+        }
+      });
     };
   }, [controller]);
 

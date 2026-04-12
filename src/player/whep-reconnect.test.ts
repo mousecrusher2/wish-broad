@@ -2,34 +2,34 @@ import { describe, expect, it } from "vitest";
 import { WHEPSessionError } from "./WHEPClient";
 import {
   WHEP_RECONNECT_WINDOW_MS,
-  classifyReconnectFailure,
-  createReconnectDeadline,
   getReconnectDelayMs,
+  resolveReconnectDisposition,
+  shouldReconnectForPlaybackStall,
   shouldRecoverEstablishedSession,
 } from "./whep-reconnect";
 
 describe("whep-reconnect", () => {
-  it("classifies retryable and terminal reconnect failures", () => {
+  it("classifies reconnect outcomes", () => {
     expect(
-      classifyReconnectFailure(
+      resolveReconnectDisposition(
         new WHEPSessionError("missing live", {
           responseText: undefined,
           stage: "post",
           statusCode: 404,
         }),
       ),
-    ).toBe("notFound");
+    ).toBe("ended");
     expect(
-      classifyReconnectFailure(
+      resolveReconnectDisposition(
         new WHEPSessionError("unauthorized", {
           responseText: undefined,
           stage: "post",
           statusCode: 401,
         }),
       ),
-    ).toBe("fatal");
+    ).toBe("error");
     expect(
-      classifyReconnectFailure(
+      resolveReconnectDisposition(
         new WHEPSessionError("malformed response", {
           responseText: undefined,
           retryable: false,
@@ -37,15 +37,16 @@ describe("whep-reconnect", () => {
           statusCode: 201,
         }),
       ),
-    ).toBe("fatal");
-    expect(classifyReconnectFailure(new Error("network"))).toBe("error");
+    ).toBe("error");
+    expect(resolveReconnectDisposition(new Error("network"))).toBe("retry");
   });
 
   it("uses exponential backoff capped by the remaining reconnect window", () => {
     expect(getReconnectDelayMs(0, 10_000)).toBe(500);
     expect(getReconnectDelayMs(1, 10_000)).toBe(1_000);
     expect(getReconnectDelayMs(2, 10_000)).toBe(2_000);
-    expect(getReconnectDelayMs(4, 2_500)).toBe(2_500);
+    expect(getReconnectDelayMs(4, 10_000)).toBe(2_000);
+    expect(getReconnectDelayMs(4, 1_500)).toBe(1_500);
   });
 
   it("detects established sessions that should be recovered", () => {
@@ -64,17 +65,17 @@ describe("whep-reconnect", () => {
     ).toBe(false);
     expect(
       shouldRecoverEstablishedSession({
-        connectionState: "connected",
-        expectedRemoteTrackCount: 2,
+        connectionState: "connecting",
+        expectedRemoteTrackCount: 1,
         hasStream: false,
-        iceConnectionState: "connected",
-        liveTrackCount: 1,
-        mutedTrackCount: 1,
-        remoteTrackCount: 2,
+        iceConnectionState: "checking",
+        liveTrackCount: 0,
+        mutedTrackCount: 0,
+        remoteTrackCount: 1,
         signalingState: "stable",
-        status: "connected",
+        status: "connecting",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldRecoverEstablishedSession({
         connectionState: "disconnected",
@@ -88,9 +89,32 @@ describe("whep-reconnect", () => {
         status: "disconnected",
       }),
     ).toBe(true);
+    expect(
+      shouldRecoverEstablishedSession({
+        connectionState: "failed",
+        expectedRemoteTrackCount: 1,
+        hasStream: false,
+        iceConnectionState: "failed",
+        liveTrackCount: 0,
+        mutedTrackCount: 0,
+        remoteTrackCount: 1,
+        signalingState: "stable",
+        status: "failed",
+      }),
+    ).toBe(true);
   });
 
-  it("creates a reconnect deadline thirty seconds in the future", () => {
-    expect(createReconnectDeadline(123)).toBe(123 + WHEP_RECONNECT_WINDOW_MS);
+  it("reconnects only for real playback stalls", () => {
+    expect(shouldReconnectForPlaybackStall("initial", false, 10_000)).toBe(
+      false,
+    );
+    expect(shouldReconnectForPlaybackStall("retry", false, 4_000)).toBe(false);
+    expect(shouldReconnectForPlaybackStall("retry", false, 5_000)).toBe(true);
+    expect(shouldReconnectForPlaybackStall("initial", true, 4_000)).toBe(true);
+    expect(shouldReconnectForPlaybackStall("retry", true, 4_000)).toBe(true);
+  });
+
+  it("keeps the reconnect window at thirty seconds", () => {
+    expect(WHEP_RECONNECT_WINDOW_MS).toBe(30_000);
   });
 });

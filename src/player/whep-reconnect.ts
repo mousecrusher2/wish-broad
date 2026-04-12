@@ -1,37 +1,15 @@
 import { WHEPSessionError, type WHEPSessionSnapshot } from "./WHEPClient";
 
 const WHEP_RECONNECT_BASE_DELAY_MS = 500;
+const WHEP_RECONNECT_MAX_DELAY_MS = 2_000;
 
 export const WHEP_RECONNECT_WINDOW_MS = 30_000;
+export const WHEP_PLAYBACK_STALL_GRACE_MS = 4_000;
+export const WHEP_RETRY_PLAYBACK_START_GRACE_MS = 5_000;
 export const WHEP_SESSION_RECOVERY_GRACE_MS = 3_000;
 
-export type WHEPRetryFailureKind = "error" | "fatal" | "notFound" | "transient";
-
-export function classifyReconnectFailure(error: unknown): WHEPRetryFailureKind {
-  if (error instanceof WHEPSessionError) {
-    if (!error.retryable) {
-      return "fatal";
-    }
-
-    if (error.statusCode === 404) {
-      return "notFound";
-    }
-
-    if (
-      error.statusCode !== undefined &&
-      error.statusCode >= 400 &&
-      error.statusCode < 500
-    ) {
-      return "fatal";
-    }
-  }
-
-  return "error";
-}
-
-export function createReconnectDeadline(now = Date.now()): number {
-  return now + WHEP_RECONNECT_WINDOW_MS;
-}
+export type WHEPReconnectDisposition = "ended" | "error" | "retry";
+export type WHEPReconnectAttemptMode = "initial" | "retry";
 
 export function getReconnectDelayMs(
   attemptCount: number,
@@ -39,24 +17,51 @@ export function getReconnectDelayMs(
 ): number {
   return Math.max(
     0,
-    Math.min(WHEP_RECONNECT_BASE_DELAY_MS * 2 ** attemptCount, remainingMs),
+    Math.min(
+      WHEP_RECONNECT_BASE_DELAY_MS * 2 ** attemptCount,
+      WHEP_RECONNECT_MAX_DELAY_MS,
+      remainingMs,
+    ),
   );
+}
+
+export function resolveReconnectDisposition(
+  error: unknown,
+): WHEPReconnectDisposition {
+  if (error instanceof WHEPSessionError) {
+    if (error.statusCode === 404) {
+      return "ended";
+    }
+
+    if (
+      !error.retryable ||
+      (error.statusCode !== undefined &&
+        error.statusCode >= 400 &&
+        error.statusCode < 500)
+    ) {
+      return "error";
+    }
+  }
+
+  return "retry";
 }
 
 export function shouldRecoverEstablishedSession(
   snapshot: WHEPSessionSnapshot,
+): snapshot is WHEPSessionSnapshot & {
+  status: "disconnected" | "failed";
+} {
+  return snapshot.status === "disconnected" || snapshot.status === "failed";
+}
+
+export function shouldReconnectForPlaybackStall(
+  mode: WHEPReconnectAttemptMode,
+  sawPlaybackProgress: boolean,
+  stalledForMs: number,
 ): boolean {
-  if (
-    snapshot.status === "connecting" ||
-    snapshot.status === "disconnected" ||
-    snapshot.status === "failed"
-  ) {
-    return true;
+  if (sawPlaybackProgress) {
+    return stalledForMs >= WHEP_PLAYBACK_STALL_GRACE_MS;
   }
 
-  return (
-    snapshot.expectedRemoteTrackCount > 0 &&
-    (snapshot.remoteTrackCount < snapshot.expectedRemoteTrackCount ||
-      snapshot.liveTrackCount < snapshot.expectedRemoteTrackCount)
-  );
+  return mode === "retry" && stalledForMs >= WHEP_RETRY_PLAYBACK_START_GRACE_MS;
 }
