@@ -37,42 +37,43 @@ export function StreamSelection({
     </button>
   );
 
-  const streamCards = streams.length > 0 ? (
-    streams.map((stream) => {
-      const isSelected = resource === stream.owner.userId;
+  const streamCards =
+    streams.length > 0 ? (
+      streams.map((stream) => {
+        const isSelected = resource === stream.owner.userId;
 
-      return (
-        <label
-          key={stream.owner.userId}
-          className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 transition ${
-            isSelected
-              ? "border-cyan-400/60 bg-cyan-400/10 shadow-lg shadow-cyan-950/30"
-              : "border-white/10 bg-slate-950/40 hover:border-cyan-400/40 hover:bg-slate-950/70"
-          }`}
-        >
-          <input
-            type="radio"
-            name="stream"
-            value={stream.owner.userId}
-            checked={isSelected}
-            onChange={(e) => {
-              onResourceChange(e.target.value);
-            }}
-            className="mt-1 size-4 accent-cyan-400"
-          />
-          <span className="min-w-0">
-            <span className="block text-sm font-semibold text-white">
-              {stream.owner.displayName}
+        return (
+          <label
+            key={stream.owner.userId}
+            className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 transition ${
+              isSelected
+                ? "border-cyan-400/60 bg-cyan-400/10 shadow-lg shadow-cyan-950/30"
+                : "border-white/10 bg-slate-950/40 hover:border-cyan-400/40 hover:bg-slate-950/70"
+            }`}
+          >
+            <input
+              type="radio"
+              name="stream"
+              value={stream.owner.userId}
+              checked={isSelected}
+              onChange={(e) => {
+                onResourceChange(e.target.value);
+              }}
+              className="mt-1 size-4 accent-cyan-400"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold text-white">
+                {stream.owner.displayName}
+              </span>
             </span>
-          </span>
-        </label>
-      );
-    })
-  ) : (
-    <div className="rounded-2xl border border-dashed border-white/15 bg-slate-950/30 px-5 py-6 text-sm text-slate-400">
-      現在利用可能な配信はありません
-    </div>
-  );
+          </label>
+        );
+      })
+    ) : (
+      <div className="rounded-2xl border border-dashed border-white/15 bg-slate-950/30 px-5 py-6 text-sm text-slate-400">
+        現在利用可能な配信はありません
+      </div>
+    );
 
   if (embedded) {
     return (
@@ -90,7 +91,7 @@ export function StreamSelection({
             </p>
           </div>
           {embeddedStatus && (
-            <div className="min-w-0 flex-none max-w-full">{embeddedStatus}</div>
+            <div className="max-w-full min-w-0 flex-none">{embeddedStatus}</div>
           )}
         </div>
 
@@ -113,7 +114,9 @@ export function StreamSelection({
               利用可能な配信一覧
             </p>
             {streamsLoading && (
-              <span className="text-sm text-slate-400">配信一覧を更新中...</span>
+              <span className="text-sm text-slate-400">
+                配信一覧を更新中...
+              </span>
             )}
           </div>
           <div className="flex items-start gap-3">

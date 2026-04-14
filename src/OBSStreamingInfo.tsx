@@ -406,18 +406,14 @@ export function OBSStreamingInfo({ popoverId, user }: OBSStreamingInfoProps) {
       id={popoverId}
       popover="auto"
       data-fullscreen={isFullscreenPopover ? "true" : "false"}
-      className="fixed top-1/2 left-1/2 right-auto z-50 m-0 max-h-[calc(100vh-1.5rem)] max-w-[calc(100vw-1.5rem)] -translate-x-1/2 -translate-y-1/2 overflow-visible rounded-[1.75rem] border-0 bg-transparent p-0 text-inherit shadow-2xl shadow-black/45 [&:popover-open]:block backdrop:bg-slate-50/30 backdrop:backdrop-blur-[20px] backdrop:backdrop-saturate-[145%] data-[fullscreen=true]:inset-0 data-[fullscreen=true]:max-h-screen data-[fullscreen=true]:max-w-screen data-[fullscreen=true]:translate-x-0 data-[fullscreen=true]:translate-y-0 data-[fullscreen=true]:transform-none data-[fullscreen=true]:w-screen"
-      style={
-        isFullscreenPopover
-          ? undefined
-          : { width: popoverWidthPx }
-      }
+      className="fixed top-1/2 right-auto left-1/2 z-50 m-0 max-h-[calc(100vh-1.5rem)] max-w-[calc(100vw-1.5rem)] -translate-x-1/2 -translate-y-1/2 overflow-visible rounded-[1.75rem] border-0 bg-transparent p-0 text-inherit shadow-2xl shadow-black/45 backdrop:bg-slate-50/30 backdrop:backdrop-blur-[20px] backdrop:backdrop-saturate-145 data-[fullscreen=true]:inset-0 data-[fullscreen=true]:max-h-screen data-[fullscreen=true]:w-screen data-[fullscreen=true]:max-w-screen data-[fullscreen=true]:translate-x-0 data-[fullscreen=true]:translate-y-0 data-[fullscreen=true]:transform-none [&:popover-open]:block"
+      style={isFullscreenPopover ? undefined : { width: popoverWidthPx }}
     >
       <div
-        className={`space-y-6 border border-white/15 bg-[rgb(30_41_59_/_0.86)] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] [backdrop-filter:blur(34px)_saturate(140%)] ${
+        className={`space-y-6 border border-white/15 bg-[rgb(30_41_59/0.86)] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] [backdrop-filter:blur(34px)_saturate(140%)] ${
           isFullscreenPopover
-            ? "max-h-screen min-h-screen rounded-none overflow-auto"
-            : "max-h-[calc(100vh-1.5rem)] rounded-[1.75rem] overflow-auto"
+            ? "max-h-screen min-h-screen overflow-auto rounded-none"
+            : "max-h-[calc(100vh-1.5rem)] overflow-auto rounded-[1.75rem]"
         }`}
       >
         <div className="flex items-start justify-between gap-4">
@@ -433,7 +429,7 @@ export function OBSStreamingInfo({ popoverId, user }: OBSStreamingInfoProps) {
             type="button"
             popoverTarget={popoverId}
             popoverTargetAction="hide"
-            className="inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-full border border-cyan-300/30 bg-cyan-400/20 px-4 py-2 text-sm font-semibold text-cyan-50 transition hover:bg-cyan-400/30"
+            className="inline-flex shrink-0 items-center justify-center rounded-full border border-cyan-300/30 bg-cyan-400/20 px-4 py-2 text-sm font-semibold whitespace-nowrap text-cyan-50 transition hover:bg-cyan-400/30"
           >
             📺 OBS配信設定を閉じる
           </button>

@@ -9,9 +9,7 @@ import {
   WHEPPlaybackController,
   type WHEPPlaybackControllerSnapshot,
 } from "./player/WHEPPlaybackController";
-import {
-  getPlaybackPlaceholderText,
-} from "./player/whep-playback";
+import { getPlaybackPlaceholderText } from "./player/whep-playback";
 
 export type WHEPPlayerSnapshot = WHEPPlaybackControllerSnapshot;
 
@@ -94,7 +92,6 @@ export function WHEPPlayer({
         className={`aspect-video w-full bg-black object-contain ${snapshot.playbackState.hasStream ? "opacity-100" : "opacity-0"}`}
         controls={snapshot.playbackState.hasStream}
         autoPlay
-        muted
         playsInline
       />
       {!snapshot.playbackState.hasStream && (

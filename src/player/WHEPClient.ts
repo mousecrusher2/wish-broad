@@ -81,7 +81,9 @@ function createAbortError(): WHEPSessionError {
   });
 }
 
-async function readResponseText(response: Response): Promise<string | undefined> {
+async function readResponseText(
+  response: Response,
+): Promise<string | undefined> {
   try {
     const responseText = await response.text();
     return responseText.trim().length > 0 ? responseText : undefined;

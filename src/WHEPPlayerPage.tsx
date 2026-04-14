@@ -21,9 +21,8 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
   const [resource, setResource] = useState("");
   const [activeResource, setActiveResource] = useState<string | null>(null);
   const [loadSequence, setLoadSequence] = useState(0);
-  const [playerSnapshot, setPlayerSnapshot] = useState<WHEPPlaybackControllerSnapshot>(
-    createIdleSnapshot,
-  );
+  const [playerSnapshot, setPlayerSnapshot] =
+    useState<WHEPPlaybackControllerSnapshot>(createIdleSnapshot);
 
   const {
     streams,
@@ -32,9 +31,12 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
     refresh,
   } = useLiveStreams();
 
-  const handleResourceChange = useCallback((nextResource: string) => {
-    setResource(nextResource);
-  }, [setResource]);
+  const handleResourceChange = useCallback(
+    (nextResource: string) => {
+      setResource(nextResource);
+    },
+    [setResource],
+  );
 
   const handleLoadClick = useCallback(() => {
     const trimmedResource = resource.trim();
@@ -51,7 +53,7 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
   return (
     <div className="min-h-screen">
       <header className="border-b border-cyan-200/20 bg-cyan-950/92 shadow-[0_10px_20px_-16px_rgba(8,145,178,0.38)] backdrop-blur-sm">
-        <div className="flex flex-col gap-2 px-4 py-3 sm:px-6 lg:px-8 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-2 px-4 py-3 sm:px-6 md:flex-row md:items-center md:justify-between lg:px-8">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">
               ANGOU BROADCAST
@@ -59,14 +61,14 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
           </div>
           <nav className="flex flex-wrap items-center gap-3">
             <p className="text-sm text-cyan-50/90">
-              ようこそ、<span className="font-semibold">{user.displayName}</span>{" "}
-              さん
+              ようこそ、
+              <span className="font-semibold">{user.displayName}</span> さん
             </p>
             <button
               type="button"
               popoverTarget={OBS_SETTINGS_POPOVER_ID}
               popoverTargetAction="toggle"
-              className="inline-flex items-center justify-center whitespace-nowrap rounded-full bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950 shadow-[0_14px_26px_-18px_rgba(34,211,238,0.95)] transition hover:bg-cyan-200"
+              className="inline-flex items-center justify-center rounded-full bg-cyan-300 px-4 py-2 text-sm font-semibold whitespace-nowrap text-slate-950 shadow-[0_14px_26px_-18px_rgba(34,211,238,0.95)] transition hover:bg-cyan-200"
             >
               📺 OBS配信設定
             </button>
@@ -83,10 +85,7 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
       </header>
 
       <div className="flex flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
-        <OBSStreamingInfo
-          user={user}
-          popoverId={OBS_SETTINGS_POPOVER_ID}
-        />
+        <OBSStreamingInfo user={user} popoverId={OBS_SETTINGS_POPOVER_ID} />
 
         <div className="flex flex-col gap-6 min-[75rem]:flex-row min-[75rem]:items-start">
           <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur min-[75rem]:w-[24rem] min-[75rem]:flex-none">
