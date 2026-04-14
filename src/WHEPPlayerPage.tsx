@@ -46,28 +46,12 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
     setLoadSequence((currentValue) => currentValue + 1);
   }, [resource]);
 
-  const handleReconnect = useCallback(() => {
-    const reconnectTargetResource =
-      activeResource?.trim() ?? resource.trim();
-    if (reconnectTargetResource.length === 0) {
-      return;
-    }
-
-    setActiveResource(reconnectTargetResource);
-    setLoadSequence((currentValue) => currentValue + 1);
-  }, [activeResource, resource]);
-
-  const handleDisconnect = useCallback(() => {
-    setActiveResource(null);
-    setLoadSequence((currentValue) => currentValue + 1);
-  }, []);
-
   const { isLoading, playbackState } = playerSnapshot;
 
   return (
-    <div className="min-h-screen w-full">
-      <header className="w-full border-b border-cyan-200/20 bg-cyan-950/92 shadow-[0_10px_20px_-16px_rgba(8,145,178,0.38)] backdrop-blur-sm">
-        <div className="flex w-full flex-col gap-2 px-4 py-3 sm:px-6 lg:px-8 md:flex-row md:items-center md:justify-between">
+    <div className="min-h-screen">
+      <header className="border-b border-cyan-200/20 bg-cyan-950/92 shadow-[0_10px_20px_-16px_rgba(8,145,178,0.38)] backdrop-blur-sm">
+        <div className="flex flex-col gap-2 px-4 py-3 sm:px-6 lg:px-8 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">
               ANGOU BROADCAST
@@ -98,14 +82,14 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
         </div>
       </header>
 
-      <div className="flex w-full flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+      <div className="flex flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
         <OBSStreamingInfo
           user={user}
           popoverId={OBS_SETTINGS_POPOVER_ID}
         />
 
         <div className="flex flex-col gap-6 min-[75rem]:flex-row min-[75rem]:items-start">
-          <section className="w-full rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur min-[75rem]:w-[24rem] min-[75rem]:flex-none">
+          <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur min-[75rem]:w-[24rem] min-[75rem]:flex-none">
             <StreamSelection
               resource={resource}
               onResourceChange={handleResourceChange}
@@ -121,9 +105,6 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
                   connectionPhase={playbackState.phase}
                   connectionStatus={playbackState.connectionStatus}
                   hasStream={playbackState.hasStream}
-                  hasResource={resource.trim().length > 0}
-                  onReconnect={handleReconnect}
-                  onDisconnect={handleDisconnect}
                   statusMessage={playbackState.message}
                   embedded
                 />

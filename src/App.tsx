@@ -4,7 +4,7 @@ import { LoginPrompt } from "./LoginPrompt";
 import { WHEPPlayerPage } from "./WHEPPlayerPage";
 
 const screenShellClasses =
-  "mx-auto flex min-h-screen w-full max-w-3xl items-center justify-center px-6 py-16";
+  "mx-auto flex min-h-screen max-w-3xl items-center justify-center px-6 py-16";
 const panelClasses =
   "w-full rounded-4xl border border-white/10 bg-slate-900/75 p-8 text-center shadow-2xl shadow-black/30 backdrop-blur sm:p-10";
 const titleClasses =

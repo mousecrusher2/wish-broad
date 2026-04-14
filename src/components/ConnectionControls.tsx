@@ -5,9 +5,6 @@ interface ConnectionControlsProps {
   connectionPhase: WHEPPlaybackPhase;
   connectionStatus: WHEPConnectionStatus;
   hasStream: boolean;
-  hasResource: boolean;
-  onReconnect: () => void;
-  onDisconnect: () => void;
   statusMessage: string | null;
   embedded?: boolean;
 }
@@ -21,9 +18,6 @@ export function ConnectionControls({
   connectionPhase,
   connectionStatus,
   hasStream,
-  hasResource,
-  onReconnect,
-  onDisconnect,
   statusMessage,
   embedded = false,
 }: ConnectionControlsProps) {
@@ -88,12 +82,6 @@ export function ConnectionControls({
     return assertUnreachableStatus(connectionStatus);
   };
   const styles = statusClasses[connectionPhase];
-  const showReconnectButton =
-    hasResource &&
-    (connectionPhase === "idle" ||
-      connectionPhase === "ended" ||
-      connectionPhase === "error" ||
-      (connectionPhase === "connected" && !hasStream));
   const sectionClasses = embedded
     ? `ml-auto w-fit max-w-full rounded-2xl border p-4 sm:p-5 ${styles.panel}`
     : `rounded-4xl border p-4 shadow-xl shadow-black/20 backdrop-blur sm:p-5 ${styles.panel}`;
@@ -109,25 +97,6 @@ export function ConnectionControls({
           />
           {getStatusText()}
         </span>
-        {showReconnectButton && (
-          <button
-            onClick={onReconnect}
-            type="button"
-            className="inline-flex items-center justify-center rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20"
-          >
-            手動再接続
-          </button>
-        )}
-        {connectionPhase === "connected" &&
-          window.location.hostname === "localhost" && (
-            <button
-              onClick={onDisconnect}
-              type="button"
-              className="inline-flex items-center justify-center rounded-full border border-rose-400/30 bg-rose-500/90 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-400"
-            >
-              🔌 テスト切断
-            </button>
-          )}
       </div>
     </section>
   );
