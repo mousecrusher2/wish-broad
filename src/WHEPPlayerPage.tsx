@@ -8,6 +8,8 @@ import type { WHEPPlaybackControllerSnapshot } from "./player/WHEPPlaybackContro
 import { createIdlePlaybackState } from "./player/whep-playback";
 import { useLiveStreams } from "./useLiveStreams";
 
+const OBS_SETTINGS_POPOVER_ID = "obs-settings-popover";
+
 function createIdleSnapshot(): WHEPPlaybackControllerSnapshot {
   return {
     isLoading: false,
@@ -63,61 +65,82 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
   const { isLoading, playbackState } = playerSnapshot;
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
-      <header className="flex flex-col gap-4 rounded-4xl border border-white/10 bg-slate-900/70 px-5 py-5 shadow-xl shadow-black/20 backdrop-blur md:flex-row md:items-center md:justify-between">
-        <div>
-          <p className="text-sm font-medium tracking-[0.3em] text-cyan-300/80 uppercase">
-            Live Viewer
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-            WHEP Player
-          </h1>
-        </div>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <div className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-4 py-2 text-sm text-cyan-100">
-            ようこそ、<span className="font-semibold">{user.displayName}</span>{" "}
-            さん
+    <div className="min-h-screen w-full">
+      <header className="w-full border-b border-cyan-200/20 bg-cyan-950/92 shadow-[0_10px_20px_-16px_rgba(8,145,178,0.38)] backdrop-blur-sm">
+        <div className="flex w-full flex-col gap-2 px-4 py-3 sm:px-6 lg:px-8 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+              ANGOU BROADCAST
+            </h1>
           </div>
-          <form method="POST" action="/logout">
+          <nav className="flex flex-wrap items-center gap-3">
+            <p className="text-sm text-cyan-50/90">
+              ようこそ、<span className="font-semibold">{user.displayName}</span>{" "}
+              さん
+            </p>
             <button
-              type="submit"
-              className="inline-flex items-center justify-center rounded-full border border-rose-400/30 bg-rose-500/90 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-400"
+              type="button"
+              popoverTarget={OBS_SETTINGS_POPOVER_ID}
+              popoverTargetAction="toggle"
+              className="inline-flex items-center justify-center whitespace-nowrap rounded-full bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950 shadow-[0_14px_26px_-18px_rgba(34,211,238,0.95)] transition hover:bg-cyan-200"
             >
-              ログアウト
+              📺 OBS配信設定
             </button>
-          </form>
+            <form method="POST" action="/logout">
+              <button
+                type="submit"
+                className="inline-flex items-center justify-center rounded-full border border-rose-400/30 bg-rose-500/90 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-400"
+              >
+                ログアウト
+              </button>
+            </form>
+          </nav>
         </div>
       </header>
 
-      <StreamSelection
-        resource={resource}
-        onResourceChange={handleResourceChange}
-        streams={streams}
-        isLoading={isLoading}
-        error={streamsError}
-        onRefresh={refresh}
-        onLoadClick={handleLoadClick}
-        streamsLoading={streamsLoading}
-      />
+      <div className="flex w-full flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+        <OBSStreamingInfo
+          user={user}
+          popoverId={OBS_SETTINGS_POPOVER_ID}
+        />
 
-      <ConnectionControls
-        connectionPhase={playbackState.phase}
-        connectionStatus={playbackState.connectionStatus}
-        hasStream={playbackState.hasStream}
-        hasResource={resource.trim().length > 0}
-        onReconnect={handleReconnect}
-        onDisconnect={handleDisconnect}
-        statusMessage={playbackState.message}
-      />
+        <div className="flex flex-col gap-6 min-[75rem]:flex-row min-[75rem]:items-start">
+          <section className="w-full rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur min-[75rem]:w-[24rem] min-[75rem]:flex-none">
+            <StreamSelection
+              resource={resource}
+              onResourceChange={handleResourceChange}
+              streams={streams}
+              isLoading={isLoading}
+              error={streamsError}
+              onRefresh={refresh}
+              onLoadClick={handleLoadClick}
+              streamsLoading={streamsLoading}
+              embedded
+              embeddedStatus={
+                <ConnectionControls
+                  connectionPhase={playbackState.phase}
+                  connectionStatus={playbackState.connectionStatus}
+                  hasStream={playbackState.hasStream}
+                  hasResource={resource.trim().length > 0}
+                  onReconnect={handleReconnect}
+                  onDisconnect={handleDisconnect}
+                  statusMessage={playbackState.message}
+                  embedded
+                />
+              }
+            />
+          </section>
 
-      <WHEPPlayer
-        onSnapshotChange={setPlayerSnapshot}
-        resourceUserId={activeResource}
-        loadSequence={loadSequence}
-        snapshot={playerSnapshot}
-      />
-
-      <OBSStreamingInfo user={user} />
+          <div className="min-w-0 flex-1">
+            <WHEPPlayer
+              onSnapshotChange={setPlayerSnapshot}
+              resourceUserId={activeResource}
+              loadSequence={loadSequence}
+              snapshot={playerSnapshot}
+            />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

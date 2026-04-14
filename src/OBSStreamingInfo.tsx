@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLiveToken } from "./useLiveToken";
 import type { User } from "./types";
 
 type OBSStreamingInfoProps = {
+  popoverId: string;
   user: User;
 };
 
@@ -38,7 +39,7 @@ const fieldInputClasses =
   "w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-slate-100 shadow-inner shadow-black/20 outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20";
 const inlineFieldClasses = "flex flex-col gap-3 sm:flex-row";
 const copyButtonClasses =
-  "inline-flex items-center justify-center rounded-full bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:bg-slate-700";
+  "inline-flex items-center justify-center whitespace-nowrap rounded-full bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:bg-slate-700";
 const subtleCardClasses =
   "rounded-2xl border border-white/10 bg-slate-950/30 p-5 shadow-inner shadow-black/20";
 const primaryButtonClasses =
@@ -49,6 +50,52 @@ const neutralButtonClasses =
   "inline-flex items-center justify-center rounded-full border border-slate-600 bg-slate-800 px-5 py-3 text-sm font-semibold text-slate-100 transition hover:bg-slate-700";
 const dangerButtonClasses =
   "inline-flex items-center justify-center rounded-full bg-rose-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-rose-400";
+const OBS_POPOVER_DEFAULT_WIDTH_PX = 760;
+const OBS_POPOVER_VIEWPORT_GUTTER_PX = 24;
+const OBS_POPOVER_FULLSCREEN_BREAKPOINT_HEIGHT_PX = 680;
+const OBS_POPOVER_TEXT_HORIZONTAL_PADDING_PX = 140;
+const OBS_POPOVER_MEASURE_FONT =
+  "600 16px 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', sans-serif";
+const OBS_POPOVER_MEASURE_TEXTS = [
+  "OBS配信設定",
+  "配信URL (Server):",
+  "Bearerトークン (Stream Key):",
+  "⚠️ Bearerトークンが発行されていません",
+  "✅ Bearerトークンが発行済みです",
+  "既存のトークンは再表示できません。必要な場合は新しいトークンを発行してください。",
+  "OBSを開き、「設定」→「配信」を選択",
+  "Bearerトークン: 上記の配信キーをコピー",
+  "📺 OBS配信設定を閉じる",
+];
+
+function calculatePopoverRequiredWidthPx(): number {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return OBS_POPOVER_DEFAULT_WIDTH_PX;
+  }
+
+  context.font = OBS_POPOVER_MEASURE_FONT;
+  const widestTextPx = OBS_POPOVER_MEASURE_TEXTS.reduce((maxWidth, text) => {
+    return Math.max(maxWidth, context.measureText(text).width);
+  }, 0);
+
+  return Math.ceil(
+    Math.max(
+      OBS_POPOVER_DEFAULT_WIDTH_PX,
+      widestTextPx + OBS_POPOVER_TEXT_HORIZONTAL_PADDING_PX,
+    ),
+  );
+}
+
+function resolvePopoverLayout() {
+  const preferredWidthPx = calculatePopoverRequiredWidthPx();
+  const shouldFullscreen =
+    preferredWidthPx + OBS_POPOVER_VIEWPORT_GUTTER_PX * 2 > window.innerWidth ||
+    window.innerHeight < OBS_POPOVER_FULLSCREEN_BREAKPOINT_HEIGHT_PX;
+
+  return { preferredWidthPx, shouldFullscreen };
+}
 
 function StreamingUrlSection({
   streamingUrl,
@@ -300,13 +347,41 @@ function OBSInstructions() {
   );
 }
 
-export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
+export function OBSStreamingInfo({ popoverId, user }: OBSStreamingInfoProps) {
   const { state, fetchTokenStatus, createToken } = useLiveToken();
   const [showToken, setShowToken] = useState(false);
   const [copyStatus, setCopyStatus] = useState<CopyStatus>("none");
-  const [showOBSSettings, setShowOBSSettings] = useState(false);
+  const [popoverWidthPx, setPopoverWidthPx] = useState(() => {
+    if (typeof window === "undefined") {
+      return OBS_POPOVER_DEFAULT_WIDTH_PX;
+    }
+
+    return resolvePopoverLayout().preferredWidthPx;
+  });
+  const [isFullscreenPopover, setIsFullscreenPopover] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+
+    return resolvePopoverLayout().shouldFullscreen;
+  });
 
   const streamingUrl = `${window.location.origin}/ingest/${user.userId}`;
+
+  useEffect(() => {
+    const updatePopoverSize = () => {
+      const { preferredWidthPx, shouldFullscreen } = resolvePopoverLayout();
+
+      setPopoverWidthPx(preferredWidthPx);
+      setIsFullscreenPopover(shouldFullscreen);
+    };
+
+    updatePopoverSize();
+    window.addEventListener("resize", updatePopoverSize);
+    return () => {
+      window.removeEventListener("resize", updatePopoverSize);
+    };
+  }, []);
 
   const copyToClipboard = async (text: string, type: "url" | "token") => {
     try {
@@ -327,57 +402,68 @@ export function OBSStreamingInfo({ user }: OBSStreamingInfoProps) {
   };
 
   return (
-    <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium tracking-[0.3em] text-cyan-300/80 uppercase">
-            Broadcast Setup
-          </p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white">
-            OBS配信設定
-          </h2>
+    <section
+      id={popoverId}
+      popover="auto"
+      data-fullscreen={isFullscreenPopover ? "true" : "false"}
+      className="fixed top-1/2 left-1/2 right-auto z-50 m-0 max-h-[calc(100vh-1.5rem)] max-w-[calc(100vw-1.5rem)] -translate-x-1/2 -translate-y-1/2 overflow-visible rounded-[1.75rem] border-0 bg-transparent p-0 text-inherit shadow-2xl shadow-black/45 [&:popover-open]:block backdrop:bg-slate-50/30 backdrop:backdrop-blur-[20px] backdrop:backdrop-saturate-[145%] data-[fullscreen=true]:inset-0 data-[fullscreen=true]:max-h-screen data-[fullscreen=true]:max-w-screen data-[fullscreen=true]:translate-x-0 data-[fullscreen=true]:translate-y-0 data-[fullscreen=true]:transform-none data-[fullscreen=true]:w-screen"
+      style={
+        isFullscreenPopover
+          ? undefined
+          : { width: popoverWidthPx }
+      }
+    >
+      <div
+        className={`space-y-6 border border-white/15 bg-[rgb(30_41_59_/_0.86)] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] [backdrop-filter:blur(34px)_saturate(140%)] ${
+          isFullscreenPopover
+            ? "max-h-screen min-h-screen rounded-none overflow-auto"
+            : "max-h-[calc(100vh-1.5rem)] rounded-[1.75rem] overflow-auto"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium tracking-[0.3em] text-cyan-300/80 uppercase">
+              Broadcast Setup
+            </p>
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white">
+              OBS配信設定
+            </h2>
+          </div>
+          <button
+            type="button"
+            popoverTarget={popoverId}
+            popoverTargetAction="hide"
+            className="inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-full border border-cyan-300/30 bg-cyan-400/20 px-4 py-2 text-sm font-semibold text-cyan-50 transition hover:bg-cyan-400/30"
+          >
+            📺 OBS配信設定を閉じる
+          </button>
         </div>
-        <button
-          onClick={() => {
-            setShowOBSSettings(!showOBSSettings);
+        <StreamingUrlSection
+          streamingUrl={streamingUrl}
+          copyStatus={copyStatus}
+          copyToClipboard={copyToClipboard}
+        />
+        <TokenSection
+          state={state}
+          showToken={showToken}
+          onRetry={() => {
+            void fetchTokenStatus();
+            setShowToken(false);
           }}
-          className="inline-flex items-center justify-center rounded-full bg-linear-to-r from-cyan-400 via-blue-500 to-emerald-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:brightness-110"
-          type="button"
-        >
-          {showOBSSettings ? "📺 OBS配信設定を隠す" : "📺 OBS配信設定を表示"}
-        </button>
+          onCreateToken={() => {
+            void handleCreateToken();
+          }}
+          onShowToken={() => {
+            setShowToken(true);
+          }}
+          onHideToken={() => {
+            setShowToken(false);
+          }}
+          copyStatus={copyStatus}
+          copyToClipboard={copyToClipboard}
+        />
+        <OBSInstructions />
       </div>
-
-      {showOBSSettings && (
-        <div className="mt-5 space-y-6 rounded-[1.75rem] border border-cyan-400/10 bg-[linear-gradient(145deg,rgba(15,23,42,0.96),rgba(8,47,73,0.92))] p-6 shadow-inner shadow-black/30">
-          <h3 className="text-xl font-semibold text-white">📺 OBS配信設定</h3>
-          <StreamingUrlSection
-            streamingUrl={streamingUrl}
-            copyStatus={copyStatus}
-            copyToClipboard={copyToClipboard}
-          />
-          <TokenSection
-            state={state}
-            showToken={showToken}
-            onRetry={() => {
-              void fetchTokenStatus();
-              setShowToken(false);
-            }}
-            onCreateToken={() => {
-              void handleCreateToken();
-            }}
-            onShowToken={() => {
-              setShowToken(true);
-            }}
-            onHideToken={() => {
-              setShowToken(false);
-            }}
-            copyStatus={copyStatus}
-            copyToClipboard={copyToClipboard}
-          />
-          <OBSInstructions />
-        </div>
-      )}
     </section>
   );
 }

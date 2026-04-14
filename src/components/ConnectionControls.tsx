@@ -9,6 +9,7 @@ interface ConnectionControlsProps {
   onReconnect: () => void;
   onDisconnect: () => void;
   statusMessage: string | null;
+  embedded?: boolean;
 }
 
 function assertUnreachableStatus(status: never): never {
@@ -24,6 +25,7 @@ export function ConnectionControls({
   onReconnect,
   onDisconnect,
   statusMessage,
+  embedded = false,
 }: ConnectionControlsProps) {
   const statusClasses: Record<
     WHEPPlaybackPhase,
@@ -92,11 +94,12 @@ export function ConnectionControls({
       connectionPhase === "ended" ||
       connectionPhase === "error" ||
       (connectionPhase === "connected" && !hasStream));
+  const sectionClasses = embedded
+    ? `ml-auto w-fit max-w-full rounded-2xl border p-4 sm:p-5 ${styles.panel}`
+    : `rounded-4xl border p-4 shadow-xl shadow-black/20 backdrop-blur sm:p-5 ${styles.panel}`;
 
   return (
-    <section
-      className={`rounded-4xl border p-4 shadow-xl shadow-black/20 backdrop-blur sm:p-5 ${styles.panel}`}
-    >
+    <section className={sectionClasses}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <span
           className={`inline-flex items-center gap-3 text-sm font-medium ${styles.text}`}
