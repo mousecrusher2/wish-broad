@@ -1,14 +1,14 @@
 import { useState } from "react";
 import useSWR from "swr";
 
-interface LiveTokenResponse {
+type LiveTokenResponse = {
   hasToken: boolean;
-}
+};
 
-interface CreateTokenResponse {
+type CreateTokenResponse = {
   success: true;
   token: string;
-}
+};
 
 type LiveTokenState =
   | { status: "loading" }

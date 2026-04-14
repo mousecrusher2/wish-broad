@@ -1,12 +1,12 @@
 import useSWR from "swr";
 import type { Live } from "./types";
 
-interface UseLiveStreamsResult {
+type UseLiveStreamsResult = {
   streams: Live[];
   isLoading: boolean;
   error: string | null;
   refresh: () => void;
-}
+};
 
 function isLive(value: unknown): value is Live {
   if (typeof value !== "object" || value === null) {

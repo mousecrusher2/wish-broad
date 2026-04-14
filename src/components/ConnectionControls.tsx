@@ -1,26 +1,14 @@
-import type { WHEPConnectionStatus } from "../player/WHEPClient";
-import type { WHEPPlaybackPhase } from "../player/whep-playback";
-
-interface ConnectionControlsProps {
-  connectionPhase: WHEPPlaybackPhase;
-  connectionStatus: WHEPConnectionStatus;
-  hasStream: boolean;
-  statusMessage: string | null;
-  embedded?: boolean;
-}
-
-function assertUnreachableStatus(status: never): never {
-  void status;
-  throw new Error("Unexpected connection status");
-}
+import {
+  getPlaybackPhaseMessage,
+  type WHEPPlaybackPhase,
+  type WHEPPlaybackState,
+} from "../player/whep-playback";
 
 export function ConnectionControls({
-  connectionPhase,
-  connectionStatus,
-  hasStream,
-  statusMessage,
-  embedded = false,
-}: ConnectionControlsProps) {
+  playbackState,
+}: {
+  playbackState: WHEPPlaybackState;
+}) {
   const statusClasses: Record<
     WHEPPlaybackPhase,
     {
@@ -61,30 +49,8 @@ export function ConnectionControls({
     },
   };
 
-  const getStatusText = () => {
-    if (statusMessage) {
-      return statusMessage;
-    }
-
-    switch (connectionStatus) {
-      case "disconnected":
-        return "未接続";
-      case "connecting":
-        return "接続中...";
-      case "connected":
-        return connectionPhase === "connected" && !hasStream
-          ? "接続済み（映像待機中）"
-          : "接続済み";
-      case "failed":
-        return "接続失敗";
-    }
-
-    return assertUnreachableStatus(connectionStatus);
-  };
-  const styles = statusClasses[connectionPhase];
-  const sectionClasses = embedded
-    ? `ml-auto w-fit max-w-full rounded-2xl border p-4 sm:p-5 ${styles.panel}`
-    : `rounded-4xl border p-4 shadow-xl shadow-black/20 backdrop-blur sm:p-5 ${styles.panel}`;
+  const styles = statusClasses[playbackState.phase];
+  const sectionClasses = `ml-auto w-fit max-w-full rounded-2xl border p-4 sm:p-5 ${styles.panel}`;
 
   return (
     <section className={sectionClasses}>
@@ -95,7 +61,7 @@ export function ConnectionControls({
           <span
             className={`inline-block size-2.5 rounded-full ${styles.dot}`}
           />
-          {getStatusText()}
+          {getPlaybackPhaseMessage(playbackState.phase)}
         </span>
       </div>
     </section>

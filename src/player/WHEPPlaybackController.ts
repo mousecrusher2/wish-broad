@@ -13,7 +13,6 @@ import {
 import {
   createIdlePlaybackState,
   createPlaybackState,
-  getPlaybackPhaseMessage,
   type WHEPPlaybackState,
 } from "./whep-playback";
 
@@ -73,7 +72,6 @@ function createConnectedPlaybackState(
   return {
     connectionStatus: "connected",
     hasStream,
-    message: null,
     phase: "connected",
     resourceUserId,
     retryCount: 0,
@@ -87,7 +85,6 @@ function createTerminalPlaybackState(
   return {
     connectionStatus: phase === "ended" ? "disconnected" : "failed",
     hasStream: false,
-    message: getPlaybackPhaseMessage(phase),
     phase,
     resourceUserId,
     retryCount: 0,
@@ -367,7 +364,6 @@ export class WHEPPlaybackController {
     this.updatePlaybackState({
       connectionStatus,
       hasStream: false,
-      message: getPlaybackPhaseMessage("reconnecting"),
       phase: "reconnecting",
       resourceUserId,
       retryCount: this.retryCount,
@@ -403,7 +399,6 @@ export class WHEPPlaybackController {
     this.updatePlaybackState({
       connectionStatus: "connecting",
       hasStream: false,
-      message: getPlaybackPhaseMessage("reconnecting"),
       phase: "reconnecting",
       resourceUserId,
       retryCount: this.retryCount,

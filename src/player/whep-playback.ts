@@ -11,7 +11,6 @@ export type WHEPPlaybackPhase =
 export type WHEPPlaybackState = {
   connectionStatus: WHEPConnectionStatus;
   hasStream: boolean;
-  message: string | null;
   phase: WHEPPlaybackPhase;
   resourceUserId: string | null;
   retryCount: number;
@@ -26,7 +25,6 @@ export function createIdlePlaybackState(): WHEPPlaybackState {
   return {
     connectionStatus: "disconnected",
     hasStream: false,
-    message: null,
     phase: "idle",
     resourceUserId: null,
     retryCount: 0,
@@ -42,7 +40,6 @@ export function createPlaybackState(
   return {
     connectionStatus,
     hasStream: false,
-    message: getPlaybackPhaseMessage(phase),
     phase,
     resourceUserId,
     retryCount,

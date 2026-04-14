@@ -1,7 +1,6 @@
 import { useCallback, useState } from "react";
 import type { User } from "./types";
 import { OBSStreamingInfo } from "./OBSStreamingInfo";
-import { ConnectionControls } from "./components/ConnectionControls";
 import { StreamSelection } from "./components/StreamSelection";
 import { WHEPPlayer } from "./WHEPPlayer";
 import type { WHEPPlaybackControllerSnapshot } from "./player/WHEPPlaybackController";
@@ -98,16 +97,7 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
               onRefresh={refresh}
               onLoadClick={handleLoadClick}
               streamsLoading={streamsLoading}
-              embedded
-              embeddedStatus={
-                <ConnectionControls
-                  connectionPhase={playbackState.phase}
-                  connectionStatus={playbackState.connectionStatus}
-                  hasStream={playbackState.hasStream}
-                  statusMessage={playbackState.message}
-                  embedded
-                />
-              }
+              playbackState={playbackState}
             />
           </section>
 

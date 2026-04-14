@@ -1,9 +1,9 @@
 // 共通の型定義
 
-export interface User {
+export type User = {
   userId: string;
   displayName: string;
-}
+};
 
 export type AuthState =
   | { status: "unauthenticated" }
