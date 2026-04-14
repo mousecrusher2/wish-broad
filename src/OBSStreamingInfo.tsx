@@ -2,36 +2,8 @@ import { useEffect, useState } from "react";
 import { useLiveToken } from "./useLiveToken";
 import type { User } from "./types";
 
-type OBSStreamingInfoProps = {
-  popoverId: string;
-  user: User;
-};
-
 type LiveTokenState = ReturnType<typeof useLiveToken>["state"];
 type CopyStatus = "none" | "url" | "token";
-
-type TokenSectionProps = {
-  state: LiveTokenState;
-  showToken: boolean;
-  onRetry: () => void;
-  onCreateToken: () => void;
-  onShowToken: () => void;
-  onHideToken: () => void;
-  copyStatus: CopyStatus;
-  copyToClipboard: (
-    text: string,
-    type: Exclude<CopyStatus, "none">,
-  ) => Promise<void>;
-};
-
-type StreamingUrlSectionProps = {
-  streamingUrl: string;
-  copyStatus: CopyStatus;
-  copyToClipboard: (
-    text: string,
-    type: Exclude<CopyStatus, "none">,
-  ) => Promise<void>;
-};
 
 const fieldLabelClasses =
   "mb-2 block text-sm font-semibold tracking-wide text-slate-200";
@@ -101,7 +73,14 @@ function StreamingUrlSection({
   streamingUrl,
   copyStatus,
   copyToClipboard,
-}: Readonly<StreamingUrlSectionProps>) {
+}: Readonly<{
+  streamingUrl: string;
+  copyStatus: CopyStatus;
+  copyToClipboard: (
+    text: string,
+    type: Exclude<CopyStatus, "none">,
+  ) => Promise<void>;
+}>) {
   return (
     <div className="space-y-2">
       <label htmlFor="streaming-url" className={fieldLabelClasses}>
@@ -278,7 +257,19 @@ function TokenStateContent({
   onHideToken,
   copyStatus,
   copyToClipboard,
-}: Readonly<TokenSectionProps>) {
+}: Readonly<{
+  state: LiveTokenState;
+  showToken: boolean;
+  onRetry: () => void;
+  onCreateToken: () => void;
+  onShowToken: () => void;
+  onHideToken: () => void;
+  copyStatus: CopyStatus;
+  copyToClipboard: (
+    text: string,
+    type: Exclude<CopyStatus, "none">,
+  ) => Promise<void>;
+}>) {
   switch (state.status) {
     case "loading":
       return <LoadingTokenState />;
@@ -310,7 +301,19 @@ function TokenSection({
   onHideToken,
   copyStatus,
   copyToClipboard,
-}: Readonly<TokenSectionProps>) {
+}: Readonly<{
+  state: LiveTokenState;
+  showToken: boolean;
+  onRetry: () => void;
+  onCreateToken: () => void;
+  onShowToken: () => void;
+  onHideToken: () => void;
+  copyStatus: CopyStatus;
+  copyToClipboard: (
+    text: string,
+    type: Exclude<CopyStatus, "none">,
+  ) => Promise<void>;
+}>) {
   return (
     <div className="space-y-2">
       <div className={subtleCardClasses}>
@@ -347,7 +350,13 @@ function OBSInstructions() {
   );
 }
 
-export function OBSStreamingInfo({ popoverId, user }: Readonly<OBSStreamingInfoProps>) {
+export function OBSStreamingInfo({
+  popoverId,
+  user,
+}: Readonly<{
+  popoverId: string;
+  user: User;
+}>) {
   const { state, fetchTokenStatus, createToken } = useLiveToken();
   const [showToken, setShowToken] = useState(false);
   const [copyStatus, setCopyStatus] = useState<CopyStatus>("none");
