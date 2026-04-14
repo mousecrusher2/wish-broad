@@ -2,6 +2,7 @@ import js from "@eslint/js";
 import globals from "globals";
 import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
+import sonarjs from "eslint-plugin-sonarjs";
 import tailwindcss from "eslint-plugin-tailwindcss";
 import tseslint from "typescript-eslint";
 
@@ -12,14 +13,22 @@ const tailwindcssConfigs = tailwindcss.configs["flat/recommended"].map(
     files: ["src/**/*.{ts,tsx}"],
   }),
 );
+const tsTypeCheckedConfigs = tseslint.configs.recommendedTypeChecked.map(
+  (config) => ({
+    ...config,
+    files: ["**/*.{ts,tsx}"],
+  }),
+);
+const sonarjsRecommendedConfig = sonarjs.configs?.recommended ?? {
+  plugins: { sonarjs },
+};
 
-export default tseslint.config(
+export default [
   { ignores: ["dist", "worker-configuration.d.ts"] },
+  js.configs.recommended,
+  ...tsTypeCheckedConfigs,
+  sonarjsRecommendedConfig,
   {
-    extends: [
-      js.configs.recommended,
-      ...tseslint.configs.recommendedTypeChecked,
-    ],
     files: ["**/*.{ts,tsx}"],
     languageOptions: {
       ecmaVersion: "latest",
@@ -95,4 +104,4 @@ export default tseslint.config(
       globals: globals.node,
     },
   },
-);
+];

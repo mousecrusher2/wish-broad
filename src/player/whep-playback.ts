@@ -21,7 +21,7 @@ function assertUnreachablePhase(phase: never): never {
   throw new Error("Unexpected playback phase");
 }
 
-export function createIdlePlaybackState(): WHEPPlaybackState {
+export function createDefaultPlaybackState(): WHEPPlaybackState {
   return {
     connectionStatus: "disconnected",
     hasStream: false,

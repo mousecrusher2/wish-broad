@@ -11,7 +11,7 @@ import {
   shouldRecoverEstablishedSession,
 } from "./whep-reconnect";
 import {
-  createIdlePlaybackState,
+  createDefaultPlaybackState,
   createPlaybackState,
   type WHEPPlaybackState,
 } from "./whep-playback";
@@ -50,10 +50,10 @@ export type WHEPPlaybackControllerSnapshot = {
 
 type SnapshotSubscriber = (snapshot: WHEPPlaybackControllerSnapshot) => void;
 
-function createIdleSnapshot(): WHEPPlaybackControllerSnapshot {
+export function createDefaultSnapshot(): WHEPPlaybackControllerSnapshot {
   return {
     isLoading: false,
-    playbackState: createIdlePlaybackState(),
+    playbackState: createDefaultPlaybackState(),
   };
 }
 
@@ -103,7 +103,7 @@ export class WHEPPlaybackController {
   private recoveryTimerId: number | null = null;
   private retryCount = 0;
   private session: WHEPSession | null = null;
-  private snapshot = createIdleSnapshot();
+  private snapshot = createDefaultSnapshot();
   private snapshotSubscriber: SnapshotSubscriber | null = null;
   private targetResourceUserId: string | null = null;
   private videoElement: HTMLVideoElement | null = null;
@@ -150,7 +150,7 @@ export class WHEPPlaybackController {
 
   disconnect(): void {
     this.resetRuntime(true);
-    this.replaceSnapshot(createIdleSnapshot());
+    this.replaceSnapshot(createDefaultSnapshot());
   }
 
   dispose(): void {

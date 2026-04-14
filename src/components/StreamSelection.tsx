@@ -12,7 +12,7 @@ export function StreamSelection({
   onLoadClick,
   streamsLoading,
   playbackState,
-}: {
+}: Readonly<{
   resource: string;
   onResourceChange: (resource: string) => void;
   streams: Live[];
@@ -22,7 +22,7 @@ export function StreamSelection({
   onLoadClick: () => void;
   streamsLoading: boolean;
   playbackState: WHEPPlaybackState;
-}) {
+}>) {
   const loadButton = (
     <button
       onClick={onLoadClick}

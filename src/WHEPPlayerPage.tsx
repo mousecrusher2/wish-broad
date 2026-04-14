@@ -3,25 +3,17 @@ import type { User } from "./types";
 import { OBSStreamingInfo } from "./OBSStreamingInfo";
 import { StreamSelection } from "./components/StreamSelection";
 import { WHEPPlayer } from "./WHEPPlayer";
-import type { WHEPPlaybackControllerSnapshot } from "./player/WHEPPlaybackController";
-import { createIdlePlaybackState } from "./player/whep-playback";
+import { createDefaultSnapshot, type WHEPPlaybackControllerSnapshot } from "./player/WHEPPlaybackController";
 import { useLiveStreams } from "./useLiveStreams";
 
 const OBS_SETTINGS_POPOVER_ID = "obs-settings-popover";
-
-function createIdleSnapshot(): WHEPPlaybackControllerSnapshot {
-  return {
-    isLoading: false,
-    playbackState: createIdlePlaybackState(),
-  };
-}
 
 function WHEPPlayerPageContent({ user }: { user: User }) {
   const [resource, setResource] = useState("");
   const [activeResource, setActiveResource] = useState<string | null>(null);
   const [loadSequence, setLoadSequence] = useState(0);
   const [playerSnapshot, setPlayerSnapshot] =
-    useState<WHEPPlaybackControllerSnapshot>(createIdleSnapshot);
+    useState<WHEPPlaybackControllerSnapshot>(createDefaultSnapshot);
 
   const {
     streams,
@@ -105,8 +97,8 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
             <WHEPPlayer
               onSnapshotChange={setPlayerSnapshot}
               resourceUserId={activeResource}
-              loadSequence={loadSequence}
               snapshot={playerSnapshot}
+              key={loadSequence}
             />
           </div>
         </div>
