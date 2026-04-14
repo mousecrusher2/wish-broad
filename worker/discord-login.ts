@@ -151,10 +151,11 @@ export async function completeDiscordLogin(
     authorizedUserId = member.user.id;
     return await issueDiscordLoginJwt(c, member);
   } catch (error) {
-    console.error(
-      `Discord login failed${authorizedUserId ? ` for user ${authorizedUserId}` : ""}:`,
-      error,
-    );
+    const errorMessage =
+      authorizedUserId
+        ? `Discord login failed for user ${authorizedUserId}:`
+        : "Discord login failed:";
+    console.error(errorMessage, error);
 
     if (error instanceof DiscordApiError) {
       if (isGuildMembershipLookupFailure(error, c.env.AUTHORIZED_GUILD_ID)) {

@@ -61,7 +61,8 @@ function looksLikeHtml(text: string): boolean {
 }
 
 function createDiscordBasicAuthHeader(env: DiscordEnv): string {
-  return `Basic ${btoa(`${env.DISCORD_CLIENT_ID}:${env.DISCORD_CLIENT_SECRET}`)}`;
+  const credentials = `${env.DISCORD_CLIENT_ID}:${env.DISCORD_CLIENT_SECRET}`;
+  return `Basic ${btoa(credentials)}`;
 }
 
 function createDiscordApiError(

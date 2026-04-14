@@ -16,11 +16,6 @@ export type WHEPPlaybackState = {
   retryCount: number;
 };
 
-function assertUnreachablePhase(phase: never): never {
-  void phase;
-  throw new Error("Unexpected playback phase");
-}
-
 export function createDefaultPlaybackState(): WHEPPlaybackState {
   return {
     connectionStatus: "disconnected",
@@ -61,8 +56,6 @@ export function getPlaybackPhaseMessage(
       return "配信は終了しました";
     case "error":
       return "接続エラーが発生しました";
-    default:
-      return assertUnreachablePhase(phase);
   }
 }
 
@@ -82,7 +75,5 @@ export function getPlaybackPlaceholderText(
       return "接続エラーが発生しました";
     case "connected":
       return "映像を待機中...";
-    default:
-      return assertUnreachablePhase(playbackState.phase);
   }
 }

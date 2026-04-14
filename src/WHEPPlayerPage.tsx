@@ -8,7 +8,7 @@ import { useLiveStreams } from "./useLiveStreams";
 
 const OBS_SETTINGS_POPOVER_ID = "obs-settings-popover";
 
-function WHEPPlayerPageContent({ user }: { user: User }) {
+function WHEPPlayerPageContent({ user }: Readonly<{ user: User }>) {
   const [resource, setResource] = useState("");
   const [activeResource, setActiveResource] = useState<string | null>(null);
   const [loadSequence, setLoadSequence] = useState(0);
@@ -107,6 +107,6 @@ function WHEPPlayerPageContent({ user }: { user: User }) {
   );
 }
 
-export function WHEPPlayerPage({ user }: { user: User }) {
+export function WHEPPlayerPage({ user }: Readonly<{ user: User }>) {
   return <WHEPPlayerPageContent user={user} />;
 }

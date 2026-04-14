@@ -572,9 +572,10 @@ export class WHEPPlaybackController {
         return;
       }
 
-      if (nextCurrentTime > playbackMonitor.lastCurrentTime + 0.05) {
-        playbackMonitor.sawPlaybackProgress = true;
-      } else if (!playbackMonitor.sawPlaybackProgress && nextCurrentTime > 0) {
+      if (
+        nextCurrentTime > playbackMonitor.lastCurrentTime + 0.05 ||
+        (!playbackMonitor.sawPlaybackProgress && nextCurrentTime > 0)
+      ) {
         playbackMonitor.sawPlaybackProgress = true;
       }
 

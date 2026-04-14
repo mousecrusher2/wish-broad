@@ -13,7 +13,7 @@ import { getPlaybackPlaceholderText } from "./player/whep-playback";
 
 export type WHEPPlayerSnapshot = WHEPPlaybackControllerSnapshot;
 
-function VideoPlaceholder({ message }: { message: string }) {
+function VideoPlaceholder({ message }: Readonly<{ message: string }>) {
   return (
     <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm leading-7 text-slate-400">
       {message}
@@ -25,11 +25,11 @@ export function WHEPPlayer({
   onSnapshotChange,
   resourceUserId,
   snapshot,
-}: {
+}: Readonly<{
   onSnapshotChange: (snapshot: WHEPPlaybackControllerSnapshot) => void;
   resourceUserId: string | null;
   snapshot: WHEPPlayerSnapshot;
-}) {
+}>) {
   const [controller] = useState(() => new WHEPPlaybackController());
   const disposeTokenRef = useRef(0);
   const handleSnapshotChange = useEffectEvent(

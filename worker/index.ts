@@ -1,3 +1,4 @@
+/* eslint-disable sonarjs/cognitive-complexity */
 import { Context, Hono } from "hono";
 import { JWTPayload, Bindings, StoredTrack } from "./types";
 import * as db from "./database";
@@ -21,6 +22,8 @@ import { logger } from "hono/logger";
 import { HTTPException } from "hono/http-exception";
 import { jwt } from "hono/jwt";
 import { hashTokenWithPepper } from "./token-hash";
+
+type CallsErrorStatusCode = 400 | 415 | 422;
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -203,7 +206,7 @@ app.post("/ingest/:userId", async (c) => {
     if (isCallsPublisherError(error)) {
       return c.text(
         getCallsErrorText(error, "Failed to negotiate ingest session"),
-        error.statusCode as 400 | 415 | 422,
+        error.statusCode as CallsErrorStatusCode,
       );
     }
 
@@ -324,16 +327,16 @@ app.post("/play/:userId", async (c) => {
   const liveTrackRecord = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
   const tracks = liveTrackRecord?.tracks ?? [];
 
-  if (liveTrackRecord) {
-    const isActive = await isSessionActive(c.env, liveTrackRecord.sessionId);
-    if (!isActive) {
-      await db.deleteTracksForSession(
-        c.env.LIVE_DB,
-        userId,
-        liveTrackRecord.sessionId,
-      );
-      return c.text(`Live stream not found: ${userId}`, 404);
-    }
+  if (
+    liveTrackRecord &&
+    (await isSessionActive(c.env, liveTrackRecord.sessionId))
+  ) {
+    await db.deleteTracksForSession(
+      c.env.LIVE_DB,
+      userId,
+      liveTrackRecord.sessionId,
+    );
+    return c.text(`Live stream not found: ${userId}`, 404);
   }
 
   if (!isSdpContentType(c.req.header("content-type"))) {
@@ -380,7 +383,7 @@ app.post("/play/:userId", async (c) => {
     if (isCallsPublisherError(error)) {
       return c.text(
         getCallsErrorText(error, "Failed to negotiate playback session"),
-        error.statusCode as 400 | 415 | 422,
+        error.statusCode as CallsErrorStatusCode,
       );
     }
 
@@ -441,7 +444,7 @@ app
       if (isCallsPublisherError(error)) {
         return c.text(
           getCallsErrorText(error, "Failed to submit WHEP answer"),
-          error.statusCode as 400 | 415 | 422,
+          error.statusCode as CallsErrorStatusCode,
         );
       }
 

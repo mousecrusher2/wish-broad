@@ -44,11 +44,6 @@ type WHEPSessionErrorOptions = {
   statusCode: number | undefined;
 };
 
-function assertUnreachableState(state: never): never {
-  void state;
-  throw new Error("Unexpected connection state");
-}
-
 function normalizeError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
@@ -320,8 +315,6 @@ export class WHEPSession {
         return "failed";
       case "closed":
         return "disconnected";
-      default:
-        return assertUnreachableState(state);
     }
   }
 
@@ -353,8 +346,6 @@ export class WHEPSession {
         return "failed";
       case "closed":
         return "disconnected";
-      default:
-        return assertUnreachableState(this.pc.connectionState);
     }
   }
 
