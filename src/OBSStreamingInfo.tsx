@@ -250,18 +250,16 @@ function AvailableTokenState({
 
 function TokenStateContent({
   state,
-  showToken,
-  onRetry,
   onCreateToken,
+  showToken,
   onShowToken,
   onHideToken,
   copyStatus,
   copyToClipboard,
 }: Readonly<{
   state: LiveTokenState;
-  showToken: boolean;
-  onRetry: () => void;
   onCreateToken: () => void;
+  showToken: boolean;
   onShowToken: () => void;
   onHideToken: () => void;
   copyStatus: CopyStatus;
@@ -273,8 +271,6 @@ function TokenStateContent({
   switch (state.status) {
     case "loading":
       return <LoadingTokenState />;
-    case "error":
-      return <ErrorTokenState message={state.message} onRetry={onRetry} />;
     case "available":
       return (
         <AvailableTokenState
@@ -294,6 +290,7 @@ function TokenStateContent({
 
 function TokenSection({
   state,
+  error,
   showToken,
   onRetry,
   onCreateToken,
@@ -303,6 +300,7 @@ function TokenSection({
   copyToClipboard,
 }: Readonly<{
   state: LiveTokenState;
+  error: string | null;
   showToken: boolean;
   onRetry: () => void;
   onCreateToken: () => void;
@@ -320,16 +318,19 @@ function TokenSection({
         <label className={fieldLabelClasses}>
           Bearerトークン (Stream Key):
         </label>
-        <TokenStateContent
-          state={state}
-          showToken={showToken}
-          onRetry={onRetry}
-          onCreateToken={onCreateToken}
-          onShowToken={onShowToken}
-          onHideToken={onHideToken}
-          copyStatus={copyStatus}
-          copyToClipboard={copyToClipboard}
-        />
+        {error ? (
+          <ErrorTokenState message={error} onRetry={onRetry} />
+        ) : (
+          <TokenStateContent
+            state={state}
+            showToken={showToken}
+            onCreateToken={onCreateToken}
+            onShowToken={onShowToken}
+            onHideToken={onHideToken}
+            copyStatus={copyStatus}
+            copyToClipboard={copyToClipboard}
+          />
+        )}
       </div>
     </div>
   );
@@ -357,7 +358,7 @@ export function OBSStreamingInfo({
   popoverId: string;
   user: User;
 }>) {
-  const { state, fetchTokenStatus, createToken } = useLiveToken();
+  const { state, error, fetchTokenStatus, createToken } = useLiveToken();
   const [showToken, setShowToken] = useState(false);
   const [copyStatus, setCopyStatus] = useState<CopyStatus>("none");
   const [popoverWidthPx, setPopoverWidthPx] = useState(() => {
@@ -393,21 +394,25 @@ export function OBSStreamingInfo({
   }, []);
 
   const copyToClipboard = async (text: string, type: "url" | "token") => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopyStatus(type);
-      setTimeout(() => {
-        setCopyStatus("none");
-      }, 2000);
-    } catch (err) {
-      console.error("Failed to copy to clipboard:", err);
-      alert("クリップボードへのコピーに失敗しました");
-    }
+    await navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopyStatus(type);
+        setTimeout(() => {
+          setCopyStatus("none");
+        }, 2000);
+      })
+      .catch((error: Error) => {
+        console.error("Failed to copy to clipboard:", error);
+        alert("クリップボードへのコピーに失敗しました");
+      });
   };
 
   const handleCreateToken = async () => {
-    await createToken();
-    setShowToken(true);
+    const createResult = await createToken();
+    if (createResult.isOk()) {
+      setShowToken(true);
+    }
   };
 
   return (
@@ -450,6 +455,7 @@ export function OBSStreamingInfo({
         />
         <TokenSection
           state={state}
+          error={error}
           showToken={showToken}
           onRetry={() => {
             void fetchTokenStatus();

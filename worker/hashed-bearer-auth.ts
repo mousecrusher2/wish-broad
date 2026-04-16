@@ -3,7 +3,11 @@ import { verifyTokenHash } from "./token-hash";
 
 type MaybePromise<T> = T | Promise<T>;
 
-type ResolveableValue<E extends { Bindings: object }, P extends string, T> =
+type ResolveableValue<
+  E extends { Bindings: object },
+  P extends string,
+  T extends string | null,
+> =
   | T
   | ((c: Context<E, P>) => MaybePromise<T>);
 
@@ -15,6 +19,10 @@ type HashedBearerAuthOptions<
   realm?: string;
   token: ResolveableValue<E, P, string | null>;
 };
+
+type TokenCheckResult =
+  | { kind: "ok"; isValidToken: boolean }
+  | { kind: "error"; error: Error };
 
 function getBearerToken(
   authorizationHeader: string | undefined,
@@ -44,10 +52,10 @@ function createUnauthorizedResponse(realm?: string): Response {
 async function resolveValue<
   E extends { Bindings: object },
   P extends string,
-  T,
+  T extends string | null,
 >(value: ResolveableValue<E, P, T>, c: Context<E, P>): Promise<T> {
   if (typeof value === "function") {
-    return await (value as (context: Context<E, P>) => MaybePromise<T>)(c);
+    return value(c);
   }
 
   return value;
@@ -69,12 +77,22 @@ export function hashedBearerAuth<
     }
 
     const pepper = await resolveValue(options.pepper, c);
-    const isValidToken = await verifyTokenHash(
+    const tokenCheck: TokenCheckResult = await verifyTokenHash(
       pepper,
       bearerToken,
       expectedTokenHash,
-    );
-    if (!isValidToken) {
+    )
+      .then(
+        (isValidToken): TokenCheckResult => ({ kind: "ok", isValidToken }),
+      )
+      .catch((error: Error): TokenCheckResult => ({ kind: "error", error }));
+
+    if (tokenCheck.kind === "error") {
+      console.error("Failed to verify bearer token hash:", tokenCheck.error);
+      return createUnauthorizedResponse(options.realm);
+    }
+
+    if (!tokenCheck.isValidToken) {
       return createUnauthorizedResponse(options.realm);
     }
 

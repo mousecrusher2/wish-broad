@@ -1,11 +1,12 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { sign } from "hono/jwt";
 import { Context } from "hono";
-import * as db from "./database";
+import { setUser } from "./database";
 import {
   buildDiscordAuthorizationUrl,
   createOAuthState,
   DiscordApiError,
+  type DiscordGuildMember,
   DISCORD_STATE_COOKIE_NAME,
   DISCORD_STATE_MAX_AGE_SECONDS,
   exchangeCodeForToken,
@@ -14,7 +15,9 @@ import {
   revokeAccessToken,
 } from "./discord";
 import { calcJwtTimestamps, JWT_DURATION_SECONDS } from "./jwt-utils";
-import { Bindings, DiscordGuildMember, JWTPayload } from "./types";
+import { Bindings, JWTPayload } from "./types";
+
+type ContextWithBindings = { Bindings: Bindings };
 
 function isProductionEnvironment(env: Pick<Bindings, "ENVIRONMENT">): boolean {
   return env.ENVIRONMENT === "production";
@@ -36,7 +39,9 @@ function getDiscordStateCookieOptions(env: Pick<Bindings, "ENVIRONMENT">): {
   };
 }
 
-function getDiscordRedirectUri(c: Context<{ Bindings: Bindings }>): string {
+function getDiscordRedirectUri<E extends ContextWithBindings>(
+  c: Context<E>,
+): string {
   const url = new URL(c.req.url);
   url.hash = "";
   url.pathname = "/login/callback";
@@ -54,14 +59,14 @@ function isGuildMembershipLookupFailure(
   );
 }
 
-async function issueDiscordLoginJwt(
-  c: Context<{ Bindings: Bindings }>,
+async function issueDiscordLoginJwt<E extends ContextWithBindings>(
+  c: Context<E>,
   member: DiscordGuildMember,
 ): Promise<Response> {
   const displayName =
     member.nick || member.user.global_name || member.user.username;
 
-  await db.setUser(c.env.LIVE_DB, {
+  await setUser(c.env.LIVE_DB, {
     userId: member.user.id,
     displayName,
   });
@@ -85,14 +90,16 @@ async function issueDiscordLoginJwt(
   return c.redirect("/");
 }
 
-export function clearAuthCookie(c: Context<{ Bindings: Bindings }>): void {
+export function clearAuthCookie<E extends ContextWithBindings>(
+  c: Context<E>,
+): void {
   deleteCookie(c, "authtoken", {
     secure: isProductionEnvironment(c.env),
   });
 }
 
-export function startDiscordLogin(
-  c: Context<{ Bindings: Bindings }>,
+export function startDiscordLogin<E extends ContextWithBindings>(
+  c: Context<E>,
 ): Response {
   const state = createOAuthState();
   setCookie(
@@ -106,8 +113,8 @@ export function startDiscordLogin(
   );
 }
 
-export async function completeDiscordLogin(
-  c: Context<{ Bindings: Bindings }>,
+export async function completeDiscordLogin<E extends ContextWithBindings>(
+  c: Context<E>,
 ): Promise<Response> {
   const authorizationCode = c.req.query("code");
   const returnedState = c.req.query("state");
@@ -137,48 +144,51 @@ export async function completeDiscordLogin(
   }
 
   let accessToken: string | null = null;
-  let authorizedUserId: string | null = null;
-
-  try {
-    const oauthToken = await exchangeCodeForToken(
-      c.env,
-      authorizationCode,
-      getDiscordRedirectUri(c),
-    );
-    accessToken = oauthToken.accessToken;
-
-    const member = await getGuildMember(accessToken, c.env.AUTHORIZED_GUILD_ID);
-    authorizedUserId = member.user.id;
-    return await issueDiscordLoginJwt(c, member);
-  } catch (error) {
-    const errorMessage =
-      authorizedUserId
-        ? `Discord login failed for user ${authorizedUserId}:`
-        : "Discord login failed:";
-    console.error(errorMessage, error);
-
-    if (error instanceof DiscordApiError) {
-      if (isGuildMembershipLookupFailure(error, c.env.AUTHORIZED_GUILD_ID)) {
-        return c.text(
-          "Unauthorized: You are not a member of the authorized Discord server",
-          401,
-        );
+  const revokeAccessTokenIfNeeded = async () => {
+    if (accessToken) {
+      const revokeResult = await revokeAccessToken(c.env, accessToken);
+      if (revokeResult.isErr()) {
+        console.warn("Failed to revoke OAuth token:", revokeResult.error);
       }
+    }
+  };
 
+  const oauthTokenResult = await exchangeCodeForToken(
+    c.env,
+    authorizationCode,
+    getDiscordRedirectUri(c),
+  );
+  if (oauthTokenResult.isErr()) {
+    console.error("Discord login failed:", oauthTokenResult.error);
+    return c.text(
+      `Discord login failed: ${getDiscordErrorMessage(oauthTokenResult.error)}`,
+      502,
+    );
+  }
+
+  accessToken = oauthTokenResult.value.accessToken;
+
+  const memberResult = await getGuildMember(accessToken, c.env.AUTHORIZED_GUILD_ID);
+  if (memberResult.isErr()) {
+    console.error("Discord login failed:", memberResult.error);
+    await revokeAccessTokenIfNeeded();
+
+    if (isGuildMembershipLookupFailure(memberResult.error, c.env.AUTHORIZED_GUILD_ID)) {
       return c.text(
-        `Discord login failed: ${getDiscordErrorMessage(error)}`,
-        502,
+        "Unauthorized: You are not a member of the authorized Discord server",
+        401,
       );
     }
 
-    throw error;
+    return c.text(
+      `Discord login failed: ${getDiscordErrorMessage(memberResult.error)}`,
+      502,
+    );
+  }
+
+  try {
+    return await issueDiscordLoginJwt(c, memberResult.value);
   } finally {
-    if (accessToken) {
-      try {
-        await revokeAccessToken(c.env, accessToken);
-      } catch (error) {
-        console.warn("Failed to revoke OAuth token:", error);
-      }
-    }
+    await revokeAccessTokenIfNeeded();
   }
 }

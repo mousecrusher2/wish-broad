@@ -7,8 +7,7 @@ export type User = {
 
 export type AuthState =
   | { status: "unauthenticated" }
-  | { status: "authenticated"; user: User }
-  | { status: "error"; message?: string };
+  | { status: "authenticated"; user: User };
 
 export type Live = {
   owner: User;

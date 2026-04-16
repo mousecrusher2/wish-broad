@@ -1,11 +1,9 @@
 import { sign } from "hono/jwt";
+import { err, ok } from "neverthrow";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  Bindings,
-  DiscordGuildMember,
-  DiscordOAuthToken,
-  StoredTrack,
-} from "./types";
+import type { Bindings } from "./types";
+import type { DiscordGuildMember, DiscordOAuthToken } from "./discord";
+import type { StoredTrack } from "./calls";
 import { hashTokenWithPepper } from "./token-hash";
 
 const dbMocks = vi.hoisted(() => ({
@@ -41,6 +39,28 @@ const callsMocks = vi.hoisted(() => {
       );
       this.name = "CallsApiError";
     }
+
+    toNegotiationClientError(
+      fallbackText: string,
+    ): { status: 400 | 415 | 422; text: string } | null {
+      if (
+        this.statusCode !== 400 &&
+        this.statusCode !== 415 &&
+        this.statusCode !== 422
+      ) {
+        return null;
+      }
+
+      const text =
+        typeof this.responseBody === "string" && this.responseBody.length > 0
+          ? this.responseBody
+          : fallbackText;
+
+      return {
+        status: this.statusCode,
+        text,
+      };
+    }
   }
 
   class MockLiveNotFoundError extends Error {
@@ -54,8 +74,8 @@ const callsMocks = vi.hoisted(() => {
     CallsApiError: MockCallsApiError,
     LiveNotFoundError: MockLiveNotFoundError,
     closeTracks: vi.fn<() => Promise<unknown>>(),
-    isSessionActive: vi.fn<() => Promise<boolean>>(),
-    renegotiateSession: vi.fn<() => Promise<Response>>(),
+    isSessionActive: vi.fn<() => Promise<unknown>>(),
+    renegotiateSession: vi.fn<() => Promise<unknown>>(),
     startIngest: vi.fn<() => Promise<unknown>>(),
     startPlay: vi.fn<() => Promise<unknown>>(),
   };
@@ -93,19 +113,19 @@ const discordMocks = vi.hoisted(() => {
           env: Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">,
           code: string,
           redirectUri: string,
-        ) => Promise<DiscordOAuthToken>
+        ) => Promise<unknown>
       >(),
     getDiscordErrorMessage: vi.fn<(error: unknown) => string>(),
     getGuildMember:
       vi.fn<
-        (accessToken: string, guildId: string) => Promise<DiscordGuildMember>
+        (accessToken: string, guildId: string) => Promise<unknown>
       >(),
     revokeAccessToken:
       vi.fn<
         (
           env: Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">,
           accessToken: string,
-        ) => Promise<void>
+        ) => Promise<unknown>
       >(),
   };
 });
@@ -134,11 +154,68 @@ vi.mock("./discord", () => ({
 
 import app from "./index";
 
+function createUnusedD1PreparedStatement(): D1PreparedStatement {
+  return {
+    bind() {
+      throw new Error("Unexpected D1 access in tests");
+    },
+    first() {
+      throw new Error("Unexpected D1 access in tests");
+    },
+    run() {
+      throw new Error("Unexpected D1 access in tests");
+    },
+    all() {
+      throw new Error("Unexpected D1 access in tests");
+    },
+    raw() {
+      throw new Error("Unexpected D1 access in tests");
+    },
+  };
+}
+
+function createUnusedD1DatabaseSession(): D1DatabaseSession {
+  return {
+    prepare() {
+      throw new Error("Unexpected D1 session access in tests");
+    },
+    batch() {
+      throw new Error("Unexpected D1 session access in tests");
+    },
+    getBookmark() {
+      throw new Error("Unexpected D1 session access in tests");
+    },
+  };
+}
+
+function createUnusedD1Database(): D1Database {
+  return {
+    prepare() {
+      return createUnusedD1PreparedStatement();
+    },
+    batch() {
+      throw new Error("Unexpected D1 access in tests");
+    },
+    exec() {
+      throw new Error("Unexpected D1 access in tests");
+    },
+    withSession() {
+      return createUnusedD1DatabaseSession();
+    },
+    dump() {
+      throw new Error("Unexpected D1 access in tests");
+    },
+  };
+}
+
 function createExecutionContext(): ExecutionContext {
   return {
     passThroughOnException() {},
-    waitUntil() {},
-  } as unknown as ExecutionContext;
+    waitUntil(promise: Promise<unknown>) {
+      void promise;
+    },
+    props: undefined,
+  };
 }
 
 function createBindings(): Bindings {
@@ -150,7 +227,7 @@ function createBindings(): Bindings {
     DISCORD_CLIENT_SECRET: "discord-client-secret",
     ENVIRONMENT: "test",
     JWT_SECRET: "test-jwt-secret",
-    LIVE_DB: {} as D1Database,
+    LIVE_DB: createUnusedD1Database(),
     LIVE_TOKEN_PEPPER: "test-live-token-pepper",
   };
 }
@@ -205,59 +282,67 @@ describe("worker app", () => {
     discordMocks.createOAuthState.mockReset();
     discordMocks.createOAuthState.mockReturnValue("oauth-state");
     discordMocks.exchangeCodeForToken.mockReset();
-    discordMocks.exchangeCodeForToken.mockResolvedValue({
-      accessToken: "discord-access-token",
-      expiresIn: 3600,
-      scope: "identify guilds.members.read",
-      tokenType: "Bearer",
-    });
+    discordMocks.exchangeCodeForToken.mockResolvedValue(
+      ok<DiscordOAuthToken>({
+        accessToken: "discord-access-token",
+        expiresIn: 3600,
+        scope: "identify guilds.members.read",
+        tokenType: "Bearer",
+      }),
+    );
     discordMocks.getDiscordErrorMessage.mockReset();
     discordMocks.getDiscordErrorMessage.mockReturnValue(
       "Discord request failed",
     );
     discordMocks.getGuildMember.mockReset();
-    discordMocks.getGuildMember.mockResolvedValue({
-      nick: null,
-      user: {
-        discriminator: null,
-        global_name: "Alice",
-        id: "user-1",
-        username: "alice",
-      },
-    });
+    discordMocks.getGuildMember.mockResolvedValue(
+      ok<DiscordGuildMember>({
+        nick: null,
+        user: {
+          discriminator: null,
+          global_name: "Alice",
+          id: "user-1",
+          username: "alice",
+        },
+      }),
+    );
     discordMocks.revokeAccessToken.mockReset();
-    discordMocks.revokeAccessToken.mockResolvedValue();
+    discordMocks.revokeAccessToken.mockResolvedValue(ok(undefined));
 
-    callsMocks.closeTracks.mockResolvedValue({});
-    callsMocks.isSessionActive.mockResolvedValue(true);
-    callsMocks.renegotiateSession.mockResolvedValue(new Response(null));
+    callsMocks.closeTracks.mockResolvedValue(ok({}));
+    callsMocks.isSessionActive.mockResolvedValue(ok(true));
+    callsMocks.renegotiateSession.mockResolvedValue(ok(new Response(null)));
     callsMocks.startIngest.mockReset();
-    callsMocks.startIngest.mockResolvedValue({
-      sdpAnswer: "answer-sdp",
-      sessionId: "new-session",
-      tracks: [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "new-session",
-          trackName: "video",
-        },
-      ],
-    });
+    callsMocks.startIngest.mockResolvedValue(
+      ok({
+        sdpAnswer: "answer-sdp",
+        sessionId: "new-session",
+        tracks: [
+          {
+            location: "remote",
+            mid: "0",
+            sessionId: "new-session",
+            trackName: "video",
+          },
+        ],
+      }),
+    );
     callsMocks.startPlay.mockReset();
-    callsMocks.startPlay.mockResolvedValue({
-      sdpAnswer: "viewer-answer-sdp",
-      sessionId: "viewer-session",
-      sdpType: "answer",
-      tracks: [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "viewer-session",
-          trackName: "video",
-        },
-      ],
-    });
+    callsMocks.startPlay.mockResolvedValue(
+      ok({
+        sdpAnswer: "viewer-answer-sdp",
+        sessionId: "viewer-session",
+        sdpType: "answer",
+        tracks: [
+          {
+            location: "remote",
+            mid: "0",
+            sessionId: "viewer-session",
+            trackName: "video",
+          },
+        ],
+      }),
+    );
   });
 
   it("redirects to Discord when login starts", async () => {
@@ -340,11 +425,13 @@ describe("worker app", () => {
   it("rejects Discord login when the user is not in the authorized guild", async () => {
     const env = createBindings();
 
-    discordMocks.getGuildMember.mockRejectedValue(
-      new discordMocks.DiscordApiError(
-        `https://discord.com/api/v10/users/@me/guilds/${env.AUTHORIZED_GUILD_ID}/member`,
-        404,
-        "Not Found",
+    discordMocks.getGuildMember.mockResolvedValue(
+      err(
+        new discordMocks.DiscordApiError(
+          `https://discord.com/api/v10/users/@me/guilds/${env.AUTHORIZED_GUILD_ID}/member`,
+          404,
+          "Not Found",
+        ),
       ),
     );
 
@@ -440,7 +527,7 @@ describe("worker app", () => {
       tracks: staleTracks,
       userId: "user-1",
     });
-    callsMocks.isSessionActive.mockResolvedValue(false);
+    callsMocks.isSessionActive.mockResolvedValue(ok(false));
 
     const response = await app.fetch(
       new Request("http://localhost/ingest/user-1", {
@@ -543,12 +630,14 @@ describe("worker app", () => {
   it("returns Calls client errors for invalid ingest offers", async () => {
     const env = createBindings();
 
-    callsMocks.startIngest.mockRejectedValue(
-      new callsMocks.CallsApiError(
-        422,
-        "Unprocessable Content",
-        "/tracks/new",
-        "Malformed SDP offer",
+    callsMocks.startIngest.mockResolvedValue(
+      err(
+        new callsMocks.CallsApiError(
+          422,
+          "Unprocessable Content",
+          "/tracks/new",
+          "Malformed SDP offer",
+        ),
       ),
     );
 
@@ -572,12 +661,14 @@ describe("worker app", () => {
   it("keeps Calls auth failures as worker errors during ingest", async () => {
     const env = createBindings();
 
-    callsMocks.startIngest.mockRejectedValue(
-      new callsMocks.CallsApiError(
-        401,
-        "Unauthorized",
-        "/sessions/new",
-        "Calls auth failed",
+    callsMocks.startIngest.mockResolvedValue(
+      err(
+        new callsMocks.CallsApiError(
+          401,
+          "Unauthorized",
+          "/sessions/new",
+          "Calls auth failed",
+        ),
       ),
     );
 
@@ -613,7 +704,7 @@ describe("worker app", () => {
       ],
       userId: "user-1",
     });
-    callsMocks.isSessionActive.mockResolvedValue(true);
+    callsMocks.isSessionActive.mockResolvedValue(ok(true));
 
     const response = await app.fetch(
       new Request("http://localhost/ingest/user-1", {
@@ -691,9 +782,11 @@ describe("worker app", () => {
       ],
       userId: "user-1",
     });
-    callsMocks.closeTracks.mockResolvedValue({
-      tracks: [{ errorCode: "failed_to_close", mid: "0" }],
-    });
+    callsMocks.closeTracks.mockResolvedValue(
+      ok({
+        tracks: [{ errorCode: "failed_to_close", mid: "0" }],
+      }),
+    );
 
     const request = new Request("http://localhost/ingest/user-1/session-1", {
       headers: {
@@ -723,8 +816,8 @@ describe("worker app", () => {
       ],
       userId: "user-1",
     });
-    callsMocks.closeTracks.mockRejectedValue(
-      new callsMocks.CallsApiError(404, "Not Found", "/tracks/close"),
+    callsMocks.closeTracks.mockResolvedValue(
+      err(new callsMocks.CallsApiError(404, "Not Found", "/tracks/close")),
     );
 
     const response = await app.fetch(
@@ -830,7 +923,7 @@ describe("worker app", () => {
       tracks: liveTracks,
       userId: "streamer-1",
     });
-    callsMocks.isSessionActive.mockResolvedValue(false);
+    callsMocks.isSessionActive.mockResolvedValue(ok(false));
 
     const response = await app.fetch(
       new Request("http://localhost/play/streamer-1", {
@@ -871,8 +964,8 @@ describe("worker app", () => {
       tracks: liveTracks,
       userId: "streamer-1",
     });
-    callsMocks.startPlay.mockRejectedValue(
-      new callsMocks.CallsApiError(404, "Not Found", "/tracks/new"),
+    callsMocks.startPlay.mockResolvedValue(
+      err(new callsMocks.CallsApiError(404, "Not Found", "/tracks/new")),
     );
 
     const response = await app.fetch(
@@ -991,12 +1084,14 @@ describe("worker app", () => {
       tracks: liveTracks,
       userId: "streamer-1",
     });
-    callsMocks.startPlay.mockRejectedValue(
-      new callsMocks.CallsApiError(
-        422,
-        "Unprocessable Content",
-        "/tracks/new",
-        "Malformed SDP offer",
+    callsMocks.startPlay.mockResolvedValue(
+      err(
+        new callsMocks.CallsApiError(
+          422,
+          "Unprocessable Content",
+          "/tracks/new",
+          "Malformed SDP offer",
+        ),
       ),
     );
 
@@ -1033,7 +1128,7 @@ describe("worker app", () => {
       tracks: liveTracks,
       userId: "streamer-1",
     });
-    callsMocks.isSessionActive.mockResolvedValue(true);
+    callsMocks.isSessionActive.mockResolvedValue(ok(true));
 
     const response = await app.fetch(
       new Request("http://localhost/play/streamer-1", {
@@ -1082,19 +1177,21 @@ describe("worker app", () => {
       tracks: liveTracks,
       userId: "streamer-1",
     });
-    callsMocks.startPlay.mockResolvedValue({
-      sdpAnswer: "viewer-counter-offer-sdp",
-      sessionId: "viewer-session",
-      sdpType: "offer",
-      tracks: [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "viewer-session",
-          trackName: "video",
-        },
-      ],
-    });
+    callsMocks.startPlay.mockResolvedValue(
+      ok({
+        sdpAnswer: "viewer-counter-offer-sdp",
+        sessionId: "viewer-session",
+        sdpType: "offer",
+        tracks: [
+          {
+            location: "remote",
+            mid: "0",
+            sessionId: "viewer-session",
+            trackName: "video",
+          },
+        ],
+      }),
+    );
 
     const response = await app.fetch(
       new Request("http://localhost/play/streamer-1", {
@@ -1206,12 +1303,14 @@ describe("worker app", () => {
   it("returns Calls client errors for invalid WHEP answers", async () => {
     const env = createBindings();
 
-    callsMocks.renegotiateSession.mockRejectedValue(
-      new callsMocks.CallsApiError(
-        422,
-        "Unprocessable Content",
-        "/renegotiate",
-        "Malformed SDP answer",
+    callsMocks.renegotiateSession.mockResolvedValue(
+      err(
+        new callsMocks.CallsApiError(
+          422,
+          "Unprocessable Content",
+          "/renegotiate",
+          "Malformed SDP answer",
+        ),
       ),
     );
 
@@ -1236,7 +1335,7 @@ describe("worker app", () => {
     const env = createBindings();
 
     callsMocks.renegotiateSession.mockResolvedValue(
-      new Response(null, { status: 200 }),
+      ok(new Response(null, { status: 200 })),
     );
 
     const response = await app.fetch(

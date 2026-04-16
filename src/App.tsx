@@ -14,20 +14,14 @@ const actionButtonClasses =
   "mt-6 inline-flex items-center justify-center rounded-full bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/60";
 
 function AppContent() {
-  const auth = useAuth();
+  const authResult = useAuth();
 
-  if (auth.status === "authenticated") {
-    return <WHEPPlayerPage user={auth.user} />;
-  }
-
-  if (auth.status === "error") {
+  if (authResult.isErr()) {
     return (
       <div className={screenShellClasses}>
         <div className={panelClasses}>
           <h1 className={titleClasses}>ANGOU BROADCAST</h1>
-          <p className={bodyClasses}>
-            認証状態の確認中にエラーが発生しました。
-          </p>
+          <p className={bodyClasses}>認証状態の確認中にエラーが発生しました。</p>
           <p className="mt-2 text-sm leading-7 text-slate-400 sm:text-base">
             ページを再読み込みしてもう一度お試しください。
           </p>
@@ -42,6 +36,12 @@ function AppContent() {
         </div>
       </div>
     );
+  }
+
+  const auth = authResult.value;
+
+  if (auth.status === "authenticated") {
+    return <WHEPPlayerPage user={auth.user} />;
   }
 
   return <LoginPrompt />;

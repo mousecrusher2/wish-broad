@@ -1,17 +1,59 @@
-import {
-  Bindings,
-  CloseTracksResponse,
-  NewSessionResponse,
-  NewTracksResponse,
-  StoredTrack,
-  TrackLocator,
-} from "./types";
-import {
-  parseCloseTracksResponse,
-  parseNewSessionResponse,
-  parseNewTracksResponse,
-  SchemaValidationError,
-} from "./validation";
+import { Bindings } from "./types";
+import { err, ok, type Result } from "neverthrow";
+import * as v from "valibot";
+
+export type SessionDescription = {
+  sdp: string;
+  type: string;
+};
+
+export type NewSessionResponse = {
+  sessionId: string;
+};
+
+export type NewTrackResponse = {
+  trackName: string;
+  mid?: string | undefined;
+  sessionId?: string | undefined;
+  errorCode?: string | undefined;
+  errorDescription?: string | undefined;
+};
+
+export type NewTracksResponse = {
+  errorCode?: string | undefined;
+  errorDescription?: string | undefined;
+  requiresImmediateRenegotiation?: boolean | undefined;
+  tracks?: NewTrackResponse[] | undefined;
+  sessionDescription?: SessionDescription | undefined;
+};
+
+export type TrackLocator = {
+  location: string;
+  sessionId: string;
+  trackName: string;
+};
+
+export type StoredTrack = TrackLocator & {
+  mid: string;
+};
+
+export type ClosedTrack = {
+  mid: string;
+  errorCode?: string | undefined;
+  errorDescription?: string | undefined;
+  sessionId?: string | undefined;
+  trackName?: string | undefined;
+};
+
+export type CloseTracksResponse = {
+  errorCode?: string | undefined;
+  errorDescription?: string | undefined;
+  requiresImmediateRenegotiation?: boolean | undefined;
+  sessionDescription?: SessionDescription | undefined;
+  tracks?: ClosedTrack[] | undefined;
+};
+
+type CallsNegotiationClientStatus = 400 | 415 | 422;
 
 // カスタムエラークラス
 export class CallsApiError extends Error {
@@ -26,6 +68,32 @@ export class CallsApiError extends Error {
     );
     this.name = "CallsApiError";
   }
+
+  isInactiveSession(): boolean {
+    return this.statusCode === 404 || this.statusCode === 410;
+  }
+
+  toNegotiationClientError(
+    fallbackText: string,
+  ): { status: CallsNegotiationClientStatus; text: string } | null {
+    if (
+      this.statusCode !== 400 &&
+      this.statusCode !== 415 &&
+      this.statusCode !== 422
+    ) {
+      return null;
+    }
+
+    const text =
+      typeof this.responseBody === "string" && this.responseBody.length > 0
+        ? this.responseBody
+        : fallbackText;
+
+    return {
+      status: this.statusCode,
+      text,
+    };
+  }
 }
 
 export class LiveNotFoundError extends Error {
@@ -35,32 +103,46 @@ export class LiveNotFoundError extends Error {
   }
 }
 
-// レスポンスチェック用ユーティリティ
-async function checkCallsApiResponse(
-  response: Response,
-  endpoint: string,
-): Promise<void> {
-  if (!response.ok) {
-    let responseBody;
-    try {
-      responseBody = await response.json();
-    } catch {
-      // JSONパースに失敗した場合はテキストで取得を試行
-      try {
-        responseBody = await response.text();
-      } catch {
-        responseBody = null;
-      }
-    }
+const sessionDescriptionSchema = v.object({
+  sdp: v.string(),
+  type: v.string(),
+});
 
-    throw new CallsApiError(
-      response.status,
-      response.statusText,
-      endpoint,
-      responseBody,
-    );
-  }
-}
+const newTrackResponseSchema = v.object({
+  trackName: v.string(),
+  mid: v.optional(v.string()),
+  sessionId: v.optional(v.string()),
+  errorCode: v.optional(v.string()),
+  errorDescription: v.optional(v.string()),
+});
+
+const newSessionResponseSchema = v.object({
+  sessionId: v.string(),
+});
+
+const newTracksResponseSchema = v.object({
+  errorCode: v.optional(v.string()),
+  errorDescription: v.optional(v.string()),
+  requiresImmediateRenegotiation: v.optional(v.boolean()),
+  tracks: v.optional(v.array(newTrackResponseSchema)),
+  sessionDescription: v.optional(sessionDescriptionSchema),
+});
+
+const closeTrackResultSchema = v.object({
+  mid: v.string(),
+  errorCode: v.optional(v.string()),
+  errorDescription: v.optional(v.string()),
+  sessionId: v.optional(v.string()),
+  trackName: v.optional(v.string()),
+});
+
+const closeTracksResponseSchema = v.object({
+  errorCode: v.optional(v.string()),
+  errorDescription: v.optional(v.string()),
+  requiresImmediateRenegotiation: v.optional(v.boolean()),
+  sessionDescription: v.optional(sessionDescriptionSchema),
+  tracks: v.optional(v.array(closeTrackResultSchema)),
+});
 
 type CallsEnv = Pick<Bindings, "CALLS_APP_ID" | "CALLS_APP_SECRET">;
 type TrackLocatorRequest = Pick<
@@ -78,6 +160,17 @@ function getHeaders(env: CallsEnv): Record<string, string> {
   };
 }
 
+async function fetchCalls(
+  endpoint: string,
+  init: RequestInit,
+): Promise<Result<Response, CallsApiError>> {
+  return fetch(endpoint, init)
+    .then((response) => ok(response))
+    .catch((error: Error) =>
+      err(new CallsApiError(502, "Request failed", endpoint, error.message)),
+    );
+}
+
 function normalizeTrackLocator(track: TrackLocator): TrackLocatorRequest {
   return {
     location: track.location,
@@ -86,56 +179,65 @@ function normalizeTrackLocator(track: TrackLocator): TrackLocatorRequest {
   };
 }
 
-function isInactiveSessionError(error: unknown): boolean {
-  return (
-    error instanceof CallsApiError &&
-    (error.statusCode === 404 || error.statusCode === 410)
-  );
-}
-
-function hasTracksResponseErrors(response: NewTracksResponse): boolean {
-  if (response.errorCode || response.errorDescription) {
-    return true;
-  }
-
-  return !!response.tracks?.some((track) => track.errorCode);
-}
-
-function parseNewTracksOrThrow(
-  responseBody: unknown,
-  endpoint: string,
-  source: string,
-): NewTracksResponse {
-  try {
-    return parseNewTracksResponse(responseBody, source);
-  } catch (error) {
-    if (error instanceof SchemaValidationError) {
-      throw new CallsApiError(
-        502,
-        "Invalid Calls response schema",
-        endpoint,
-        responseBody,
-      );
-    }
-    throw error;
-  }
-}
-
 /**
  * 新しいセッションを作成
  */
 export async function createSession(
   env: CallsEnv,
-): Promise<NewSessionResponse> {
+): Promise<Result<NewSessionResponse, CallsApiError>> {
   const endpoint = getEndpoint(env, "/sessions/new");
-  const response = await fetch(endpoint, {
+  const responseResult = await fetchCalls(endpoint, {
     method: "POST",
     headers: getHeaders(env),
   });
+  if (responseResult.isErr()) {
+    return err(responseResult.error);
+  }
+  const response = responseResult.value;
 
-  await checkCallsApiResponse(response, endpoint);
-  const responseBody: unknown = await response.json();
-  return parseNewSessionResponse(responseBody, "Calls createSession response");
+  if (!response.ok) {
+    const responseBody = await response
+      .json()
+      .catch(() => response.text().catch(() => null));
+    return err(
+      new CallsApiError(
+        response.status,
+        response.statusText,
+        endpoint,
+        responseBody,
+      ),
+    );
+  }
+
+  const responseBodyResult = await response
+    .json()
+    .then((responseBody: unknown) => ok(responseBody))
+    .catch((error: Error) =>
+      err(
+        new CallsApiError(502, "Invalid Calls response JSON", endpoint, {
+          error: error.message,
+        }),
+      ),
+    );
+  if (responseBodyResult.isErr()) {
+    return err(responseBodyResult.error);
+  }
+  const responseBody = responseBodyResult.value;
+
+  const parsedResponse = v.safeParse(
+    newSessionResponseSchema,
+    responseBody,
+  );
+  if (!parsedResponse.success) {
+    return err(
+      new CallsApiError(502, "Invalid Calls response schema", endpoint, {
+        issues: parsedResponse.issues,
+        responseBody,
+      }),
+    );
+  }
+
+  return ok(parsedResponse.output);
 }
 
 /**
@@ -145,7 +247,7 @@ export async function createIngestTracks(
   env: CallsEnv,
   sessionId: string,
   sdpOffer: string,
-): Promise<NewTracksResponse> {
+): Promise<Result<NewTracksResponse, CallsApiError>> {
   const body = {
     sessionDescription: {
       type: "offer",
@@ -155,7 +257,7 @@ export async function createIngestTracks(
   };
 
   const endpoint = getEndpoint(env, `/sessions/${sessionId}/tracks/new`);
-  const response = await fetch(endpoint, {
+  const responseResult = await fetchCalls(endpoint, {
     method: "POST",
     headers: {
       ...getHeaders(env),
@@ -163,14 +265,51 @@ export async function createIngestTracks(
     },
     body: JSON.stringify(body),
   });
+  if (responseResult.isErr()) {
+    return err(responseResult.error);
+  }
+  const response = responseResult.value;
 
-  await checkCallsApiResponse(response, endpoint);
-  const responseBody: unknown = await response.json();
-  return parseNewTracksOrThrow(
-    responseBody,
-    endpoint,
-    "Calls createIngestTracks response",
-  );
+  if (!response.ok) {
+    const responseBody = await response
+      .json()
+      .catch(() => response.text().catch(() => null));
+    return err(
+      new CallsApiError(
+        response.status,
+        response.statusText,
+        endpoint,
+        responseBody,
+      ),
+    );
+  }
+
+  const responseBodyResult = await response
+    .json()
+    .then((responseBody: unknown) => ok(responseBody))
+    .catch((error: Error) =>
+      err(
+        new CallsApiError(502, "Invalid Calls response JSON", endpoint, {
+          error: error.message,
+        }),
+      ),
+    );
+  if (responseBodyResult.isErr()) {
+    return err(responseBodyResult.error);
+  }
+  const responseBody = responseBodyResult.value;
+
+  const parsedResponse = v.safeParse(newTracksResponseSchema, responseBody);
+  if (!parsedResponse.success) {
+    return err(
+      new CallsApiError(502, "Invalid Calls response schema", endpoint, {
+        issues: parsedResponse.issues,
+        responseBody,
+      }),
+    );
+  }
+
+  return ok(parsedResponse.output);
 }
 
 /**
@@ -181,7 +320,7 @@ export async function connectToTracks(
   sessionId: string,
   tracks: TrackLocator[],
   sdpOffer?: string,
-): Promise<NewTracksResponse> {
+): Promise<Result<NewTracksResponse, CallsApiError>> {
   const normalizedTracks = tracks.map(normalizeTrackLocator);
   const body =
     sdpOffer && sdpOffer.trim().length > 0
@@ -197,7 +336,7 @@ export async function connectToTracks(
         };
 
   const endpoint = getEndpoint(env, `/sessions/${sessionId}/tracks/new`);
-  const response = await fetch(endpoint, {
+  const responseResult = await fetchCalls(endpoint, {
     method: "POST",
     headers: {
       ...getHeaders(env),
@@ -205,23 +344,65 @@ export async function connectToTracks(
     },
     body: JSON.stringify(body),
   });
+  if (responseResult.isErr()) {
+    return err(responseResult.error);
+  }
+  const response = responseResult.value;
 
-  await checkCallsApiResponse(response, endpoint);
-  const responseBody: unknown = await response.json();
-  const parsedResponse = parseNewTracksOrThrow(
-    responseBody,
-    endpoint,
-    "Calls connectToTracks response",
-  );
-  if (hasTracksResponseErrors(parsedResponse)) {
-    throw new CallsApiError(
-      502,
-      "Calls returned track negotiation errors",
-      endpoint,
-      responseBody,
+  if (!response.ok) {
+    const responseBody = await response
+      .json()
+      .catch(() => response.text().catch(() => null));
+    return err(
+      new CallsApiError(
+        response.status,
+        response.statusText,
+        endpoint,
+        responseBody,
+      ),
     );
   }
-  return parsedResponse;
+
+  const responseBodyResult = await response
+    .json()
+    .then((responseBody: unknown) => ok(responseBody))
+    .catch((error: Error) =>
+      err(
+        new CallsApiError(502, "Invalid Calls response JSON", endpoint, {
+          error: error.message,
+        }),
+      ),
+    );
+  if (responseBodyResult.isErr()) {
+    return err(responseBodyResult.error);
+  }
+  const responseBody = responseBodyResult.value;
+
+  const parsedResponseResult = v.safeParse(newTracksResponseSchema, responseBody);
+  if (!parsedResponseResult.success) {
+    return err(
+      new CallsApiError(502, "Invalid Calls response schema", endpoint, {
+        issues: parsedResponseResult.issues,
+        responseBody,
+      }),
+    );
+  }
+  const parsedResponse = parsedResponseResult.output;
+  const hasTrackNegotiationErrors =
+    !!parsedResponse.errorCode ||
+    !!parsedResponse.errorDescription ||
+    !!parsedResponse.tracks?.some((track) => !!track.errorCode);
+  if (hasTrackNegotiationErrors) {
+    return err(
+      new CallsApiError(
+        502,
+        "Calls returned track negotiation errors",
+        endpoint,
+        responseBody,
+      ),
+    );
+  }
+  return ok(parsedResponse);
 }
 
 /**
@@ -231,7 +412,7 @@ export async function renegotiateSession(
   env: CallsEnv,
   sessionId: string,
   sdpAnswer: string,
-): Promise<Response> {
+): Promise<Result<Response, CallsApiError>> {
   const body = {
     sessionDescription: {
       type: "answer",
@@ -240,7 +421,7 @@ export async function renegotiateSession(
   };
 
   const endpoint = getEndpoint(env, `/sessions/${sessionId}/renegotiate`);
-  const response = await fetch(endpoint, {
+  const responseResult = await fetchCalls(endpoint, {
     method: "PUT",
     headers: {
       ...getHeaders(env),
@@ -248,8 +429,26 @@ export async function renegotiateSession(
     },
     body: JSON.stringify(body),
   });
-  await checkCallsApiResponse(response, endpoint);
-  return response;
+  if (responseResult.isErr()) {
+    return err(responseResult.error);
+  }
+  const response = responseResult.value;
+
+  if (!response.ok) {
+    const responseBody = await response
+      .json()
+      .catch(() => response.text().catch(() => null));
+    return err(
+      new CallsApiError(
+        response.status,
+        response.statusText,
+        endpoint,
+        responseBody,
+      ),
+    );
+  }
+
+  return ok(response);
 }
 
 /**
@@ -259,7 +458,7 @@ export async function closeTracks(
   env: CallsEnv,
   sessionId: string,
   tracks: StoredTrack[],
-): Promise<CloseTracksResponse> {
+): Promise<Result<CloseTracksResponse, CallsApiError>> {
   const body = {
     force: true,
     tracks: tracks.map((track) => ({
@@ -268,7 +467,7 @@ export async function closeTracks(
   };
 
   const endpoint = getEndpoint(env, `/sessions/${sessionId}/tracks/close`);
-  const response = await fetch(endpoint, {
+  const responseResult = await fetchCalls(endpoint, {
     method: "PUT",
     headers: {
       ...getHeaders(env),
@@ -276,10 +475,51 @@ export async function closeTracks(
     },
     body: JSON.stringify(body),
   });
+  if (responseResult.isErr()) {
+    return err(responseResult.error);
+  }
+  const response = responseResult.value;
 
-  await checkCallsApiResponse(response, endpoint);
-  const responseBody: unknown = await response.json();
-  return parseCloseTracksResponse(responseBody, "Calls closeTracks response");
+  if (!response.ok) {
+    const responseBody = await response
+      .json()
+      .catch(() => response.text().catch(() => null));
+    return err(
+      new CallsApiError(
+        response.status,
+        response.statusText,
+        endpoint,
+        responseBody,
+      ),
+    );
+  }
+
+  const responseBodyResult = await response
+    .json()
+    .then((responseBody: unknown) => ok(responseBody))
+    .catch((error: Error) =>
+      err(
+        new CallsApiError(502, "Invalid Calls response JSON", endpoint, {
+          error: error.message,
+        }),
+      ),
+    );
+  if (responseBodyResult.isErr()) {
+    return err(responseBodyResult.error);
+  }
+  const responseBody = responseBodyResult.value;
+
+  const parsedResponse = v.safeParse(closeTracksResponseSchema, responseBody);
+  if (!parsedResponse.success) {
+    return err(
+      new CallsApiError(502, "Invalid Calls response schema", endpoint, {
+        issues: parsedResponse.issues,
+        responseBody,
+      }),
+    );
+  }
+
+  return ok(parsedResponse.output);
 }
 
 /**
@@ -288,22 +528,34 @@ export async function closeTracks(
 export async function isSessionActive(
   env: CallsEnv,
   sessionId: string,
-): Promise<boolean> {
+): Promise<Result<boolean, CallsApiError>> {
   const endpoint = getEndpoint(env, `/sessions/${sessionId}`);
-  const response = await fetch(endpoint, {
+  const responseResult = await fetchCalls(endpoint, {
     method: "GET",
     headers: getHeaders(env),
   });
-
-  try {
-    await checkCallsApiResponse(response, endpoint);
-    return true; // ステータスコード200ならセッションはアクティブ
-  } catch (error) {
-    if (isInactiveSessionError(error)) {
-      return false; // セッションが見つからない場合は非アクティブ
-    }
-    throw error; // その他のエラーは再スロー
+  if (responseResult.isErr()) {
+    return err(responseResult.error);
   }
+  const response = responseResult.value;
+
+  if (!response.ok) {
+    const responseBody = await response
+      .json()
+      .catch(() => response.text().catch(() => null));
+    const responseError = new CallsApiError(
+      response.status,
+      response.statusText,
+      endpoint,
+      responseBody,
+    );
+    if (responseError.isInactiveSession()) {
+      return ok(false);
+    }
+    return err(responseError);
+  }
+
+  return ok(true); // ステータスコード200ならセッションはアクティブ
 }
 
 /**
@@ -313,60 +565,74 @@ export async function startIngest(
   env: CallsEnv,
   _liveId: string,
   sdpOffer: string,
-): Promise<{
-  sessionId: string;
-  sdpAnswer: string;
-  tracks: StoredTrack[];
-}> {
+): Promise<
+  Result<{
+    sessionId: string;
+    sdpAnswer: string;
+    tracks: StoredTrack[];
+  }, CallsApiError>
+> {
   // 新しいセッションを作成
   const sessionResult = await createSession(env);
+  if (sessionResult.isErr()) {
+    return err(sessionResult.error);
+  }
 
   // 配信者からのSDP Offerを使ってトラックを作成
   const tracksResult = await createIngestTracks(
     env,
-    sessionResult.sessionId,
+    sessionResult.value.sessionId,
     sdpOffer,
   );
+  if (tracksResult.isErr()) {
+    return err(tracksResult.error);
+  }
   const ingestEndpoint = getEndpoint(
     env,
-    `/sessions/${sessionResult.sessionId}/tracks/new`,
+    `/sessions/${sessionResult.value.sessionId}/tracks/new`,
   );
-  const responseTracks = tracksResult.tracks;
-  const sdpAnswer = tracksResult.sessionDescription?.sdp;
+  const responseTracks = tracksResult.value.tracks;
+  const sdpAnswer = tracksResult.value.sessionDescription?.sdp;
 
   if (!responseTracks || responseTracks.length === 0 || !sdpAnswer) {
-    throw new CallsApiError(
-      502,
-      "Calls response did not include ingest tracks or SDP",
-      ingestEndpoint,
-      tracksResult,
+    return err(
+      new CallsApiError(
+        502,
+        "Calls response did not include ingest tracks or SDP",
+        ingestEndpoint,
+        tracksResult.value,
+      ),
     );
   }
 
-  // トラック情報を整理
-  const tracks = responseTracks.map((track) => {
-    if (!track.mid) {
-      throw new CallsApiError(
+  const tracks = responseTracks.flatMap((track) =>
+    typeof track.mid === "string"
+      ? [
+          {
+            location: "remote",
+            sessionId: sessionResult.value.sessionId,
+            trackName: track.trackName,
+            mid: track.mid,
+          },
+        ]
+      : [],
+  );
+  if (tracks.length !== responseTracks.length) {
+    return err(
+      new CallsApiError(
         502,
         "Calls response did not include track MID",
         ingestEndpoint,
-        tracksResult,
-      );
-    }
+        tracksResult.value,
+      ),
+    );
+  }
 
-    return {
-      location: "remote" as const,
-      sessionId: sessionResult.sessionId,
-      trackName: track.trackName,
-      mid: track.mid,
-    };
-  });
-
-  return {
-    sessionId: sessionResult.sessionId,
+  return ok({
+    sessionId: sessionResult.value.sessionId,
     sdpAnswer,
     tracks,
-  };
+  });
 }
 
 /**
@@ -377,76 +643,99 @@ export async function startPlay(
   liveId: string,
   tracks: TrackLocator[],
   sdpOffer?: string,
-): Promise<{
-  sessionId: string;
-  sdpAnswer: string;
-  sdpType: "answer" | "offer";
-  tracks: StoredTrack[];
-}> {
+): Promise<
+  Result<{
+    sessionId: string;
+    sdpAnswer: string;
+    sdpType: "answer" | "offer";
+    tracks: StoredTrack[];
+  }, CallsApiError | LiveNotFoundError>
+> {
   if (tracks.length === 0) {
-    throw new LiveNotFoundError(liveId);
+    return err(new LiveNotFoundError(liveId));
   }
 
   // 新しい視聴セッションを作成
   const sessionResult = await createSession(env);
+  if (sessionResult.isErr()) {
+    return err(sessionResult.error);
+  }
 
   // 既存のトラックに接続
   const tracksResult = await connectToTracks(
     env,
-    sessionResult.sessionId,
+    sessionResult.value.sessionId,
     tracks,
     sdpOffer,
   );
-  const sdpAnswer = tracksResult.sessionDescription?.sdp;
-  const sdpType = tracksResult.sessionDescription?.type;
-  const responseTracks = tracksResult.tracks;
+  if (tracksResult.isErr()) {
+    return err(tracksResult.error);
+  }
+  const sdpAnswer = tracksResult.value.sessionDescription?.sdp;
+  const sdpType = tracksResult.value.sessionDescription?.type;
+  const responseTracks = tracksResult.value.tracks;
+  const playbackEndpoint = getEndpoint(
+    env,
+    `/sessions/${sessionResult.value.sessionId}/tracks/new`,
+  );
   if (!sdpAnswer) {
-    throw new CallsApiError(
-      502,
-      "Calls response did not include SDP for playback",
-      getEndpoint(env, `/sessions/${sessionResult.sessionId}/tracks/new`),
-      tracksResult,
+    return err(
+      new CallsApiError(
+        502,
+        "Calls response did not include SDP for playback",
+        playbackEndpoint,
+        tracksResult.value,
+      ),
     );
   }
   if (!responseTracks || responseTracks.length === 0) {
-    throw new CallsApiError(
-      502,
-      "Calls response did not include playback tracks",
-      getEndpoint(env, `/sessions/${sessionResult.sessionId}/tracks/new`),
-      tracksResult,
+    return err(
+      new CallsApiError(
+        502,
+        "Calls response did not include playback tracks",
+        playbackEndpoint,
+        tracksResult.value,
+      ),
     );
   }
   if (sdpType !== "answer" && sdpType !== "offer") {
-    throw new CallsApiError(
-      502,
-      "Calls response did not include valid SDP type for playback",
-      getEndpoint(env, `/sessions/${sessionResult.sessionId}/tracks/new`),
-      tracksResult,
+    return err(
+      new CallsApiError(
+        502,
+        "Calls response did not include valid SDP type for playback",
+        playbackEndpoint,
+        tracksResult.value,
+      ),
     );
   }
 
-  const playbackTracks = responseTracks.map((track) => {
-    if (!track.mid) {
-      throw new CallsApiError(
+  const playbackTracks = responseTracks.flatMap((track) =>
+    typeof track.mid === "string"
+      ? [
+          {
+            location: "remote",
+            mid: track.mid,
+            sessionId: sessionResult.value.sessionId,
+            trackName: track.trackName,
+          },
+        ]
+      : [],
+  );
+  if (playbackTracks.length !== responseTracks.length) {
+    return err(
+      new CallsApiError(
         502,
         "Calls response did not include playback track MID",
-        getEndpoint(env, `/sessions/${sessionResult.sessionId}/tracks/new`),
-        tracksResult,
-      );
-    }
+        playbackEndpoint,
+        tracksResult.value,
+      ),
+    );
+  }
 
-    return {
-      location: "remote" as const,
-      mid: track.mid,
-      sessionId: sessionResult.sessionId,
-      trackName: track.trackName,
-    };
-  });
-
-  return {
-    sessionId: sessionResult.sessionId,
+  return ok({
+    sessionId: sessionResult.value.sessionId,
     sdpAnswer,
     sdpType,
     tracks: playbackTracks,
-  };
+  });
 }

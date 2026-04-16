@@ -1,3 +1,5 @@
+import { err, ok, type Result } from "neverthrow";
+
 export type WHEPConnectionStatus =
   | "disconnected"
   | "connecting"
@@ -44,14 +46,6 @@ type WHEPSessionErrorOptions = {
   statusCode: number | undefined;
 };
 
-function normalizeError(error: unknown): Error {
-  if (error instanceof Error) {
-    return error;
-  }
-
-  return new Error(String(error));
-}
-
 export class WHEPSessionError extends Error {
   readonly responseText: string | undefined;
   readonly retryable: boolean;
@@ -68,23 +62,15 @@ export class WHEPSessionError extends Error {
   }
 }
 
-function createAbortError(): WHEPSessionError {
-  return new WHEPSessionError("WHEP connection was aborted", {
-    responseText: undefined,
-    stage: "local",
-    statusCode: undefined,
-  });
-}
-
 async function readResponseText(
   response: Response,
 ): Promise<string | undefined> {
-  try {
-    const responseText = await response.text();
-    return responseText.trim().length > 0 ? responseText : undefined;
-  } catch {
-    return undefined;
-  }
+  return response
+    .text()
+    .then((responseText) =>
+      responseText.trim().length > 0 ? responseText : undefined,
+    )
+    .catch(() => undefined);
 }
 
 async function createResponseError(
@@ -100,25 +86,12 @@ async function createResponseError(
   });
 }
 
-function createProtocolError(
-  message: string,
-  options: {
-    stage: WHEPSessionRequestStage;
-    statusCode: number | undefined;
-  },
-): WHEPSessionError {
-  return new WHEPSessionError(message, {
-    responseText: undefined,
-    retryable: false,
-    stage: options.stage,
-    statusCode: options.statusCode,
-  });
-}
-
 async function readSdpResponse(response: Response): Promise<string> {
   const contentType = response.headers.get("content-type");
   if (!contentType?.toLowerCase().startsWith("application/sdp")) {
-    throw createProtocolError("Unexpected WHEP SDP response content type", {
+    throw new WHEPSessionError("Unexpected WHEP SDP response content type", {
+      responseText: undefined,
+      retryable: false,
       stage: "post",
       statusCode: response.status,
     });
@@ -126,7 +99,9 @@ async function readSdpResponse(response: Response): Promise<string> {
 
   const sdp = await response.text();
   if (sdp.trim().length === 0) {
-    throw createProtocolError("Empty SDP response", {
+    throw new WHEPSessionError("Empty SDP response", {
+      responseText: undefined,
+      retryable: false,
       stage: "post",
       statusCode: response.status,
     });
@@ -149,7 +124,9 @@ async function parseWhepSessionResponse(
 
   const sessionLocation = response.headers.get("location");
   if (!sessionLocation) {
-    throw createProtocolError("Missing WHEP session location header", {
+    throw new WHEPSessionError("Missing WHEP session location header", {
+      responseText: undefined,
+      retryable: false,
       stage: "post",
       statusCode: response.status,
     });
@@ -178,7 +155,11 @@ async function waitForIceGatheringComplete(
   signal: AbortSignal,
 ): Promise<void> {
   if (signal.aborted) {
-    throw createAbortError();
+    throw new WHEPSessionError("WHEP connection was aborted", {
+      responseText: undefined,
+      stage: "local",
+      statusCode: undefined,
+    });
   }
 
   if (isIceGatheringFinished(pc)) {
@@ -203,7 +184,13 @@ async function waitForIceGatheringComplete(
     const onStateChange = onGatheringStateChange;
     const onAbort = () => {
       cleanup();
-      reject(createAbortError());
+      reject(
+        new WHEPSessionError("WHEP connection was aborted", {
+          responseText: undefined,
+          stage: "local",
+          statusCode: undefined,
+        }),
+      );
     };
 
     pc.addEventListener("icegatheringstatechange", onStateChange);
@@ -465,7 +452,7 @@ export class WHEPSession {
       }
 
       this.refreshStreamState();
-      void this.videoElement.play().catch((error) => {
+      void this.videoElement.play().catch((error: Error) => {
         console.warn("Autoplay failed:", error);
       });
     });
@@ -557,17 +544,21 @@ export class WHEPSession {
       this.serverSession.location,
       window.location.origin,
     );
-    try {
-      const response = await fetch(sessionUrl, { method: "DELETE" });
-      if (!response.ok) {
-        throw await createResponseError(
-          response,
-          `Unexpected WHEP delete response: ${String(response.status)}`,
-          "delete",
-        );
-      }
-    } catch (error) {
-      console.warn("Failed to close WHEP session:", error);
+    const responseResult = await fetch(sessionUrl, { method: "DELETE" })
+      .then((response) => ok(response))
+      .catch((error: Error) => err(error));
+    if (responseResult.isErr()) {
+      console.warn("Failed to close WHEP session:", responseResult.error);
+      return;
+    }
+
+    if (!responseResult.value.ok) {
+      const responseError = await createResponseError(
+        responseResult.value,
+        `Unexpected WHEP delete response: ${String(responseResult.value.status)}`,
+        "delete",
+      );
+      console.warn("Failed to close WHEP session:", responseError);
     }
   }
 
@@ -589,11 +580,11 @@ export class WHEPSession {
     await this.deleteRegisteredSession();
   }
 
-  async start(): Promise<void> {
+  async start(): Promise<Result<void, Error>> {
     this.setStatus("connecting");
     this.setStreamState(false);
 
-    try {
+    const runStart = async (): Promise<Result<void, Error>> => {
       const resourceUrl = new URL(
         `/play/${encodeURIComponent(this.resourceUserId)}`,
         window.location.origin,
@@ -616,9 +607,16 @@ export class WHEPSession {
         },
         body: localOfferSdp,
         signal: this.abortController.signal,
-      }).then((offerResponse) =>
-        parseWhepSessionResponse(offerResponse, resourceUrl),
-      );
+      })
+        .then((offerResponse) => ok(offerResponse))
+        .catch((error: Error) => err(error))
+        .then((offerResponseResult) => {
+          if (offerResponseResult.isErr()) {
+            throw offerResponseResult.error;
+          }
+
+          return parseWhepSessionResponse(offerResponseResult.value, resourceUrl);
+        });
       const sessionResponse = await this.registrationPromise;
       this.serverSession = {
         kind: "registered",
@@ -626,7 +624,7 @@ export class WHEPSession {
       };
 
       if (this.disposed) {
-        return;
+        return ok(undefined);
       }
 
       if (sessionResponse.kind === "accepted") {
@@ -654,7 +652,7 @@ export class WHEPSession {
           throw new Error("Failed to create local SDP answer");
         }
 
-        const patchResponse = await fetch(sessionResponse.sessionUrl, {
+        const patchResponseResult = await fetch(sessionResponse.sessionUrl, {
           method: "PATCH",
           headers: {
             Accept: "application/sdp",
@@ -662,7 +660,14 @@ export class WHEPSession {
           },
           body: localAnswerSdp,
           signal: this.abortController.signal,
-        });
+        })
+          .then((response) => ok(response))
+          .catch((error: Error) => err(error));
+        if (patchResponseResult.isErr()) {
+          throw patchResponseResult.error;
+        }
+
+        const patchResponse = patchResponseResult.value;
         if (patchResponse.status !== 204) {
           throw await createResponseError(
             patchResponse,
@@ -671,15 +676,18 @@ export class WHEPSession {
           );
         }
       }
-    } catch (error) {
+      return ok(undefined);
+    };
+
+    return runStart().catch(async (error: Error) => {
       if (this.abortController.signal.aborted || this.disposed) {
-        return;
+        return ok(undefined);
       }
 
       await this.dispose({ notifyServer: true });
       this.setStatus("failed");
-      throw normalizeError(error);
-    }
+      return err(error);
+    });
   }
 
   async dispose(options?: { notifyServer?: boolean }): Promise<void> {

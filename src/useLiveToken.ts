@@ -1,76 +1,62 @@
 import { useState } from "react";
 import useSWR from "swr";
+import { err, ok, type Result } from "neverthrow";
+import * as v from "valibot";
 
-type LiveTokenResponse = {
-  hasToken: boolean;
-};
-
-type CreateTokenResponse = {
-  success: true;
-  token: string;
-};
-
-type LiveTokenState =
-  | { status: "loading" }
+type StableLiveTokenState =
   | { status: "none" }
-  | { status: "available"; token: string | null }
-  | { status: "error"; message: string };
+  | { status: "available"; token: string | null };
 
-function isLiveTokenResponse(value: unknown): value is LiveTokenResponse {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { hasToken?: unknown }).hasToken === "boolean"
-  );
-}
+type LiveTokenState = { status: "loading" } | StableLiveTokenState;
 
-function isCreateTokenResponse(value: unknown): value is CreateTokenResponse {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { success?: unknown }).success === true &&
-    typeof (value as { token?: unknown }).token === "string"
-  );
-}
+async function fetchLiveTokenState(): Promise<Result<StableLiveTokenState, Error>> {
+  const liveTokenResponseSchema = v.object({
+    hasToken: v.boolean(),
+  });
 
-async function fetchLiveTokenState(): Promise<LiveTokenState> {
-  try {
-    const response = await fetch("/api/me/livetoken", {
-      method: "GET",
-      credentials: "include",
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${String(response.status)}`);
-    }
-
-    const data: unknown = await response.json();
-    if (!isLiveTokenResponse(data)) {
-      throw new Error("Unexpected live token response");
-    }
-
-    if (data.hasToken) {
-      return { status: "available", token: null };
-    }
-
-    return { status: "none" };
-  } catch (error) {
-    console.error("Failed to fetch token status:", error);
-    return {
-      status: "error",
-      message:
-        error instanceof Error
-          ? error.message
-          : "トークン状況の取得に失敗しました",
-    };
+  const responseResult = await fetch("/api/me/livetoken", {
+    method: "GET",
+    credentials: "include",
+  })
+    .then((response) => ok(response))
+    .catch((error: Error) => err(error));
+  if (responseResult.isErr()) {
+    console.error("Failed to fetch token status:", responseResult.error);
+    return err(responseResult.error);
   }
+
+  const response = responseResult.value;
+  if (!response.ok) {
+    return err(new Error(`HTTP error! status: ${String(response.status)}`));
+  }
+
+  const payloadResult = await response
+    .json()
+    .then((data: unknown) => ok(data))
+    .catch((error: Error) => err(error));
+  if (payloadResult.isErr()) {
+    console.error("Failed to fetch token status:", payloadResult.error);
+    return err(payloadResult.error);
+  }
+
+  const parsedData = v.safeParse(liveTokenResponseSchema, payloadResult.value);
+  if (!parsedData.success) {
+    return err(new Error("Unexpected live token response"));
+  }
+
+  if (parsedData.output.hasToken) {
+    return ok({ status: "available", token: null });
+  }
+
+  return ok({ status: "none" });
 }
 
 export function useLiveToken() {
   const [overrideState, setOverrideState] = useState<LiveTokenState | null>(
     null,
   );
-  const { data, mutate } = useSWR<LiveTokenState>(
+  const [overrideError, setOverrideError] = useState<string | null>(null);
+  const { data, mutate } = useSWR<Result<StableLiveTokenState, Error>>(
     "/api/me/livetoken",
     fetchLiveTokenState,
     {
@@ -80,56 +66,106 @@ export function useLiveToken() {
     },
   );
 
-  const state = overrideState ?? data ?? { status: "loading" };
+  const state =
+    overrideState ??
+    (data?.isOk() ? data.value : null) ??
+    ({ status: "loading" } satisfies LiveTokenState);
+  const error = overrideError ?? (data?.isErr() ? data.error.message : null);
 
-  const fetchTokenStatus = async () => {
+  const fetchTokenStatus = async (): Promise<Result<void, Error>> => {
     setOverrideState({ status: "loading" });
-    await mutate();
+    setOverrideError(null);
+
+    const nextState = await mutate();
     setOverrideState(null);
+
+    if (!nextState) {
+      const unavailableError = new Error("Live token state is unavailable");
+      setOverrideError(unavailableError.message);
+      return err(unavailableError);
+    }
+
+    if (nextState.isErr()) {
+      setOverrideError(nextState.error.message);
+      return err(nextState.error);
+    }
+
+    setOverrideError(null);
+    return ok(undefined);
   };
 
-  const createToken = async () => {
-    setOverrideState({ status: "loading" });
+  const createToken = async (): Promise<Result<void, Error>> => {
+    const createTokenResponseSchema = v.object({
+      success: v.literal(true),
+      token: v.string(),
+    });
 
-    try {
-      const response = await fetch("/api/me/livetoken", {
+    setOverrideState({ status: "loading" });
+    setOverrideError(null);
+
+    const run = async (): Promise<Result<void, Error>> => {
+      const responseResult = await fetch("/api/me/livetoken", {
         method: "POST",
         credentials: "include",
-      });
+      })
+        .then((response) => ok(response))
+        .catch((error: Error) => err(error));
+      if (responseResult.isErr()) {
+        console.error("Failed to create token:", responseResult.error);
+        await mutate(err(responseResult.error), { revalidate: false });
+        setOverrideError(responseResult.error.message);
+        return err(responseResult.error);
+      }
 
+      const response = responseResult.value;
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${String(response.status)}`);
+        const responseError = new Error(
+          `HTTP error! status: ${String(response.status)}`,
+        );
+        await mutate(err(responseError), { revalidate: false });
+        setOverrideError(responseError.message);
+        return err(responseError);
       }
 
-      const nextData: unknown = await response.json();
-      if (!isCreateTokenResponse(nextData)) {
-        throw new Error("Unexpected token creation response");
+      const payloadResult = await response
+        .json()
+        .then((data: unknown) => ok(data))
+        .catch((error: Error) => err(error));
+      if (payloadResult.isErr()) {
+        console.error("Failed to create token:", payloadResult.error);
+        await mutate(err(payloadResult.error), { revalidate: false });
+        setOverrideError(payloadResult.error.message);
+        return err(payloadResult.error);
       }
 
-      const nextState: LiveTokenState = {
-        status: "available",
-        token: nextData.token,
-      };
-      await mutate(nextState, { revalidate: false });
-    } catch (error) {
-      console.error("Failed to create token:", error);
-      await mutate(
-        {
-          status: "error",
-          message:
-            error instanceof Error
-              ? error.message
-              : "トークンの発行に失敗しました",
-        } satisfies LiveTokenState,
-        { revalidate: false },
+      const parsedToken = v.safeParse(
+        createTokenResponseSchema,
+        payloadResult.value,
       );
-    } finally {
+      if (!parsedToken.success) {
+        const payloadError = new Error("Unexpected token creation response");
+        await mutate(err(payloadError), { revalidate: false });
+        setOverrideError(payloadError.message);
+        return err(payloadError);
+      }
+
+      const nextState: StableLiveTokenState = {
+        status: "available",
+        token: parsedToken.output.token,
+      };
+      await mutate(ok(nextState), { revalidate: false });
+      setOverrideError(null);
+      return ok(undefined);
+    };
+
+    return run().finally(() => {
       setOverrideState(null);
-    }
+    });
   };
 
   return {
     state,
+    error,
     fetchTokenStatus,
     createToken,
   };

@@ -56,6 +56,20 @@ export default [
       "@typescript-eslint/no-unnecessary-type-assertion": "error",
       "@typescript-eslint/require-await": "off",
       "@typescript-eslint/switch-exhaustiveness-check": "error",
+      "@typescript-eslint/consistent-type-assertions": [
+        "error",
+        {
+          "assertionStyle": "never"
+        }
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "TSTypePredicate",
+          message:
+            "Type predicates (`value is ...`) are prohibited in this repository.",
+        },
+      ],
     },
   },
   ...tailwindcssConfigs,

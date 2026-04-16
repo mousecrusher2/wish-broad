@@ -1,7 +1,15 @@
 /* eslint-disable sonarjs/cognitive-complexity */
 import { Context, Hono } from "hono";
-import { JWTPayload, Bindings, StoredTrack } from "./types";
-import * as db from "./database";
+import { JWTPayload, Bindings } from "./types";
+import {
+  deleteTracksForSession,
+  getAllLives,
+  getLiveTokenHash,
+  getLiveTrackRecord,
+  hasLiveToken,
+  setLiveToken,
+  setTracks,
+} from "./database";
 import {
   clearAuthCookie,
   completeDiscordLogin,
@@ -9,6 +17,7 @@ import {
 } from "./discord-login";
 import {
   CallsApiError,
+  type StoredTrack,
   closeTracks,
   isSessionActive,
   renegotiateSession,
@@ -23,17 +32,14 @@ import { HTTPException } from "hono/http-exception";
 import { jwt } from "hono/jwt";
 import { hashTokenWithPepper } from "./token-hash";
 
-type CallsErrorStatusCode = 400 | 415 | 422;
+type AppEnv = {
+  Bindings: Bindings;
+  Variables: {
+    jwtPayload: JWTPayload;
+  };
+};
 
-const app = new Hono<{ Bindings: Bindings }>();
-
-function hasCloseTrackErrors(
-  response: Awaited<ReturnType<typeof closeTracks>>,
-) {
-  return (
-    !!response.errorCode || !!response.tracks?.some((track) => track.errorCode)
-  );
-}
+const app = new Hono<AppEnv>();
 
 function createPlaySessionLocation(
   requestUrl: string,
@@ -64,18 +70,11 @@ function createWhepCloseTracks(
   mids: string[],
 ): StoredTrack[] {
   return mids.map((mid) => ({
-    location: "remote" as const,
+    location: "remote",
     mid,
     sessionId,
     trackName: mid,
   }));
-}
-
-function isInactiveCallsSessionError(error: unknown): boolean {
-  return (
-    error instanceof CallsApiError &&
-    (error.statusCode === 404 || error.statusCode === 410)
-  );
 }
 
 function isSdpContentType(contentType: string | undefined): boolean {
@@ -86,50 +85,13 @@ function isSdpContentType(contentType: string | undefined): boolean {
   return contentType.split(";")[0]?.trim().toLowerCase() === "application/sdp";
 }
 
-function isCallsPublisherError(error: unknown): error is CallsApiError {
-  return (
-    error instanceof CallsApiError &&
-    (error.statusCode === 400 ||
-      error.statusCode === 415 ||
-      error.statusCode === 422)
-  );
-}
-
-function getCallsErrorText(error: CallsApiError, fallback: string): string {
-  if (typeof error.responseBody === "string" && error.responseBody.length > 0) {
-    return error.responseBody;
-  }
-
-  return fallback;
-}
-
-function createEmptySuccessResponse(): Response {
-  return new Response(null, { status: 204 });
-}
-
-function logUnexpectedError(err: unknown): void {
-  console.error(
-    "Unhandled error:",
-    err,
-    err instanceof Error ? err.stack : null,
-  );
-}
-
-function runMiddleware(
-  middleware: unknown,
-  c: unknown,
-  next: unknown,
-): Promise<Response | void> {
-  const typedMiddleware = middleware as (
-    context: unknown,
-    next: unknown,
-  ) => Promise<Response | void>;
-  return typedMiddleware(c, next);
+function logUnexpectedError(error: Error): void {
+  console.error("Unhandled error:", error, error.stack);
 }
 
 function toErrorResponse(
   err: unknown,
-  c: Context<{ Bindings: Bindings }>,
+  c: Context<AppEnv>,
 ): Response {
   if (err instanceof HTTPException) {
     return err.getResponse();
@@ -140,6 +102,9 @@ function toErrorResponse(
 
 app.onError((err, c) => {
   if (!(err instanceof HTTPException)) {
+    if (!(err instanceof Error)) {
+      throw new Error("Unhandled non-Error exception");
+    }
     logUnexpectedError(err);
   }
 
@@ -151,17 +116,17 @@ app.use(logger());
 // 配信取り込み用エンドポイントの認証ミドルウェア
 app.use(
   "/ingest/:userId/*",
-  hashedBearerAuth<{ Bindings: Bindings }, "/ingest/:userId/*">({
+  hashedBearerAuth<AppEnv, "/ingest/:userId/*">({
     pepper: (c) => c.env.LIVE_TOKEN_PEPPER,
     token: (c) => {
       const { userId } = c.req.param();
-      return db.getLiveTokenHash(c.env.LIVE_DB, userId);
+      return getLiveTokenHash(c.env.LIVE_DB, userId);
     },
   }),
 );
 
-app.get("/ingest/:userId", async () => {
-  return createEmptySuccessResponse();
+app.get("/ingest/:userId", async (c) => {
+  return c.body(null, 204);
 });
 
 // ライブ配信開始エンドポイント（WHIP）
@@ -177,53 +142,65 @@ app.post("/ingest/:userId", async (c) => {
     return c.text("SDP offer is required", 400);
   }
 
-  const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
+  const existingLive = await getLiveTrackRecord(c.env.LIVE_DB, userId);
   if (existingLive) {
-    const isActive = await isSessionActive(c.env, existingLive.sessionId);
-    if (isActive) {
+    const isActiveResult = await isSessionActive(c.env, existingLive.sessionId);
+    if (isActiveResult.isErr()) {
+      console.error(
+        `Failed to verify ingest session activity for user ${userId}:`,
+        isActiveResult.error,
+      );
+      return c.text("Failed to verify ingest session status", 502);
+    }
+
+    if (isActiveResult.value) {
       return c.text("A live stream is already active for this user", 400);
     }
 
-    await db.deleteTracksForSession(
+    await deleteTracksForSession(
       c.env.LIVE_DB,
       userId,
       existingLive.sessionId,
     );
   }
 
-  try {
-    const result = await startIngest(c.env, userId, sdpOffer);
-
-    // トラック情報をデータベースに保存（session_idも含める）
-    await db.setTracks(c.env.LIVE_DB, userId, result.sessionId, result.tracks);
-
-    return c.body(result.sdpAnswer, 201, {
-      "content-type": "application/sdp",
-      etag: `"${result.sessionId}"`,
-      location: `/ingest/${userId}/${result.sessionId}`,
-    });
-  } catch (error) {
-    if (isCallsPublisherError(error)) {
-      return c.text(
-        getCallsErrorText(error, "Failed to negotiate ingest session"),
-        error.statusCode as CallsErrorStatusCode,
-      );
+  const ingestResult = await startIngest(c.env, userId, sdpOffer);
+  if (ingestResult.isErr()) {
+    const negotiationError = ingestResult.error.toNegotiationClientError(
+      "Failed to negotiate ingest session",
+    );
+    if (negotiationError) {
+      return c.text(negotiationError.text, negotiationError.status);
     }
 
-    throw error;
+    console.error(
+      `Failed to negotiate ingest session for user ${userId}:`,
+      ingestResult.error,
+    );
+    return c.text("Internal Server Error", 500);
   }
+
+  const result = ingestResult.value;
+  // トラック情報をデータベースに保存（session_idも含める）
+  await setTracks(c.env.LIVE_DB, userId, result.sessionId, result.tracks);
+
+  return c.body(result.sdpAnswer, 201, {
+    "content-type": "application/sdp",
+    etag: `"${result.sessionId}"`,
+    location: `/ingest/${userId}/${result.sessionId}`,
+  });
 });
 
 // ライブ配信終了エンドポイント
 // 配信セッションを削除し、関連データを清理
 app.get("/ingest/:userId/:sessionId", async () => {
-  return createEmptySuccessResponse();
+  return new Response(null, { status: 204 });
 });
 
 app.delete("/ingest/:userId/:sessionId", async (c) => {
   const { userId, sessionId } = c.req.param();
 
-  const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
+  const existingLive = await getLiveTrackRecord(c.env.LIVE_DB, userId);
   if (!existingLive) {
     return c.text("No live stream found for this user", 400);
   }
@@ -239,35 +216,27 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     return c.text("Stored live track data is invalid", 500);
   }
 
-  try {
-    const closeResponse = await closeTracks(
-      c.env,
-      sessionId,
-      existingLive.tracks,
-    );
-
-    if (
-      closeResponse.errorCode ||
-      closeResponse.tracks?.some((track) => track.errorCode)
-    ) {
+  const closeResult = await closeTracks(c.env, sessionId, existingLive.tracks);
+  if (closeResult.isErr()) {
+    if (closeResult.error.statusCode !== 404) {
       console.error(
-        `Calls reported track close errors for user ${userId}:`,
-        closeResponse,
+        `Failed to close live tracks for user ${userId}:`,
+        closeResult.error,
       );
       return c.text("Failed to close live tracks", 502);
     }
-  } catch (error) {
-    if (error instanceof CallsApiError && error.statusCode === 404) {
-      // 既にセッションやトラックが消えている場合は、D1だけ掃除すればよい
-    } else if (error instanceof CallsApiError) {
-      console.error(`Failed to close live tracks for user ${userId}:`, error);
-      return c.text("Failed to close live tracks", 502);
-    } else {
-      throw error;
-    }
+  } else if (
+    closeResult.value.errorCode ||
+    closeResult.value.tracks?.some((track) => track.errorCode)
+  ) {
+    console.error(
+      `Calls reported track close errors for user ${userId}:`,
+      closeResult.value,
+    );
+    return c.text("Failed to close live tracks", 502);
   }
 
-  const deleted = await db.deleteTracksForSession(
+  const deleted = await deleteTracksForSession(
     c.env.LIVE_DB,
     userId,
     sessionId,
@@ -297,41 +266,48 @@ app.post("/logout", async (c) => {
 
 // ライブ視聴用エンドポイントの認証ミドルウェア
 app.use("/play/*", async (c, next) => {
-  return runMiddleware(
-    jwt({
-      secret: c.env.JWT_SECRET,
-      cookie: "authtoken",
-      alg: "HS256",
-    }),
-    c,
-    next,
-  );
+  const middleware = jwt({
+    secret: c.env.JWT_SECRET,
+    cookie: "authtoken",
+    alg: "HS256",
+  });
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+  return middleware(c, next);
 });
 
 // ライブ視聴開始エンドポイント（WHEP）
 // 視聴者からのSDP Offerを受け取り、配信されているトラックへの接続セッションを作成
-app.get("/play/:userId", async () => {
-  return createEmptySuccessResponse();
+app.get("/play/:userId", async (c) => {
+  return c.body(null, 204);
 });
 
 app.post("/play/:userId", async (c) => {
   const { userId } = c.req.param();
 
   // JWTペイロードからユーザー情報を取得してログ出力
-  const jwtPayload = c.get("jwtPayload") as JWTPayload;
+  const jwtPayload = c.get("jwtPayload");
   console.log(
     `User ${jwtPayload.displayName} (${jwtPayload.userId}) is trying to play user: ${userId}`,
   );
 
   // Calls APIクライアントを初期化
-  const liveTrackRecord = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
+  const liveTrackRecord = await getLiveTrackRecord(c.env.LIVE_DB, userId);
   const tracks = liveTrackRecord?.tracks ?? [];
+  let hasActiveSession = false;
+  if (liveTrackRecord) {
+    const isActiveResult = await isSessionActive(c.env, liveTrackRecord.sessionId);
+    if (isActiveResult.isErr()) {
+      console.error(
+        `Failed to verify playback session activity for user ${userId}:`,
+        isActiveResult.error,
+      );
+      return c.text("Failed to verify live stream status", 502);
+    }
+    hasActiveSession = isActiveResult.value;
+  }
 
-  if (
-    liveTrackRecord &&
-    (await isSessionActive(c.env, liveTrackRecord.sessionId))
-  ) {
-    await db.deleteTracksForSession(
+  if (liveTrackRecord && !hasActiveSession) {
+    await deleteTracksForSession(
       c.env.LIVE_DB,
       userId,
       liveTrackRecord.sessionId,
@@ -348,21 +324,9 @@ app.post("/play/:userId", async (c) => {
     return c.text("SDP offer is required", 400);
   }
 
-  try {
-    const result = await startPlay(c.env, userId, tracks, sdpOffer);
-    const status = result.sdpType === "offer" ? 406 : 201;
-
-    return c.body(result.sdpAnswer, status, {
-      "content-type": "application/sdp",
-      etag: `"${result.sessionId}"`,
-      location: createPlaySessionLocation(
-        c.req.url,
-        userId,
-        result.sessionId,
-        result.tracks,
-      ),
-    });
-  } catch (error) {
+  const playResult = await startPlay(c.env, userId, tracks, sdpOffer);
+  if (playResult.isErr()) {
+    const error = playResult.error;
     console.error(
       `Failed to start play for user ${userId} by user ${jwtPayload.userId}:`,
       error,
@@ -372,7 +336,7 @@ app.post("/play/:userId", async (c) => {
     }
     if (error instanceof CallsApiError && error.statusCode === 404) {
       if (liveTrackRecord) {
-        await db.deleteTracksForSession(
+        await deleteTracksForSession(
           c.env.LIVE_DB,
           userId,
           liveTrackRecord.sessionId,
@@ -380,20 +344,36 @@ app.post("/play/:userId", async (c) => {
       }
       return c.text(`Live stream not found: ${userId}`, 404);
     }
-    if (isCallsPublisherError(error)) {
-      return c.text(
-        getCallsErrorText(error, "Failed to negotiate playback session"),
-        error.statusCode as CallsErrorStatusCode,
+    if (error instanceof CallsApiError) {
+      const negotiationError = error.toNegotiationClientError(
+        "Failed to negotiate playback session",
       );
+      if (negotiationError) {
+        return c.text(negotiationError.text, negotiationError.status);
+      }
     }
 
-    throw error;
+    return c.text("Failed to negotiate playback session", 502);
   }
+
+  const result = playResult.value;
+  const status = result.sdpType === "offer" ? 406 : 201;
+
+  return c.body(result.sdpAnswer, status, {
+    "content-type": "application/sdp",
+    etag: `"${result.sessionId}"`,
+    location: createPlaySessionLocation(
+      c.req.url,
+      userId,
+      result.sessionId,
+      result.tracks,
+    ),
+  });
 });
 
 // ライブ視聴セッション管理エンドポイント
 app.get("/play/:userId/:sessionId", async () => {
-  return createEmptySuccessResponse();
+  return new Response(null, { status: 204 });
 });
 
 app
@@ -404,24 +384,28 @@ app
       return c.text("WHEP session track mids are required", 400);
     }
 
-    try {
-      const closeResponse = await closeTracks(
-        c.env,
-        sessionId,
-        createWhepCloseTracks(sessionId, mids),
-      );
-      if (hasCloseTrackErrors(closeResponse)) {
+    const closeResult = await closeTracks(
+      c.env,
+      sessionId,
+      createWhepCloseTracks(sessionId, mids),
+    );
+    if (closeResult.isErr()) {
+      if (!closeResult.error.isInactiveSession()) {
         console.error(
-          `Calls reported WHEP session close errors for session ${sessionId}:`,
-          closeResponse,
+          `Failed to close WHEP session ${sessionId}:`,
+          closeResult.error,
         );
         return c.text("Failed to close WHEP session", 502);
       }
-    } catch (error) {
-      if (!isInactiveCallsSessionError(error)) {
-        console.error(`Failed to close WHEP session ${sessionId}:`, error);
-        return c.text("Failed to close WHEP session", 502);
-      }
+    } else if (
+      closeResult.value.errorCode ||
+      closeResult.value.tracks?.some((track) => track.errorCode)
+    ) {
+      console.error(
+        `Calls reported WHEP session close errors for session ${sessionId}:`,
+        closeResult.value,
+      );
+      return c.text("Failed to close WHEP session", 502);
     }
 
     return c.body(null, 200);
@@ -438,17 +422,20 @@ app
       return c.text("SDP answer is required", 400);
     }
 
-    try {
-      await renegotiateSession(c.env, sessionId, sdpAnswer);
-    } catch (error) {
-      if (isCallsPublisherError(error)) {
-        return c.text(
-          getCallsErrorText(error, "Failed to submit WHEP answer"),
-          error.statusCode as CallsErrorStatusCode,
-        );
+    const renegotiationResult = await renegotiateSession(c.env, sessionId, sdpAnswer);
+    if (renegotiationResult.isErr()) {
+      const negotiationError = renegotiationResult.error.toNegotiationClientError(
+        "Failed to submit WHEP answer",
+      );
+      if (negotiationError) {
+        return c.text(negotiationError.text, negotiationError.status);
       }
 
-      throw error;
+      console.error(
+        `Failed to submit WHEP answer for session ${sessionId}:`,
+        renegotiationResult.error,
+      );
+      return c.text("Failed to submit WHEP answer", 502);
     }
 
     return c.body(null, 204);
@@ -456,21 +443,19 @@ app
 
 // API routes用の認証ミドルウェア
 app.use("/api/*", async (c, next) => {
-  return runMiddleware(
-    jwt({
-      secret: c.env.JWT_SECRET,
-      cookie: "authtoken",
-      alg: "HS256",
-    }),
-    c,
-    next,
-  );
+  const middleware = jwt({
+    secret: c.env.JWT_SECRET,
+    cookie: "authtoken",
+    alg: "HS256",
+  });
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+  return middleware(c, next);
 });
 
 // ユーザー情報を取得するAPIエンドポイント
 // JWTトークンからユーザー情報を抽出して返す
 app.get("/api/me", async (c) => {
-  const jwtPayload = c.get("jwtPayload") as JWTPayload;
+  const jwtPayload = c.get("jwtPayload");
 
   return c.json({
     userId: jwtPayload.userId,
@@ -482,41 +467,56 @@ app.get("/api/me", async (c) => {
 // 何度でも発行可能で、新しいトークンで上書きされる
 // トークンは作成時にのみ表示される
 app.post("/api/me/livetoken", async (c) => {
-  const jwtPayload = c.get("jwtPayload") as JWTPayload;
+  const jwtPayload = c.get("jwtPayload");
   const userId = jwtPayload.userId;
   const token = createLiveToken();
-  try {
-    const tokenHash = await hashTokenWithPepper(c.env.LIVE_TOKEN_PEPPER, token);
-    // データベースに保存（既存があれば上書き）
-    await db.setLiveToken(c.env.LIVE_DB, userId, tokenHash);
-    return c.json({
-      success: true,
-      token,
-    });
-  } catch (error) {
-    console.error("Failed to save live token:", error);
-    throw error;
+  const tokenHash = await hashTokenWithPepper(c.env.LIVE_TOKEN_PEPPER, token);
+
+  type SaveTokenResult = { ok: true } | { ok: false; error: Error };
+  const saveResult: SaveTokenResult = await setLiveToken(
+    c.env.LIVE_DB,
+    userId,
+    tokenHash,
+  )
+    .then((): SaveTokenResult => ({ ok: true }))
+    .catch((error: Error): SaveTokenResult => ({ ok: false, error }));
+  if (!saveResult.ok) {
+    console.error("Failed to save live token:", saveResult.error);
+    return c.text("Failed to save live token", 500);
   }
+
+  return c.json({
+    success: true,
+    token,
+  });
 });
 
 // 配信用トークンの発行状況を確認するAPIエンドポイント
 // 副作用なし：トークンは表示せず、発行状況のみを返す
 app.get("/api/me/livetoken", async (c) => {
-  const jwtPayload = c.get("jwtPayload") as JWTPayload;
+  const jwtPayload = c.get("jwtPayload");
   const userId = jwtPayload.userId;
-  try {
-    const hasToken = await db.hasLiveToken(c.env.LIVE_DB, userId);
-    return c.json({
-      hasToken: hasToken,
-    });
-  } catch (error) {
-    console.error(`Failed to check live token for user ${userId}:`, error);
-    throw error;
+  type HasTokenResult =
+    | { ok: true; hasToken: boolean }
+    | { ok: false; error: Error };
+  const hasTokenResult: HasTokenResult = await hasLiveToken(c.env.LIVE_DB, userId)
+    .then((hasToken): HasTokenResult => ({ ok: true, hasToken }))
+    .catch((error: Error): HasTokenResult => ({ ok: false, error }));
+  if (!hasTokenResult.ok) {
+    console.error(
+      `Failed to check live token for user ${userId}:`,
+      hasTokenResult.error,
+    );
+    return c.text("Failed to check live token", 500);
   }
+
+  return c.json({
+    hasToken: hasTokenResult.hasToken,
+  });
 });
 
 app.get("/api/lives", async (c) => {
-  const lives = await db.getAllLives(c.env.LIVE_DB);
+  const lives = await getAllLives(c.env.LIVE_DB);
   return c.json(lives);
 });
 

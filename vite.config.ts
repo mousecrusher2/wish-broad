@@ -19,17 +19,18 @@ export default defineConfig(({ mode }) => {
   ];
 
   if (isAnalyzeMode) {
-    plugins.push(
-      visualizer({
-        brotliSize: true,
-        emitFile: true,
-        filename: "bundle-analysis.html",
-        gzipSize: true,
-        open: false,
-        sourcemap: true,
-        template: "treemap",
-      }) as PluginOption,
-    );
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const analyzePlugin = visualizer({
+      brotliSize: true,
+      emitFile: true,
+      filename: "bundle-analysis.html",
+      gzipSize: true,
+      open: false,
+      sourcemap: true,
+      template: "treemap",
+    });
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+    plugins.push(analyzePlugin);
   }
 
   return {

@@ -57,10 +57,6 @@ export function createDefaultSnapshot(): WHEPPlaybackControllerSnapshot {
   };
 }
 
-function normalizeError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
-}
-
 function isNotFoundError(error: Error): boolean {
   return error instanceof WHEPSessionError && error.statusCode === 404;
 }
@@ -106,7 +102,7 @@ export class WHEPPlaybackController {
   private snapshot = createDefaultSnapshot();
   private snapshotSubscriber: SnapshotSubscriber | null = null;
   private targetResourceUserId: string | null = null;
-  private videoElement: HTMLVideoElement | null = null;
+  private videoElement: PlaybackMonitorVideoElement | null = null;
 
   attachVideoElement(videoElement: HTMLVideoElement | null): void {
     if (this.disposed) {
@@ -452,6 +448,13 @@ export class WHEPPlaybackController {
       this.clearRecoveryTimer();
       return;
     }
+    if (
+      sessionSnapshot.status !== "disconnected" &&
+      sessionSnapshot.status !== "failed"
+    ) {
+      this.clearRecoveryTimer();
+      return;
+    }
 
     this.clearPlaybackMonitor();
     this.updateRecoveringPlaybackState(sessionSnapshot.status);
@@ -486,7 +489,7 @@ export class WHEPPlaybackController {
 
     this.clearPlaybackMonitor();
 
-    const videoElement = this.videoElement as PlaybackMonitorVideoElement;
+    const videoElement = this.videoElement;
     const currentTime = videoElement.currentTime;
     const sawPlaybackProgress = Number.isFinite(currentTime) && currentTime > 0;
     const playbackMonitor: PlaybackMonitorState = {
@@ -724,9 +727,18 @@ export class WHEPPlaybackController {
     );
 
     try {
-      await session.start();
+      const startResult = await session.start();
 
       if (!this.isActiveSession(attemptId, session)) {
+        return;
+      }
+
+      if (startResult.isErr()) {
+        if (this.session === session) {
+          this.session = null;
+        }
+
+        this.handleAttemptFailure(startResult.error, mode, resourceUserId);
         return;
       }
 
@@ -734,16 +746,6 @@ export class WHEPPlaybackController {
         sessionWasConnected = true;
         this.handleConnected(resourceUserId, session, mode);
       }
-    } catch (error) {
-      if (!this.isActiveAttempt(attemptId)) {
-        return;
-      }
-
-      if (this.session === session) {
-        this.session = null;
-      }
-
-      this.handleAttemptFailure(normalizeError(error), mode, resourceUserId);
     } finally {
       if (mode === "initial" && this.loadingAttemptId === attemptId) {
         this.loadingAttemptId = null;

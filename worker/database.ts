@@ -1,5 +1,14 @@
-import { Live, StoredTrack, TrackLocator, User } from "./types";
-import { parseLiveTrackRow, parseStoredTracksJson } from "./validation";
+import type { StoredTrack, TrackLocator } from "./calls";
+import * as v from "valibot";
+
+export type User = {
+  userId: string;
+  displayName: string;
+};
+
+export type Live = {
+  owner: User;
+};
 
 export type LiveTrackRecord = {
   userId: string;
@@ -27,6 +36,19 @@ export async function getLiveTrackRecord(
   database: D1Database,
   userId: string,
 ): Promise<LiveTrackRecord | null> {
+  const liveTrackRowSchema = v.object({
+    user_id: v.string(),
+    session_id: v.string(),
+    tracks_json: v.string(),
+  });
+  const storedTrackSchema = v.object({
+    location: v.literal("remote"),
+    sessionId: v.string(),
+    trackName: v.string(),
+    mid: v.string(),
+  });
+  const storedTracksSchema = v.array(storedTrackSchema);
+
   const result = await database
     .prepare(
       "SELECT user_id, session_id, tracks_json FROM live_tracks WHERE user_id = ?",
@@ -38,15 +60,22 @@ export async function getLiveTrackRecord(
     return null;
   }
 
-  const row = parseLiveTrackRow(result, "D1 live_tracks row");
+  const rowResult = v.safeParse(liveTrackRowSchema, result);
+  if (!rowResult.success) {
+    throw new Error("Invalid D1 live_tracks row");
+  }
+  const row = rowResult.output;
+
+  const parsedTracksInput: unknown = JSON.parse(row.tracks_json);
+  const tracksResult = v.safeParse(storedTracksSchema, parsedTracksInput);
+  if (!tracksResult.success) {
+    throw new Error("Invalid D1 live_tracks.tracks_json");
+  }
 
   return {
     userId: row.user_id,
     sessionId: row.session_id,
-    tracks: parseStoredTracksJson(
-      row.tracks_json,
-      "D1 live_tracks.tracks_json",
-    ),
+    tracks: tracksResult.output,
   };
 }
 
@@ -95,12 +124,25 @@ export async function getLiveTokenHash(
   database: D1Database,
   userId: string,
 ): Promise<string | null> {
+  const liveTokenRowSchema = v.object({
+    token_hash: v.string(),
+  });
+
   const result = await database
     .prepare("SELECT token_hash FROM live_tokens WHERE user_id = ?")
     .bind(userId)
     .first();
 
-  return result ? (result["token_hash"] as string) : null;
+  if (!result) {
+    return null;
+  }
+
+  const rowResult = v.safeParse(liveTokenRowSchema, result);
+  if (!rowResult.success) {
+    throw new Error("Invalid D1 live_tokens row");
+  }
+
+  return rowResult.output.token_hash;
 }
 
 export async function hasLiveToken(
@@ -128,6 +170,11 @@ export async function getUser(
   database: D1Database,
   userId: string,
 ): Promise<User | null> {
+  const userRowSchema = v.object({
+    user_id: v.string(),
+    display_name: v.string(),
+  });
+
   const result = await database
     .prepare("SELECT user_id, display_name FROM users WHERE user_id = ?")
     .bind(userId)
@@ -137,23 +184,42 @@ export async function getUser(
     return null;
   }
 
+  const rowResult = v.safeParse(userRowSchema, result);
+  if (!rowResult.success) {
+    throw new Error("Invalid D1 users row");
+  }
+  const row = rowResult.output;
+
   return {
-    userId: result["user_id"] as string,
-    displayName: result["display_name"] as string,
+    userId: row.user_id,
+    displayName: row.display_name,
   };
 }
 
 export async function getAllLives(database: D1Database): Promise<Live[]> {
+  const liveListRowSchema = v.object({
+    user_id: v.string(),
+    display_name: v.string(),
+  });
+
   const results = await database
     .prepare(
       "SELECT users.user_id, display_name FROM live_tracks JOIN users ON live_tracks.user_id = users.user_id",
     )
     .all();
 
-  return results.results.map((row) => ({
-    owner: {
-      userId: row["user_id"] as string,
-      displayName: row["display_name"] as string,
-    },
-  }));
+  return results.results.map((row) => {
+    const rowResult = v.safeParse(liveListRowSchema, row);
+    if (!rowResult.success) {
+      throw new Error("Invalid D1 live list row");
+    }
+    const parsedRow = rowResult.output;
+
+    return {
+      owner: {
+        userId: parsedRow.user_id,
+        displayName: parsedRow.display_name,
+      },
+    };
+  });
 }

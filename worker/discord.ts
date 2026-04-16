@@ -1,19 +1,36 @@
-import { Bindings, DiscordGuildMember, DiscordOAuthToken } from "./types";
-import {
-  parseDiscordGuildMember,
-  parseDiscordOAuthToken,
-  SchemaValidationError,
-} from "./validation";
+import { Bindings } from "./types";
+import { err, ok, type Result } from "neverthrow";
+import * as v from "valibot";
 
 type DiscordEnv = Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">;
 
 const DISCORD_AUTHORIZE_URL = "https://discord.com/oauth2/authorize";
 const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
 
+export type DiscordUser = {
+  id: string;
+  username: string;
+  discriminator?: string | null | undefined;
+  global_name?: string | null | undefined;
+};
+
+export type DiscordGuildMember = {
+  user: DiscordUser;
+  nick?: string | null | undefined;
+};
+
+export type DiscordOAuthToken = {
+  accessToken: string;
+  tokenType: string;
+  expiresIn: number;
+  scope: string;
+  refreshToken?: string | undefined;
+};
+
 export const DISCORD_OAUTH_SCOPES = [
   "identify",
   "guilds.members.read",
-] as const;
+] satisfies readonly [string, string];
 
 export const DISCORD_STATE_COOKIE_NAME = "discord_oauth_state";
 export const DISCORD_STATE_MAX_AGE_SECONDS = 60 * 10;
@@ -31,11 +48,6 @@ export class DiscordApiError extends Error {
     this.name = "DiscordApiError";
   }
 }
-
-type ParsedDiscordBody = {
-  json?: unknown;
-  text: string;
-};
 
 function trimResponseBody(text: string | undefined): string | undefined {
   if (!text) {
@@ -65,107 +77,79 @@ function createDiscordBasicAuthHeader(env: DiscordEnv): string {
   return `Basic ${btoa(credentials)}`;
 }
 
-function createDiscordApiError(
-  message: string,
-  endpoint: string,
-  response?: Response,
-  body?: ParsedDiscordBody,
-): DiscordApiError {
-  return new DiscordApiError(
-    message,
-    endpoint,
-    response?.status,
-    response?.statusText,
-    trimResponseBody(body?.text),
-    body?.json,
-  );
-}
-
-async function parseDiscordResponseBody(
-  response: Response,
-): Promise<ParsedDiscordBody> {
-  const text = await response.text();
-
-  if (text.trim().length === 0) {
-    return { json: undefined, text };
-  }
-
-  try {
-    return {
-      json: JSON.parse(text) as unknown,
-      text,
-    };
-  } catch {
-    return {
-      json: undefined,
-      text,
-    };
-  }
-}
-
-async function fetchDiscordJson<T>(
+async function fetchDiscordJson<TInput, TOutput>(
   endpoint: string,
   init: RequestInit,
-  parse: (input: unknown, source: string) => T,
-  source: string,
-): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(endpoint, init);
-  } catch (error) {
-    throw new DiscordApiError(
-      error instanceof Error ? error.message : "Discord request failed",
-      endpoint,
-    );
+  schema: v.GenericSchema<unknown, TInput>,
+  mapParsed: (parsed: TInput) => TOutput,
+): Promise<Result<TOutput, DiscordApiError>> {
+  const responseResult = await fetch(endpoint, init)
+    .then((response) => ok(response))
+    .catch((error: Error) => err(new DiscordApiError(error.message, endpoint)));
+  if (responseResult.isErr()) {
+    return err(responseResult.error);
+  }
+  const response = responseResult.value;
+  const responseText = await response.text();
+  let responseJson: unknown = undefined;
+  if (responseText.trim().length > 0) {
+    try {
+      responseJson = JSON.parse(responseText);
+    } catch {
+      responseJson = undefined;
+    }
   }
 
-  const body = await parseDiscordResponseBody(response);
   if (!response.ok) {
-    throw createDiscordApiError(
-      `Discord request failed with status ${String(response.status)}`,
-      endpoint,
-      response,
-      body,
+    return err(
+      new DiscordApiError(
+        `Discord request failed with status ${String(response.status)}`,
+        endpoint,
+        response.status,
+        response.statusText,
+        trimResponseBody(responseText),
+        responseJson,
+      ),
     );
   }
 
-  if (body.json === undefined) {
-    throw createDiscordApiError(
-      "Discord returned a non-JSON response",
-      endpoint,
-      response,
-      body,
+  if (responseJson === undefined) {
+    return err(
+      new DiscordApiError(
+        "Discord returned a non-JSON response",
+        endpoint,
+        response.status,
+        response.statusText,
+        trimResponseBody(responseText),
+        responseJson,
+      ),
     );
   }
 
-  try {
-    return parse(body.json, source);
-  } catch (error) {
-    if (error instanceof SchemaValidationError) {
-      throw createDiscordApiError(
+  const parsedBody = v.safeParse(schema, responseJson);
+  if (!parsedBody.success) {
+    return err(
+      new DiscordApiError(
         "Discord returned an unexpected JSON response",
         endpoint,
-        response,
-        body,
-      );
-    }
-
-    throw error;
+        response.status,
+        response.statusText,
+        trimResponseBody(responseText),
+        responseJson,
+      ),
+    );
   }
+
+  return ok(mapParsed(parsedBody.output));
 }
 
 async function fetchDiscord(
   endpoint: string,
   init: RequestInit,
-): Promise<Response> {
-  try {
-    return await fetch(endpoint, init);
-  } catch (error) {
-    throw new DiscordApiError(
-      error instanceof Error ? error.message : "Discord request failed",
-      endpoint,
-    );
-  }
+): Promise<Result<Response, DiscordApiError>> {
+  return fetch(endpoint, init)
+    .then((response) => ok(response))
+    .catch((error: Error) => err(new DiscordApiError(error.message, endpoint)));
 }
 
 export function createOAuthState(): string {
@@ -194,7 +178,14 @@ export async function exchangeCodeForToken(
   env: DiscordEnv,
   code: string,
   redirectUri: string,
-): Promise<DiscordOAuthToken> {
+): Promise<Result<DiscordOAuthToken, DiscordApiError>> {
+  const discordOAuthTokenResponseSchema = v.object({
+    access_token: v.string(),
+    token_type: v.string(),
+    expires_in: v.number(),
+    refresh_token: v.optional(v.string()),
+    scope: v.string(),
+  });
   const tokenEndpoint = `${DISCORD_API_BASE_URL}/oauth2/token`;
 
   return fetchDiscordJson(
@@ -212,15 +203,32 @@ export async function exchangeCodeForToken(
         redirect_uri: redirectUri,
       }),
     },
-    parseDiscordOAuthToken,
-    "Discord OAuth token response",
+    discordOAuthTokenResponseSchema,
+    (parsedToken) => ({
+      accessToken: parsedToken.access_token,
+      expiresIn: parsedToken.expires_in,
+      refreshToken: parsedToken.refresh_token,
+      scope: parsedToken.scope,
+      tokenType: parsedToken.token_type,
+    }),
   );
 }
 
 export async function getGuildMember(
   accessToken: string,
   guildId: string,
-): Promise<DiscordGuildMember> {
+): Promise<Result<DiscordGuildMember, DiscordApiError>> {
+  const discordUserSchema = v.object({
+    id: v.string(),
+    username: v.string(),
+    discriminator: v.optional(v.nullish(v.string())),
+    global_name: v.optional(v.nullish(v.string())),
+  });
+  const discordGuildMemberSchema = v.object({
+    user: discordUserSchema,
+    nick: v.optional(v.nullish(v.string())),
+  });
+
   return fetchDiscordJson(
     `${DISCORD_API_BASE_URL}/users/@me/guilds/${encodeURIComponent(guildId)}/member`,
     {
@@ -229,17 +237,17 @@ export async function getGuildMember(
         Authorization: `Bearer ${accessToken}`,
       },
     },
-    parseDiscordGuildMember,
-    "Discord guild member response",
+    discordGuildMemberSchema,
+    (parsedMember) => parsedMember,
   );
 }
 
 export async function revokeAccessToken(
   env: DiscordEnv,
   accessToken: string,
-): Promise<void> {
+): Promise<Result<void, DiscordApiError>> {
   const revokeEndpoint = `${DISCORD_API_BASE_URL}/oauth2/token/revoke`;
-  const response = await fetchDiscord(revokeEndpoint, {
+  const responseResult = await fetchDiscord(revokeEndpoint, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -251,26 +259,49 @@ export async function revokeAccessToken(
       token_type_hint: "access_token",
     }),
   });
-
-  if (response.ok) {
-    return;
+  if (responseResult.isErr()) {
+    return err(responseResult.error);
   }
 
-  const body = await parseDiscordResponseBody(response);
-  throw createDiscordApiError(
-    `Discord token revocation failed with status ${String(response.status)}`,
-    revokeEndpoint,
-    response,
-    body,
+  const response = responseResult.value;
+
+  if (response.ok) {
+    return ok(undefined);
+  }
+
+  const responseText = await response.text();
+  let responseJson: unknown = undefined;
+  if (responseText.trim().length > 0) {
+    try {
+      responseJson = JSON.parse(responseText);
+    } catch {
+      responseJson = undefined;
+    }
+  }
+  return err(
+    new DiscordApiError(
+      `Discord token revocation failed with status ${String(response.status)}`,
+      revokeEndpoint,
+      response.status,
+      response.statusText,
+      trimResponseBody(responseText),
+      responseJson,
+    ),
   );
 }
 
 export function getDiscordErrorMessage(error: DiscordApiError): string {
   if (error.responseBodyJson && typeof error.responseBodyJson === "object") {
-    const body = error.responseBodyJson as Record<string, unknown>;
     for (const key of ["error_description", "error", "message"]) {
-      if (typeof body[key] === "string" && body[key].trim().length > 0) {
-        return body[key];
+      const descriptor = Object.getOwnPropertyDescriptor(
+        error.responseBodyJson,
+        key,
+      );
+      if (
+        typeof descriptor?.value === "string" &&
+        descriptor.value.trim().length > 0
+      ) {
+        return descriptor.value;
       }
     }
   }

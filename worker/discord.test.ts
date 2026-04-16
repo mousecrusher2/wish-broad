@@ -33,7 +33,7 @@ describe("worker discord helpers", () => {
     expect(url.searchParams.get("state")).toBe("state-123");
   });
 
-  it("throws a DiscordApiError when token exchange returns a non-JSON error body", async () => {
+  it("returns an error result when token exchange returns a non-JSON error body", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("<html>rate limited</html>", {
         headers: {
@@ -44,16 +44,21 @@ describe("worker discord helpers", () => {
       }),
     );
 
-    await expect(
-      exchangeCodeForToken(
-        {
-          DISCORD_CLIENT_ID: "client-id",
-          DISCORD_CLIENT_SECRET: "client-secret",
-        },
-        "auth-code",
-        "https://example.com/login",
-      ),
-    ).rejects.toMatchObject({
+    const result = await exchangeCodeForToken(
+      {
+        DISCORD_CLIENT_ID: "client-id",
+        DISCORD_CLIENT_SECRET: "client-secret",
+      },
+      "auth-code",
+      "https://example.com/login",
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isOk()) {
+      throw new Error("Expected token exchange to fail");
+    }
+
+    expect(result.error).toMatchObject({
       endpoint: "https://discord.com/api/v10/oauth2/token",
       responseBodyText: "<html>rate limited</html>",
       statusCode: 429,
@@ -61,7 +66,7 @@ describe("worker discord helpers", () => {
     });
   });
 
-  it("throws a DiscordApiError when token revocation fails", async () => {
+  it("returns an error result when token revocation fails", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ message: "bad gateway" }), {
         headers: {
@@ -72,15 +77,20 @@ describe("worker discord helpers", () => {
       }),
     );
 
-    await expect(
-      revokeAccessToken(
-        {
-          DISCORD_CLIENT_ID: "client-id",
-          DISCORD_CLIENT_SECRET: "client-secret",
-        },
-        "discord-access-token",
-      ),
-    ).rejects.toMatchObject({
+    const result = await revokeAccessToken(
+      {
+        DISCORD_CLIENT_ID: "client-id",
+        DISCORD_CLIENT_SECRET: "client-secret",
+      },
+      "discord-access-token",
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isOk()) {
+      throw new Error("Expected token revocation to fail");
+    }
+
+    expect(result.error).toMatchObject({
       endpoint: "https://discord.com/api/v10/oauth2/token/revoke",
       statusCode: 502,
       statusText: "Bad Gateway",

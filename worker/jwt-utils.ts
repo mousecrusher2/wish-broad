@@ -26,4 +26,9 @@ export const JWT_DURATION_SECONDS = {
   ONE_DAY: 60 * 60 * 24,
   ONE_WEEK: 60 * 60 * 24 * 7,
   ONE_MONTH: 60 * 60 * 24 * 30,
-} as const;
+} satisfies Readonly<{
+  ONE_DAY: number;
+  ONE_HOUR: number;
+  ONE_MONTH: number;
+  ONE_WEEK: number;
+}>;

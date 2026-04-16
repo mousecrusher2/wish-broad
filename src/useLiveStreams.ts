@@ -1,68 +1,72 @@
 import useSWR from "swr";
+import { err, ok, type Result } from "neverthrow";
+import * as v from "valibot";
 import type { Live } from "./types";
 
-type UseLiveStreamsResult = {
+type UseLiveStreamsState = {
   streams: Live[];
   isLoading: boolean;
   error: string | null;
   refresh: () => void;
 };
 
-function isLive(value: unknown): value is Live {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-
-  const owner = (value as { owner?: unknown }).owner;
-  if (typeof owner !== "object" || owner === null) {
-    return false;
-  }
-
-  return (
-    typeof (owner as { userId?: unknown }).userId === "string" &&
-    typeof (owner as { displayName?: unknown }).displayName === "string"
-  );
-}
-
-function isLiveList(value: unknown): value is Live[] {
-  return Array.isArray(value) && value.every(isLive);
-}
-
-async function fetchLiveStreams(): Promise<Live[]> {
-  try {
-    const response = await fetch("/api/lives");
-    if (!response.ok) {
-      throw new Error("配信リストの取得に失敗しました");
-    }
-
-    const data: unknown = await response.json();
-    if (!isLiveList(data)) {
-      throw new Error("Unexpected live streams response");
-    }
-
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch live streams:", error);
-    throw error instanceof Error
-      ? error
-      : new Error("配信リストの取得中にエラーが発生しました");
-  }
-}
-
-export function useLiveStreams(): UseLiveStreamsResult {
-  const { data, error, isLoading, isValidating, mutate } = useSWR<
-    Live[],
-    Error
-  >("/api/lives", fetchLiveStreams, {
-    revalidateOnFocus: false,
-    revalidateOnReconnect: false,
-    shouldRetryOnError: false,
+async function fetchLiveStreams(): Promise<Result<Live[], Error>> {
+  const userSchema = v.object({
+    userId: v.string(),
+    displayName: v.string(),
   });
+  const liveSchema = v.object({
+    owner: userSchema,
+  });
+  const liveListSchema = v.array(liveSchema);
+
+  const responseResult = await fetch("/api/lives")
+    .then((response) => ok(response))
+    .catch((error: Error) => err(error));
+  if (responseResult.isErr()) {
+    console.error("Failed to fetch live streams:", responseResult.error);
+    return err(responseResult.error);
+  }
+
+  const response = responseResult.value;
+  if (!response.ok) {
+    return err(new Error("配信リストの取得に失敗しました"));
+  }
+
+  const payloadResult = await response
+    .json()
+    .then((data: unknown) => ok(data))
+    .catch((error: Error) => err(error));
+  if (payloadResult.isErr()) {
+    console.error("Failed to fetch live streams:", payloadResult.error);
+    return err(payloadResult.error);
+  }
+
+  const parsedLiveList = v.safeParse(liveListSchema, payloadResult.value);
+  if (!parsedLiveList.success) {
+    return err(new Error("Unexpected live streams response"));
+  }
+
+  return ok(parsedLiveList.output);
+}
+
+export function useLiveStreams(): UseLiveStreamsState {
+  const { data, isLoading, isValidating, mutate } = useSWR<
+    Result<Live[], Error>
+  >(
+    "/api/lives",
+    fetchLiveStreams,
+    {
+      revalidateOnFocus: false,
+      revalidateOnReconnect: false,
+      shouldRetryOnError: false,
+    },
+  );
 
   return {
-    streams: data ?? [],
+    streams: data?.isOk() ? data.value : [],
     isLoading: isLoading || isValidating,
-    error: error instanceof Error ? error.message : null,
+    error: data?.isErr() ? data.error.message : null,
     refresh: () => {
       void mutate();
     },
