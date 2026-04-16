@@ -94,9 +94,6 @@ function toErrorResponse(
 
 app.onError((err, c) => {
   if (!(err instanceof HTTPException)) {
-    if (!(err instanceof Error)) {
-      throw new Error("Unhandled non-Error exception");
-    }
     logUnexpectedError(err);
   }
 
@@ -382,7 +379,10 @@ app
       createWhepCloseTracks(sessionId, mids),
     );
     if (closeResult.isErr()) {
-      if (!closeResult.error.isInactiveSession()) {
+      if (
+        closeResult.error.kind !== "session_not_found" &&
+        closeResult.error.kind !== "session_gone"
+      ) {
         console.error(
           `Failed to close WHEP session ${sessionId}:`,
           closeResult.error,

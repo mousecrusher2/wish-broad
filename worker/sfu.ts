@@ -147,10 +147,6 @@ export class SfuApiError extends Error {
     });
   }
 
-  isInactiveSession(): boolean {
-    return this.kind === "session_not_found" || this.kind === "session_gone";
-  }
-
   isSessionNotFound(): boolean {
     return this.kind === "session_not_found";
   }
@@ -666,7 +662,10 @@ export async function isSessionActive(
       endpoint,
       responseBody,
     );
-    if (responseError.isInactiveSession()) {
+    if (
+      responseError.kind === "session_not_found" ||
+      responseError.kind === "session_gone"
+    ) {
       return ok(false);
     }
     return err(responseError);

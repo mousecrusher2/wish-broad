@@ -1,4 +1,4 @@
-import type { StoredTrack, TrackLocator } from "./sfu";
+import type { StoredTrack } from "./sfu";
 import * as v from "valibot";
 
 export type User = {
@@ -79,20 +79,6 @@ export async function getLiveTrackRecord(
   };
 }
 
-export async function getTracks(
-  database: D1Database,
-  userId: string,
-): Promise<TrackLocator[]> {
-  const liveTrackRecord = await getLiveTrackRecord(database, userId);
-  return (
-    liveTrackRecord?.tracks.map(({ location, sessionId, trackName }) => ({
-      location,
-      sessionId,
-      trackName,
-    })) ?? []
-  );
-}
-
 export async function deleteTracksForSession(
   database: D1Database,
   userId: string,
@@ -164,36 +150,6 @@ export async function setUser(database: D1Database, user: User): Promise<void> {
     )
     .bind(user.userId, user.displayName)
     .run();
-}
-
-export async function getUser(
-  database: D1Database,
-  userId: string,
-): Promise<User | null> {
-  const userRowSchema = v.object({
-    user_id: v.string(),
-    display_name: v.string(),
-  });
-
-  const result = await database
-    .prepare("SELECT user_id, display_name FROM users WHERE user_id = ?")
-    .bind(userId)
-    .first();
-
-  if (!result) {
-    return null;
-  }
-
-  const rowResult = v.safeParse(userRowSchema, result);
-  if (!rowResult.success) {
-    throw new Error("Invalid D1 users row");
-  }
-  const row = rowResult.output;
-
-  return {
-    userId: row.user_id,
-    displayName: row.display_name,
-  };
 }
 
 export async function getAllLives(database: D1Database): Promise<Live[]> {

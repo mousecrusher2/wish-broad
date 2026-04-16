@@ -196,21 +196,18 @@ async function waitForIceGatheringComplete(
   }
 
   await new Promise<void>((resolve, reject) => {
+    const onStateChange = () => {
+      if (isIceGatheringFinished(pc)) {
+        cleanup();
+        resolve();
+      }
+    };
     const cleanup = () => {
       pc.removeEventListener("icegatheringstatechange", onStateChange);
       pc.removeEventListener("connectionstatechange", onStateChange);
       pc.removeEventListener("signalingstatechange", onStateChange);
       signal.removeEventListener("abort", onAbort);
     };
-
-    const onGatheringStateChange = () => {
-      if (isIceGatheringFinished(pc)) {
-        cleanup();
-        resolve();
-      }
-    };
-
-    const onStateChange = onGatheringStateChange;
     const onAbort = () => {
       cleanup();
       reject(

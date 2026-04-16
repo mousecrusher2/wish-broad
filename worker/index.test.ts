@@ -17,9 +17,6 @@ const dbMocks = vi.hoisted(() => ({
       tracks: StoredTrack[];
     } | null>
   >(),
-  getTracks: vi.fn<() => Promise<unknown[]>>(),
-  getUser:
-    vi.fn<() => Promise<{ displayName: string; userId: string } | null>>(),
   hasLiveToken: vi.fn<() => Promise<boolean>>(),
   setLiveToken: vi.fn<() => Promise<void>>(),
   setTracks: vi.fn<() => Promise<void>>(),
@@ -70,10 +67,6 @@ const callsMocks = vi.hoisted(() => {
       this.kind = options.kind;
       this.responseBody = options.responseBody;
       this.statusText = options.statusText;
-    }
-
-    isInactiveSession(): boolean {
-      return this.kind === "session_not_found" || this.kind === "session_gone";
     }
 
     isSessionNotFound(): boolean {
@@ -271,7 +264,7 @@ function createUnusedD1Database(): D1Database {
     withSession() {
       return createUnusedD1DatabaseSession();
     },
-    dump() {
+    ["dump"]() {
       throw new Error("Unexpected D1 access in tests");
     },
   };
@@ -336,8 +329,6 @@ describe("worker app", () => {
       await hashTokenWithPepper("test-live-token-pepper", "live-token"),
     );
     dbMocks.getLiveTrackRecord.mockResolvedValue(null);
-    dbMocks.getTracks.mockResolvedValue([]);
-    dbMocks.getUser.mockResolvedValue(null);
     dbMocks.hasLiveToken.mockResolvedValue(false);
     dbMocks.setLiveToken.mockResolvedValue();
     dbMocks.setTracks.mockResolvedValue();
