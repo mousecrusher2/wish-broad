@@ -22,9 +22,9 @@
   - `/play/:userId*` for WHEP playback (viewer side).
   - `/api/*` for authenticated app APIs (`/api/me`, `/api/lives`, `/api/me/livetoken`).
 - Discord auth spans `worker/discord-login.ts` + `worker/discord.ts`: OAuth state cookie handshake, code exchange, guild-membership verification, user upsert, JWT cookie (`authtoken`) issuance.
-- Cloudflare Calls integration is centralized in `worker/calls.ts` (`startIngest`, `startPlay`, `renegotiateSession`, `closeTracks`).
+- Cloudflare Realtime SFU integration is centralized in `worker/sfu.ts` (`startIngest`, `startPlay`, `renegotiateSession`, `closeTracks`).
 - D1 persistence is routed through `worker/database.ts` (`live_tracks`, `live_tokens`, `users`), and token auth uses hashed tokens (`token_hash`) rather than raw bearer tokens.
-- Untrusted external payloads are validated with Valibot schemas colocated in their consuming modules (`worker/calls.ts`, `worker/discord.ts`, `worker/database.ts`).
+- Untrusted external payloads are validated with Valibot schemas colocated in their consuming modules (`worker/sfu.ts`, `worker/discord.ts`, `worker/database.ts`).
 - End-to-end auth path:
   - Frontend boot (`src/App.tsx`) gates on `useAuth()` (`/api/me`) to resolve `authenticated` / `unauthenticated` / `error`.
   - `/login` starts Discord OAuth; `/login/callback` exchanges code, verifies guild membership, upserts user in D1, then sets `authtoken` cookie.
@@ -39,8 +39,8 @@
   - `201` means SDP answer (apply directly). `406` means counter-offer (set remote offer, create local answer, `PATCH` to session URL).
   - Reconnect behavior is centralized in `WHEPVideoPlayer` + `whep-reconnect.ts` (bounded retry window + backoff + resume triggers on visibility/pageshow/focus/online).
 - Session cleanup behavior:
-  - `DELETE /ingest/:userId/:sessionId` closes tracks via Calls and then removes D1 rows.
-  - Viewer startup removes stale D1 records when Calls reports a dead publish session.
+  - `DELETE /ingest/:userId/:sessionId` closes tracks via SFU and then removes D1 rows.
+  - Viewer startup removes stale D1 records when SFU reports a dead publish session.
   - `WHEPSession.dispose()` tears down local WebRTC resources and sends `DELETE` to the server session URL.
 - Frontend flow:
   - `src/WHEPPlayer.tsx` composes stream selection, connection controls, playback area, and OBS setup/token issuance.
@@ -51,7 +51,7 @@
 
 - Keep frontend API calls relative (`/api/...`, `/play/...`, `/ingest/...`) so Worker + assets work in the same origin setup.
 - Keep D1 SQL and table knowledge in `worker/database.ts`; route handlers should call DB helpers, not embed raw SQL.
-- Keep Cloudflare Calls HTTP logic in `worker/calls.ts`; route handlers orchestrate it rather than issuing direct Calls API requests.
+- Keep Cloudflare Realtime SFU HTTP logic in `worker/sfu.ts`; route handlers orchestrate it rather than issuing direct SFU API requests.
 - Parse/validate external payloads with the colocated Valibot schemas in each module instead of trusting raw JSON.
 - Keep JWT behavior consistent: protected routes use `jwt({ secret: c.env.JWT_SECRET, cookie: "authtoken", alg: "HS256" })` and payload shape from `worker/types.ts::JWTPayload`.
 - If you add/change Worker bindings, update `worker/types.ts::Bindings` and run `pnpm cf-typegen`.

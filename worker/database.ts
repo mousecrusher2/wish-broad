@@ -1,4 +1,4 @@
-import type { StoredTrack, TrackLocator } from "./calls";
+import type { StoredTrack, TrackLocator } from "./sfu";
 import * as v from "valibot";
 
 export type User = {

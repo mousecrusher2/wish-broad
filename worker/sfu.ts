@@ -53,9 +53,9 @@ export type CloseTracksResponse = {
   tracks?: ClosedTrack[] | undefined;
 };
 
-type CallsNegotiationClientStatus = 400 | 415 | 422;
+type SfuNegotiationClientStatus = 400 | 415 | 422;
 
-type CallsApiErrorKind =
+type SfuApiErrorKind =
   | "request_failed"
   | "bad_request"
   | "unsupported_media_type"
@@ -66,12 +66,12 @@ type CallsApiErrorKind =
   | "invalid_response_json"
   | "invalid_response_schema"
   | "track_negotiation_error"
-  | "invalid_calls_response";
+  | "invalid_sfu_response";
 
 // カスタムエラークラス
-export class CallsApiError extends Error {
+export class SfuApiError extends Error {
   readonly endpoint: string;
-  readonly kind: CallsApiErrorKind;
+  readonly kind: SfuApiErrorKind;
   readonly responseBody: unknown;
   readonly statusText: string | undefined;
 
@@ -79,13 +79,13 @@ export class CallsApiError extends Error {
     message: string,
     options: {
       endpoint: string;
-      kind: CallsApiErrorKind;
+      kind: SfuApiErrorKind;
       responseBody?: unknown;
       statusText?: string;
     },
   ) {
     super(message);
-    this.name = "CallsApiError";
+    this.name = "SfuApiError";
     this.endpoint = options.endpoint;
     this.kind = options.kind;
     this.responseBody = options.responseBody;
@@ -97,9 +97,9 @@ export class CallsApiError extends Error {
     statusText: string,
     endpoint: string,
     responseBody?: unknown,
-  ): CallsApiError {
+  ): SfuApiError {
     if (status === 400) {
-      return new CallsApiError("Calls request failed: bad request", {
+      return new SfuApiError("SFU request failed: bad request", {
         endpoint,
         kind: "bad_request",
         responseBody,
@@ -107,7 +107,7 @@ export class CallsApiError extends Error {
       });
     }
     if (status === 404) {
-      return new CallsApiError("Calls request failed: session not found", {
+      return new SfuApiError("SFU request failed: session not found", {
         endpoint,
         kind: "session_not_found",
         responseBody,
@@ -115,7 +115,7 @@ export class CallsApiError extends Error {
       });
     }
     if (status === 410) {
-      return new CallsApiError("Calls request failed: session gone", {
+      return new SfuApiError("SFU request failed: session gone", {
         endpoint,
         kind: "session_gone",
         responseBody,
@@ -123,7 +123,7 @@ export class CallsApiError extends Error {
       });
     }
     if (status === 415) {
-      return new CallsApiError("Calls request failed: unsupported media type", {
+      return new SfuApiError("SFU request failed: unsupported media type", {
         endpoint,
         kind: "unsupported_media_type",
         responseBody,
@@ -131,7 +131,7 @@ export class CallsApiError extends Error {
       });
     }
     if (status === 422) {
-      return new CallsApiError("Calls request failed: unprocessable content", {
+      return new SfuApiError("SFU request failed: unprocessable content", {
         endpoint,
         kind: "unprocessable_content",
         responseBody,
@@ -139,7 +139,7 @@ export class CallsApiError extends Error {
       });
     }
 
-    return new CallsApiError("Calls request failed", {
+    return new SfuApiError("SFU request failed", {
       endpoint,
       kind: "http_error",
       responseBody,
@@ -157,7 +157,7 @@ export class CallsApiError extends Error {
 
   toNegotiationClientError(
     fallbackText: string,
-  ): { status: CallsNegotiationClientStatus; text: string } | null {
+  ): { status: SfuNegotiationClientStatus; text: string } | null {
     const text =
       typeof this.responseBody === "string" && this.responseBody.length > 0
         ? this.responseBody
@@ -224,31 +224,31 @@ const closeTracksResponseSchema = v.object({
   tracks: v.optional(v.array(closeTrackResultSchema)),
 });
 
-type CallsEnv = Pick<Bindings, "CALLS_APP_ID" | "CALLS_APP_SECRET">;
+type SfuEnv = Pick<Bindings, "CALLS_APP_ID" | "CALLS_APP_SECRET">;
 type TrackLocatorRequest = Pick<
   TrackLocator,
   "location" | "sessionId" | "trackName"
 >;
 
-function getEndpoint(env: CallsEnv, path: string): string {
+function getEndpoint(env: SfuEnv, path: string): string {
   return `https://rtc.live.cloudflare.com/v1/apps/${env.CALLS_APP_ID}${path}`;
 }
 
-function getHeaders(env: CallsEnv): Record<string, string> {
+function getHeaders(env: SfuEnv): Record<string, string> {
   return {
     Authorization: `Bearer ${env.CALLS_APP_SECRET}`,
   };
 }
 
-async function fetchCalls(
+async function fetchSfu(
   endpoint: string,
   init: RequestInit,
-): Promise<Result<Response, CallsApiError>> {
+): Promise<Result<Response, SfuApiError>> {
   return fetch(endpoint, init)
     .then((response) => ok(response))
     .catch((error: Error) =>
       err(
-        new CallsApiError("Calls request failed", {
+        new SfuApiError("SFU request failed", {
           endpoint,
           kind: "request_failed",
           responseBody: error.message,
@@ -269,10 +269,10 @@ function normalizeTrackLocator(track: TrackLocator): TrackLocatorRequest {
  * 新しいセッションを作成
  */
 export async function createSession(
-  env: CallsEnv,
-): Promise<Result<NewSessionResponse, CallsApiError>> {
+  env: SfuEnv,
+): Promise<Result<NewSessionResponse, SfuApiError>> {
   const endpoint = getEndpoint(env, "/sessions/new");
-  const responseResult = await fetchCalls(endpoint, {
+  const responseResult = await fetchSfu(endpoint, {
     method: "POST",
     headers: getHeaders(env),
   });
@@ -286,7 +286,7 @@ export async function createSession(
       .json()
       .catch(() => response.text().catch(() => null));
     return err(
-      CallsApiError.fromHttpFailure(
+      SfuApiError.fromHttpFailure(
         response.status,
         response.statusText,
         endpoint,
@@ -300,7 +300,7 @@ export async function createSession(
     .then((responseBody: unknown) => ok(responseBody))
     .catch((error: Error) =>
       err(
-        new CallsApiError("Invalid Calls response JSON", {
+        new SfuApiError("Invalid SFU response JSON", {
           endpoint,
           kind: "invalid_response_json",
           responseBody: {
@@ -320,7 +320,7 @@ export async function createSession(
   );
   if (!parsedResponse.success) {
     return err(
-      new CallsApiError("Invalid Calls response schema", {
+      new SfuApiError("Invalid SFU response schema", {
         endpoint,
         kind: "invalid_response_schema",
         responseBody: {
@@ -338,10 +338,10 @@ export async function createSession(
  * 配信者用：新しいトラックを作成（WHIP）
  */
 export async function createIngestTracks(
-  env: CallsEnv,
+  env: SfuEnv,
   sessionId: string,
   sdpOffer: string,
-): Promise<Result<NewTracksResponse, CallsApiError>> {
+): Promise<Result<NewTracksResponse, SfuApiError>> {
   const body = {
     sessionDescription: {
       type: "offer",
@@ -351,7 +351,7 @@ export async function createIngestTracks(
   };
 
   const endpoint = getEndpoint(env, `/sessions/${sessionId}/tracks/new`);
-  const responseResult = await fetchCalls(endpoint, {
+  const responseResult = await fetchSfu(endpoint, {
     method: "POST",
     headers: {
       ...getHeaders(env),
@@ -369,7 +369,7 @@ export async function createIngestTracks(
       .json()
       .catch(() => response.text().catch(() => null));
     return err(
-      CallsApiError.fromHttpFailure(
+      SfuApiError.fromHttpFailure(
         response.status,
         response.statusText,
         endpoint,
@@ -383,7 +383,7 @@ export async function createIngestTracks(
     .then((responseBody: unknown) => ok(responseBody))
     .catch((error: Error) =>
       err(
-        new CallsApiError("Invalid Calls response JSON", {
+        new SfuApiError("Invalid SFU response JSON", {
           endpoint,
           kind: "invalid_response_json",
           responseBody: {
@@ -400,7 +400,7 @@ export async function createIngestTracks(
   const parsedResponse = v.safeParse(newTracksResponseSchema, responseBody);
   if (!parsedResponse.success) {
     return err(
-      new CallsApiError("Invalid Calls response schema", {
+      new SfuApiError("Invalid SFU response schema", {
         endpoint,
         kind: "invalid_response_schema",
         responseBody: {
@@ -418,11 +418,11 @@ export async function createIngestTracks(
  * 視聴者用：既存のトラックに接続（WHEP）
  */
 export async function connectToTracks(
-  env: CallsEnv,
+  env: SfuEnv,
   sessionId: string,
   tracks: TrackLocator[],
   sdpOffer?: string,
-): Promise<Result<NewTracksResponse, CallsApiError>> {
+): Promise<Result<NewTracksResponse, SfuApiError>> {
   const normalizedTracks = tracks.map(normalizeTrackLocator);
   const body =
     sdpOffer && sdpOffer.trim().length > 0
@@ -438,7 +438,7 @@ export async function connectToTracks(
         };
 
   const endpoint = getEndpoint(env, `/sessions/${sessionId}/tracks/new`);
-  const responseResult = await fetchCalls(endpoint, {
+  const responseResult = await fetchSfu(endpoint, {
     method: "POST",
     headers: {
       ...getHeaders(env),
@@ -456,7 +456,7 @@ export async function connectToTracks(
       .json()
       .catch(() => response.text().catch(() => null));
     return err(
-      CallsApiError.fromHttpFailure(
+      SfuApiError.fromHttpFailure(
         response.status,
         response.statusText,
         endpoint,
@@ -470,7 +470,7 @@ export async function connectToTracks(
     .then((responseBody: unknown) => ok(responseBody))
     .catch((error: Error) =>
       err(
-        new CallsApiError("Invalid Calls response JSON", {
+        new SfuApiError("Invalid SFU response JSON", {
           endpoint,
           kind: "invalid_response_json",
           responseBody: {
@@ -487,7 +487,7 @@ export async function connectToTracks(
   const parsedResponseResult = v.safeParse(newTracksResponseSchema, responseBody);
   if (!parsedResponseResult.success) {
     return err(
-      new CallsApiError("Invalid Calls response schema", {
+      new SfuApiError("Invalid SFU response schema", {
         endpoint,
         kind: "invalid_response_schema",
         responseBody: {
@@ -504,7 +504,7 @@ export async function connectToTracks(
     !!parsedResponse.tracks?.some((track) => !!track.errorCode);
   if (hasTrackNegotiationErrors) {
     return err(
-      new CallsApiError("Calls returned track negotiation errors", {
+      new SfuApiError("SFU returned track negotiation errors", {
         endpoint,
         kind: "track_negotiation_error",
         responseBody,
@@ -518,10 +518,10 @@ export async function connectToTracks(
  * セッション再交渉（ICE候補やセッション再交渉用）
  */
 export async function renegotiateSession(
-  env: CallsEnv,
+  env: SfuEnv,
   sessionId: string,
   sdpAnswer: string,
-): Promise<Result<Response, CallsApiError>> {
+): Promise<Result<Response, SfuApiError>> {
   const body = {
     sessionDescription: {
       type: "answer",
@@ -530,7 +530,7 @@ export async function renegotiateSession(
   };
 
   const endpoint = getEndpoint(env, `/sessions/${sessionId}/renegotiate`);
-  const responseResult = await fetchCalls(endpoint, {
+  const responseResult = await fetchSfu(endpoint, {
     method: "PUT",
     headers: {
       ...getHeaders(env),
@@ -548,7 +548,7 @@ export async function renegotiateSession(
       .json()
       .catch(() => response.text().catch(() => null));
     return err(
-      CallsApiError.fromHttpFailure(
+      SfuApiError.fromHttpFailure(
         response.status,
         response.statusText,
         endpoint,
@@ -564,10 +564,10 @@ export async function renegotiateSession(
  * セッションに紐づくトラックを閉じる
  */
 export async function closeTracks(
-  env: CallsEnv,
+  env: SfuEnv,
   sessionId: string,
   tracks: StoredTrack[],
-): Promise<Result<CloseTracksResponse, CallsApiError>> {
+): Promise<Result<CloseTracksResponse, SfuApiError>> {
   const body = {
     force: true,
     tracks: tracks.map((track) => ({
@@ -576,7 +576,7 @@ export async function closeTracks(
   };
 
   const endpoint = getEndpoint(env, `/sessions/${sessionId}/tracks/close`);
-  const responseResult = await fetchCalls(endpoint, {
+  const responseResult = await fetchSfu(endpoint, {
     method: "PUT",
     headers: {
       ...getHeaders(env),
@@ -594,7 +594,7 @@ export async function closeTracks(
       .json()
       .catch(() => response.text().catch(() => null));
     return err(
-      CallsApiError.fromHttpFailure(
+      SfuApiError.fromHttpFailure(
         response.status,
         response.statusText,
         endpoint,
@@ -608,7 +608,7 @@ export async function closeTracks(
     .then((responseBody: unknown) => ok(responseBody))
     .catch((error: Error) =>
       err(
-        new CallsApiError("Invalid Calls response JSON", {
+        new SfuApiError("Invalid SFU response JSON", {
           endpoint,
           kind: "invalid_response_json",
           responseBody: {
@@ -625,7 +625,7 @@ export async function closeTracks(
   const parsedResponse = v.safeParse(closeTracksResponseSchema, responseBody);
   if (!parsedResponse.success) {
     return err(
-      new CallsApiError("Invalid Calls response schema", {
+      new SfuApiError("Invalid SFU response schema", {
         endpoint,
         kind: "invalid_response_schema",
         responseBody: {
@@ -643,11 +643,11 @@ export async function closeTracks(
  * セッションが継続しているか確認
  */
 export async function isSessionActive(
-  env: CallsEnv,
+  env: SfuEnv,
   sessionId: string,
-): Promise<Result<boolean, CallsApiError>> {
+): Promise<Result<boolean, SfuApiError>> {
   const endpoint = getEndpoint(env, `/sessions/${sessionId}`);
-  const responseResult = await fetchCalls(endpoint, {
+  const responseResult = await fetchSfu(endpoint, {
     method: "GET",
     headers: getHeaders(env),
   });
@@ -660,7 +660,7 @@ export async function isSessionActive(
     const responseBody = await response
       .json()
       .catch(() => response.text().catch(() => null));
-    const responseError = CallsApiError.fromHttpFailure(
+    const responseError = SfuApiError.fromHttpFailure(
       response.status,
       response.statusText,
       endpoint,
@@ -679,7 +679,7 @@ export async function isSessionActive(
  * 配信開始処理：SDP Offerを受け取り、Cloudflareセッションを作成してトラック情報を返す
  */
 export async function startIngest(
-  env: CallsEnv,
+  env: SfuEnv,
   _liveId: string,
   sdpOffer: string,
 ): Promise<
@@ -687,7 +687,7 @@ export async function startIngest(
     sessionId: string;
     sdpAnswer: string;
     tracks: StoredTrack[];
-  }, CallsApiError>
+  }, SfuApiError>
 > {
   // 新しいセッションを作成
   const sessionResult = await createSession(env);
@@ -713,9 +713,9 @@ export async function startIngest(
 
   if (!responseTracks || responseTracks.length === 0 || !sdpAnswer) {
     return err(
-      new CallsApiError("Calls response did not include ingest tracks or SDP", {
+      new SfuApiError("SFU response did not include ingest tracks or SDP", {
         endpoint: ingestEndpoint,
-        kind: "invalid_calls_response",
+        kind: "invalid_sfu_response",
         responseBody: tracksResult.value,
       }),
     );
@@ -735,9 +735,9 @@ export async function startIngest(
   );
   if (tracks.length !== responseTracks.length) {
     return err(
-      new CallsApiError("Calls response did not include track MID", {
+      new SfuApiError("SFU response did not include track MID", {
         endpoint: ingestEndpoint,
-        kind: "invalid_calls_response",
+        kind: "invalid_sfu_response",
         responseBody: tracksResult.value,
       }),
     );
@@ -754,7 +754,7 @@ export async function startIngest(
  * 視聴開始処理：既存のトラックに接続して視聴セッションを作成
  */
 export async function startPlay(
-  env: CallsEnv,
+  env: SfuEnv,
   liveId: string,
   tracks: TrackLocator[],
   sdpOffer?: string,
@@ -764,7 +764,7 @@ export async function startPlay(
     sdpAnswer: string;
     sdpType: "answer" | "offer";
     tracks: StoredTrack[];
-  }, CallsApiError | LiveNotFoundError>
+  }, SfuApiError | LiveNotFoundError>
 > {
   if (tracks.length === 0) {
     return err(new LiveNotFoundError(liveId));
@@ -795,29 +795,29 @@ export async function startPlay(
   );
   if (!sdpAnswer) {
     return err(
-      new CallsApiError("Calls response did not include SDP for playback", {
+      new SfuApiError("SFU response did not include SDP for playback", {
         endpoint: playbackEndpoint,
-        kind: "invalid_calls_response",
+        kind: "invalid_sfu_response",
         responseBody: tracksResult.value,
       }),
     );
   }
   if (!responseTracks || responseTracks.length === 0) {
     return err(
-      new CallsApiError("Calls response did not include playback tracks", {
+      new SfuApiError("SFU response did not include playback tracks", {
         endpoint: playbackEndpoint,
-        kind: "invalid_calls_response",
+        kind: "invalid_sfu_response",
         responseBody: tracksResult.value,
       }),
     );
   }
   if (sdpType !== "answer" && sdpType !== "offer") {
     return err(
-      new CallsApiError(
-        "Calls response did not include valid SDP type for playback",
+      new SfuApiError(
+        "SFU response did not include valid SDP type for playback",
         {
           endpoint: playbackEndpoint,
-          kind: "invalid_calls_response",
+          kind: "invalid_sfu_response",
           responseBody: tracksResult.value,
         },
       ),
@@ -838,9 +838,9 @@ export async function startPlay(
   );
   if (playbackTracks.length !== responseTracks.length) {
     return err(
-      new CallsApiError("Calls response did not include playback track MID", {
+      new SfuApiError("SFU response did not include playback track MID", {
         endpoint: playbackEndpoint,
-        kind: "invalid_calls_response",
+        kind: "invalid_sfu_response",
         responseBody: tracksResult.value,
       }),
     );

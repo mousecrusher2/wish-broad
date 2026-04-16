@@ -16,7 +16,7 @@ import {
   startDiscordLogin,
 } from "./discord-login";
 import {
-  CallsApiError,
+  SfuApiError,
   type StoredTrack,
   closeTracks,
   isSessionActive,
@@ -24,7 +24,7 @@ import {
   startIngest,
   startPlay,
   LiveNotFoundError,
-} from "./calls";
+} from "./sfu";
 import { createLiveToken } from "./live-token";
 import { hashedBearerAuth } from "./hashed-bearer-auth";
 import { logger } from "hono/logger";
@@ -230,7 +230,7 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     closeResult.value.tracks?.some((track) => track.errorCode)
   ) {
     console.error(
-      `Calls reported track close errors for user ${userId}:`,
+      `SFU reported track close errors for user ${userId}:`,
       closeResult.value,
     );
     return c.text("Failed to close live tracks", 502);
@@ -290,7 +290,7 @@ app.post("/play/:userId", async (c) => {
     `User ${jwtPayload.displayName} (${jwtPayload.userId}) is trying to play user: ${userId}`,
   );
 
-  // Calls APIクライアントを初期化
+  // SFU APIクライアントを初期化
   const liveTrackRecord = await getLiveTrackRecord(c.env.LIVE_DB, userId);
   const tracks = liveTrackRecord?.tracks ?? [];
   let hasActiveSession = false;
@@ -334,7 +334,7 @@ app.post("/play/:userId", async (c) => {
     if (error instanceof LiveNotFoundError) {
       return c.text(`Live stream not found: ${userId}`, 404);
     }
-    if (error instanceof CallsApiError && error.isSessionNotFound()) {
+    if (error instanceof SfuApiError && error.isSessionNotFound()) {
       if (liveTrackRecord) {
         await deleteTracksForSession(
           c.env.LIVE_DB,
@@ -344,7 +344,7 @@ app.post("/play/:userId", async (c) => {
       }
       return c.text(`Live stream not found: ${userId}`, 404);
     }
-    if (error instanceof CallsApiError) {
+    if (error instanceof SfuApiError) {
       const negotiationError = error.toNegotiationClientError(
         "Failed to negotiate playback session",
       );
@@ -402,7 +402,7 @@ app
       closeResult.value.tracks?.some((track) => track.errorCode)
     ) {
       console.error(
-        `Calls reported WHEP session close errors for session ${sessionId}:`,
+        `SFU reported WHEP session close errors for session ${sessionId}:`,
         closeResult.value,
       );
       return c.text("Failed to close WHEP session", 502);

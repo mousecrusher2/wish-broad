@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`src/` contains the React 19 + Vite client. Keep UI components in `src/components/`, WebRTC and page lifecycle logic in `src/hooks/`, and app-level auth/bootstrapping in files like `src/App.tsx` and `src/main.tsx`. `worker/` contains the Cloudflare Worker and Hono routes; `worker/index.ts` is the entrypoint, while modules such as `worker/database.ts`, `worker/calls.ts`, and `worker/discord.ts` isolate integrations and data access. Static assets live in `public/`. `schema.sql` defines the D1 schema, and `wrangler.jsonc` defines Worker bindings and deployment settings.
+`src/` contains the React 19 + Vite client. Keep UI components in `src/components/`, WebRTC and page lifecycle logic in `src/hooks/`, and app-level auth/bootstrapping in files like `src/App.tsx` and `src/main.tsx`. `worker/` contains the Cloudflare Worker and Hono routes; `worker/index.ts` is the entrypoint, while modules such as `worker/database.ts`, `worker/sfu.ts`, and `worker/discord.ts` isolate integrations and data access. Static assets live in `public/`. `schema.sql` defines the D1 schema, and `wrangler.jsonc` defines Worker bindings and deployment settings.
 
 ## Build, Test, and Development Commands
 

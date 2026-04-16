@@ -3,7 +3,7 @@ import { err, ok } from "neverthrow";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bindings } from "./types";
 import type { DiscordGuildMember, DiscordOAuthToken } from "./discord";
-import type { StoredTrack } from "./calls";
+import type { StoredTrack } from "./sfu";
 import { hashTokenWithPepper } from "./token-hash";
 
 const dbMocks = vi.hoisted(() => ({
@@ -27,7 +27,7 @@ const dbMocks = vi.hoisted(() => ({
 }));
 
 const callsMocks = vi.hoisted(() => {
-  class MockCallsApiError extends Error {
+  class MockSfuApiError extends Error {
     readonly endpoint: string;
     readonly kind:
       | "request_failed"
@@ -40,7 +40,7 @@ const callsMocks = vi.hoisted(() => {
       | "invalid_response_json"
       | "invalid_response_schema"
       | "track_negotiation_error"
-      | "invalid_calls_response";
+      | "invalid_sfu_response";
     readonly responseBody: unknown;
     readonly statusText: string | undefined;
 
@@ -59,13 +59,13 @@ const callsMocks = vi.hoisted(() => {
           | "invalid_response_json"
           | "invalid_response_schema"
           | "track_negotiation_error"
-          | "invalid_calls_response";
+          | "invalid_sfu_response";
         responseBody?: unknown;
         statusText?: string;
       },
     ) {
       super(message);
-      this.name = "CallsApiError";
+      this.name = "SfuApiError";
       this.endpoint = options.endpoint;
       this.kind = options.kind;
       this.responseBody = options.responseBody;
@@ -110,7 +110,7 @@ const callsMocks = vi.hoisted(() => {
   }
 
   return {
-    CallsApiError: MockCallsApiError,
+    SfuApiError: MockSfuApiError,
     LiveNotFoundError: MockLiveNotFoundError,
     closeTracks: vi.fn<() => Promise<unknown>>(),
     isSessionActive: vi.fn<() => Promise<unknown>>(),
@@ -200,8 +200,8 @@ const discordMocks = vi.hoisted(() => {
 });
 
 vi.mock("./database", () => dbMocks);
-vi.mock("./calls", () => ({
-  CallsApiError: callsMocks.CallsApiError,
+vi.mock("./sfu", () => ({
+  SfuApiError: callsMocks.SfuApiError,
   LiveNotFoundError: callsMocks.LiveNotFoundError,
   closeTracks: callsMocks.closeTracks,
   isSessionActive: callsMocks.isSessionActive,
@@ -696,12 +696,12 @@ describe("worker app", () => {
     expect(callsMocks.startIngest).not.toHaveBeenCalled();
   });
 
-  it("returns Calls client errors for invalid ingest offers", async () => {
+  it("returns SFU client errors for invalid ingest offers", async () => {
     const env = createBindings();
 
     callsMocks.startIngest.mockResolvedValue(
       err(
-        new callsMocks.CallsApiError("Calls request failed: unprocessable content", {
+        new callsMocks.SfuApiError("SFU request failed: unprocessable content", {
           endpoint: "/tracks/new",
           kind: "unprocessable_content",
           responseBody: "Malformed SDP offer",
@@ -727,15 +727,15 @@ describe("worker app", () => {
     expect(await response.text()).toBe("Malformed SDP offer");
   });
 
-  it("keeps Calls auth failures as worker errors during ingest", async () => {
+  it("keeps SFU auth failures as worker errors during ingest", async () => {
     const env = createBindings();
 
     callsMocks.startIngest.mockResolvedValue(
       err(
-        new callsMocks.CallsApiError("Calls request failed", {
+        new callsMocks.SfuApiError("SFU request failed", {
           endpoint: "/sessions/new",
           kind: "http_error",
-          responseBody: "Calls auth failed",
+          responseBody: "SFU auth failed",
           statusText: "Unauthorized",
         }),
       ),
@@ -836,7 +836,7 @@ describe("worker app", () => {
     );
   });
 
-  it("keeps the live row when Calls reports track close errors", async () => {
+  it("keeps the live row when SFU reports track close errors", async () => {
     const env = createBindings();
 
     dbMocks.getLiveTrackRecord.mockResolvedValue({
@@ -870,7 +870,7 @@ describe("worker app", () => {
     expect(dbMocks.deleteTracksForSession).not.toHaveBeenCalled();
   });
 
-  it("deletes the live row when Calls says tracks are already gone", async () => {
+  it("deletes the live row when SFU says tracks are already gone", async () => {
     const env = createBindings();
 
     dbMocks.getLiveTrackRecord.mockResolvedValue({
@@ -887,7 +887,7 @@ describe("worker app", () => {
     });
     callsMocks.closeTracks.mockResolvedValue(
       err(
-        new callsMocks.CallsApiError("Calls request failed: session not found", {
+        new callsMocks.SfuApiError("SFU request failed: session not found", {
           endpoint: "/tracks/close",
           kind: "session_not_found",
           statusText: "Not Found",
@@ -1023,7 +1023,7 @@ describe("worker app", () => {
     expect(callsMocks.startPlay).not.toHaveBeenCalled();
   });
 
-  it("returns 404 and cleans up when Calls loses the live during play start", async () => {
+  it("returns 404 and cleans up when SFU loses the live during play start", async () => {
     const env = createBindings();
     const liveTracks: StoredTrack[] = [
       {
@@ -1041,7 +1041,7 @@ describe("worker app", () => {
     });
     callsMocks.startPlay.mockResolvedValue(
       err(
-        new callsMocks.CallsApiError("Calls request failed: session not found", {
+        new callsMocks.SfuApiError("SFU request failed: session not found", {
           endpoint: "/tracks/new",
           kind: "session_not_found",
           statusText: "Not Found",
@@ -1149,7 +1149,7 @@ describe("worker app", () => {
     expect(callsMocks.startPlay).not.toHaveBeenCalled();
   });
 
-  it("returns Calls client errors for invalid WHEP offers", async () => {
+  it("returns SFU client errors for invalid WHEP offers", async () => {
     const env = createBindings();
     const liveTracks: StoredTrack[] = [
       {
@@ -1167,7 +1167,7 @@ describe("worker app", () => {
     });
     callsMocks.startPlay.mockResolvedValue(
       err(
-        new callsMocks.CallsApiError("Calls request failed: unprocessable content", {
+        new callsMocks.SfuApiError("SFU request failed: unprocessable content", {
           endpoint: "/tracks/new",
           kind: "unprocessable_content",
           responseBody: "Malformed SDP offer",
@@ -1381,12 +1381,12 @@ describe("worker app", () => {
     expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
   });
 
-  it("returns Calls client errors for invalid WHEP answers", async () => {
+  it("returns SFU client errors for invalid WHEP answers", async () => {
     const env = createBindings();
 
     callsMocks.renegotiateSession.mockResolvedValue(
       err(
-        new callsMocks.CallsApiError("Calls request failed: unprocessable content", {
+        new callsMocks.SfuApiError("SFU request failed: unprocessable content", {
           endpoint: "/renegotiate",
           kind: "unprocessable_content",
           responseBody: "Malformed SDP answer",
