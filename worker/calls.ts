@@ -55,44 +55,124 @@ export type CloseTracksResponse = {
 
 type CallsNegotiationClientStatus = 400 | 415 | 422;
 
+type CallsApiErrorKind =
+  | "request_failed"
+  | "bad_request"
+  | "unsupported_media_type"
+  | "unprocessable_content"
+  | "session_not_found"
+  | "session_gone"
+  | "http_error"
+  | "invalid_response_json"
+  | "invalid_response_schema"
+  | "track_negotiation_error"
+  | "invalid_calls_response";
+
 // カスタムエラークラス
 export class CallsApiError extends Error {
+  readonly endpoint: string;
+  readonly kind: CallsApiErrorKind;
+  readonly responseBody: unknown;
+  readonly statusText: string | undefined;
+
   constructor(
-    public readonly statusCode: number,
-    public readonly statusText: string,
-    public readonly endpoint: string,
-    public readonly responseBody?: unknown,
+    message: string,
+    options: {
+      endpoint: string;
+      kind: CallsApiErrorKind;
+      responseBody?: unknown;
+      statusText?: string;
+    },
   ) {
-    super(
-      `Calls API Error: ${String(statusCode)} ${statusText} at ${endpoint}`,
-    );
+    super(message);
     this.name = "CallsApiError";
+    this.endpoint = options.endpoint;
+    this.kind = options.kind;
+    this.responseBody = options.responseBody;
+    this.statusText = options.statusText;
+  }
+
+  static fromHttpFailure(
+    status: number,
+    statusText: string,
+    endpoint: string,
+    responseBody?: unknown,
+  ): CallsApiError {
+    if (status === 400) {
+      return new CallsApiError("Calls request failed: bad request", {
+        endpoint,
+        kind: "bad_request",
+        responseBody,
+        statusText,
+      });
+    }
+    if (status === 404) {
+      return new CallsApiError("Calls request failed: session not found", {
+        endpoint,
+        kind: "session_not_found",
+        responseBody,
+        statusText,
+      });
+    }
+    if (status === 410) {
+      return new CallsApiError("Calls request failed: session gone", {
+        endpoint,
+        kind: "session_gone",
+        responseBody,
+        statusText,
+      });
+    }
+    if (status === 415) {
+      return new CallsApiError("Calls request failed: unsupported media type", {
+        endpoint,
+        kind: "unsupported_media_type",
+        responseBody,
+        statusText,
+      });
+    }
+    if (status === 422) {
+      return new CallsApiError("Calls request failed: unprocessable content", {
+        endpoint,
+        kind: "unprocessable_content",
+        responseBody,
+        statusText,
+      });
+    }
+
+    return new CallsApiError("Calls request failed", {
+      endpoint,
+      kind: "http_error",
+      responseBody,
+      statusText,
+    });
   }
 
   isInactiveSession(): boolean {
-    return this.statusCode === 404 || this.statusCode === 410;
+    return this.kind === "session_not_found" || this.kind === "session_gone";
+  }
+
+  isSessionNotFound(): boolean {
+    return this.kind === "session_not_found";
   }
 
   toNegotiationClientError(
     fallbackText: string,
   ): { status: CallsNegotiationClientStatus; text: string } | null {
-    if (
-      this.statusCode !== 400 &&
-      this.statusCode !== 415 &&
-      this.statusCode !== 422
-    ) {
-      return null;
-    }
-
     const text =
       typeof this.responseBody === "string" && this.responseBody.length > 0
         ? this.responseBody
         : fallbackText;
+    if (this.kind === "bad_request") {
+      return { status: 400, text };
+    }
+    if (this.kind === "unsupported_media_type") {
+      return { status: 415, text };
+    }
+    if (this.kind === "unprocessable_content") {
+      return { status: 422, text };
+    }
 
-    return {
-      status: this.statusCode,
-      text,
-    };
+    return null;
   }
 }
 
@@ -167,7 +247,13 @@ async function fetchCalls(
   return fetch(endpoint, init)
     .then((response) => ok(response))
     .catch((error: Error) =>
-      err(new CallsApiError(502, "Request failed", endpoint, error.message)),
+      err(
+        new CallsApiError("Calls request failed", {
+          endpoint,
+          kind: "request_failed",
+          responseBody: error.message,
+        }),
+      ),
     );
 }
 
@@ -200,7 +286,7 @@ export async function createSession(
       .json()
       .catch(() => response.text().catch(() => null));
     return err(
-      new CallsApiError(
+      CallsApiError.fromHttpFailure(
         response.status,
         response.statusText,
         endpoint,
@@ -214,8 +300,12 @@ export async function createSession(
     .then((responseBody: unknown) => ok(responseBody))
     .catch((error: Error) =>
       err(
-        new CallsApiError(502, "Invalid Calls response JSON", endpoint, {
-          error: error.message,
+        new CallsApiError("Invalid Calls response JSON", {
+          endpoint,
+          kind: "invalid_response_json",
+          responseBody: {
+            error: error.message,
+          },
         }),
       ),
     );
@@ -230,9 +320,13 @@ export async function createSession(
   );
   if (!parsedResponse.success) {
     return err(
-      new CallsApiError(502, "Invalid Calls response schema", endpoint, {
-        issues: parsedResponse.issues,
-        responseBody,
+      new CallsApiError("Invalid Calls response schema", {
+        endpoint,
+        kind: "invalid_response_schema",
+        responseBody: {
+          issues: parsedResponse.issues,
+          responseBody,
+        },
       }),
     );
   }
@@ -275,7 +369,7 @@ export async function createIngestTracks(
       .json()
       .catch(() => response.text().catch(() => null));
     return err(
-      new CallsApiError(
+      CallsApiError.fromHttpFailure(
         response.status,
         response.statusText,
         endpoint,
@@ -289,8 +383,12 @@ export async function createIngestTracks(
     .then((responseBody: unknown) => ok(responseBody))
     .catch((error: Error) =>
       err(
-        new CallsApiError(502, "Invalid Calls response JSON", endpoint, {
-          error: error.message,
+        new CallsApiError("Invalid Calls response JSON", {
+          endpoint,
+          kind: "invalid_response_json",
+          responseBody: {
+            error: error.message,
+          },
         }),
       ),
     );
@@ -302,9 +400,13 @@ export async function createIngestTracks(
   const parsedResponse = v.safeParse(newTracksResponseSchema, responseBody);
   if (!parsedResponse.success) {
     return err(
-      new CallsApiError(502, "Invalid Calls response schema", endpoint, {
-        issues: parsedResponse.issues,
-        responseBody,
+      new CallsApiError("Invalid Calls response schema", {
+        endpoint,
+        kind: "invalid_response_schema",
+        responseBody: {
+          issues: parsedResponse.issues,
+          responseBody,
+        },
       }),
     );
   }
@@ -354,7 +456,7 @@ export async function connectToTracks(
       .json()
       .catch(() => response.text().catch(() => null));
     return err(
-      new CallsApiError(
+      CallsApiError.fromHttpFailure(
         response.status,
         response.statusText,
         endpoint,
@@ -368,8 +470,12 @@ export async function connectToTracks(
     .then((responseBody: unknown) => ok(responseBody))
     .catch((error: Error) =>
       err(
-        new CallsApiError(502, "Invalid Calls response JSON", endpoint, {
-          error: error.message,
+        new CallsApiError("Invalid Calls response JSON", {
+          endpoint,
+          kind: "invalid_response_json",
+          responseBody: {
+            error: error.message,
+          },
         }),
       ),
     );
@@ -381,9 +487,13 @@ export async function connectToTracks(
   const parsedResponseResult = v.safeParse(newTracksResponseSchema, responseBody);
   if (!parsedResponseResult.success) {
     return err(
-      new CallsApiError(502, "Invalid Calls response schema", endpoint, {
-        issues: parsedResponseResult.issues,
-        responseBody,
+      new CallsApiError("Invalid Calls response schema", {
+        endpoint,
+        kind: "invalid_response_schema",
+        responseBody: {
+          issues: parsedResponseResult.issues,
+          responseBody,
+        },
       }),
     );
   }
@@ -394,12 +504,11 @@ export async function connectToTracks(
     !!parsedResponse.tracks?.some((track) => !!track.errorCode);
   if (hasTrackNegotiationErrors) {
     return err(
-      new CallsApiError(
-        502,
-        "Calls returned track negotiation errors",
+      new CallsApiError("Calls returned track negotiation errors", {
         endpoint,
+        kind: "track_negotiation_error",
         responseBody,
-      ),
+      }),
     );
   }
   return ok(parsedResponse);
@@ -439,7 +548,7 @@ export async function renegotiateSession(
       .json()
       .catch(() => response.text().catch(() => null));
     return err(
-      new CallsApiError(
+      CallsApiError.fromHttpFailure(
         response.status,
         response.statusText,
         endpoint,
@@ -485,7 +594,7 @@ export async function closeTracks(
       .json()
       .catch(() => response.text().catch(() => null));
     return err(
-      new CallsApiError(
+      CallsApiError.fromHttpFailure(
         response.status,
         response.statusText,
         endpoint,
@@ -499,8 +608,12 @@ export async function closeTracks(
     .then((responseBody: unknown) => ok(responseBody))
     .catch((error: Error) =>
       err(
-        new CallsApiError(502, "Invalid Calls response JSON", endpoint, {
-          error: error.message,
+        new CallsApiError("Invalid Calls response JSON", {
+          endpoint,
+          kind: "invalid_response_json",
+          responseBody: {
+            error: error.message,
+          },
         }),
       ),
     );
@@ -512,9 +625,13 @@ export async function closeTracks(
   const parsedResponse = v.safeParse(closeTracksResponseSchema, responseBody);
   if (!parsedResponse.success) {
     return err(
-      new CallsApiError(502, "Invalid Calls response schema", endpoint, {
-        issues: parsedResponse.issues,
-        responseBody,
+      new CallsApiError("Invalid Calls response schema", {
+        endpoint,
+        kind: "invalid_response_schema",
+        responseBody: {
+          issues: parsedResponse.issues,
+          responseBody,
+        },
       }),
     );
   }
@@ -543,7 +660,7 @@ export async function isSessionActive(
     const responseBody = await response
       .json()
       .catch(() => response.text().catch(() => null));
-    const responseError = new CallsApiError(
+    const responseError = CallsApiError.fromHttpFailure(
       response.status,
       response.statusText,
       endpoint,
@@ -596,12 +713,11 @@ export async function startIngest(
 
   if (!responseTracks || responseTracks.length === 0 || !sdpAnswer) {
     return err(
-      new CallsApiError(
-        502,
-        "Calls response did not include ingest tracks or SDP",
-        ingestEndpoint,
-        tracksResult.value,
-      ),
+      new CallsApiError("Calls response did not include ingest tracks or SDP", {
+        endpoint: ingestEndpoint,
+        kind: "invalid_calls_response",
+        responseBody: tracksResult.value,
+      }),
     );
   }
 
@@ -619,12 +735,11 @@ export async function startIngest(
   );
   if (tracks.length !== responseTracks.length) {
     return err(
-      new CallsApiError(
-        502,
-        "Calls response did not include track MID",
-        ingestEndpoint,
-        tracksResult.value,
-      ),
+      new CallsApiError("Calls response did not include track MID", {
+        endpoint: ingestEndpoint,
+        kind: "invalid_calls_response",
+        responseBody: tracksResult.value,
+      }),
     );
   }
 
@@ -680,31 +795,31 @@ export async function startPlay(
   );
   if (!sdpAnswer) {
     return err(
-      new CallsApiError(
-        502,
-        "Calls response did not include SDP for playback",
-        playbackEndpoint,
-        tracksResult.value,
-      ),
+      new CallsApiError("Calls response did not include SDP for playback", {
+        endpoint: playbackEndpoint,
+        kind: "invalid_calls_response",
+        responseBody: tracksResult.value,
+      }),
     );
   }
   if (!responseTracks || responseTracks.length === 0) {
     return err(
-      new CallsApiError(
-        502,
-        "Calls response did not include playback tracks",
-        playbackEndpoint,
-        tracksResult.value,
-      ),
+      new CallsApiError("Calls response did not include playback tracks", {
+        endpoint: playbackEndpoint,
+        kind: "invalid_calls_response",
+        responseBody: tracksResult.value,
+      }),
     );
   }
   if (sdpType !== "answer" && sdpType !== "offer") {
     return err(
       new CallsApiError(
-        502,
         "Calls response did not include valid SDP type for playback",
-        playbackEndpoint,
-        tracksResult.value,
+        {
+          endpoint: playbackEndpoint,
+          kind: "invalid_calls_response",
+          responseBody: tracksResult.value,
+        },
       ),
     );
   }
@@ -723,12 +838,11 @@ export async function startPlay(
   );
   if (playbackTracks.length !== responseTracks.length) {
     return err(
-      new CallsApiError(
-        502,
-        "Calls response did not include playback track MID",
-        playbackEndpoint,
-        tracksResult.value,
-      ),
+      new CallsApiError("Calls response did not include playback track MID", {
+        endpoint: playbackEndpoint,
+        kind: "invalid_calls_response",
+        responseBody: tracksResult.value,
+      }),
     );
   }
 

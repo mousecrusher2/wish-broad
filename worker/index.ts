@@ -218,7 +218,7 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
 
   const closeResult = await closeTracks(c.env, sessionId, existingLive.tracks);
   if (closeResult.isErr()) {
-    if (closeResult.error.statusCode !== 404) {
+    if (!closeResult.error.isSessionNotFound()) {
       console.error(
         `Failed to close live tracks for user ${userId}:`,
         closeResult.error,
@@ -334,7 +334,7 @@ app.post("/play/:userId", async (c) => {
     if (error instanceof LiveNotFoundError) {
       return c.text(`Live stream not found: ${userId}`, 404);
     }
-    if (error instanceof CallsApiError && error.statusCode === 404) {
+    if (error instanceof CallsApiError && error.isSessionNotFound()) {
       if (liveTrackRecord) {
         await deleteTracksForSession(
           c.env.LIVE_DB,

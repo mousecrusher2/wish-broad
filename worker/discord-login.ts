@@ -55,7 +55,9 @@ function isGuildMembershipLookupFailure(
 ): boolean {
   return (
     error.endpoint.endsWith(`/users/@me/guilds/${guildId}/member`) &&
-    [401, 403, 404].includes(error.statusCode ?? 0)
+    (error.kind === "unauthorized" ||
+      error.kind === "forbidden" ||
+      error.kind === "not_found")
   );
 }
 

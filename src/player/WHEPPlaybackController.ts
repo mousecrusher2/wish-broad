@@ -58,7 +58,7 @@ export function createDefaultSnapshot(): WHEPPlaybackControllerSnapshot {
 }
 
 function isNotFoundError(error: Error): boolean {
-  return error instanceof WHEPSessionError && error.statusCode === 404;
+  return error instanceof WHEPSessionError && error.isNotFound();
 }
 
 function createConnectedPlaybackState(

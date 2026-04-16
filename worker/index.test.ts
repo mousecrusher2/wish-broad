@@ -28,38 +28,77 @@ const dbMocks = vi.hoisted(() => ({
 
 const callsMocks = vi.hoisted(() => {
   class MockCallsApiError extends Error {
+    readonly endpoint: string;
+    readonly kind:
+      | "request_failed"
+      | "bad_request"
+      | "unsupported_media_type"
+      | "unprocessable_content"
+      | "session_not_found"
+      | "session_gone"
+      | "http_error"
+      | "invalid_response_json"
+      | "invalid_response_schema"
+      | "track_negotiation_error"
+      | "invalid_calls_response";
+    readonly responseBody: unknown;
+    readonly statusText: string | undefined;
+
     constructor(
-      public readonly statusCode: number,
-      public readonly statusText: string,
-      public readonly endpoint: string,
-      public readonly responseBody?: unknown,
+      message: string,
+      options: {
+        endpoint: string;
+        kind:
+          | "request_failed"
+          | "bad_request"
+          | "unsupported_media_type"
+          | "unprocessable_content"
+          | "session_not_found"
+          | "session_gone"
+          | "http_error"
+          | "invalid_response_json"
+          | "invalid_response_schema"
+          | "track_negotiation_error"
+          | "invalid_calls_response";
+        responseBody?: unknown;
+        statusText?: string;
+      },
     ) {
-      super(
-        `Calls API Error: ${String(statusCode)} ${statusText} at ${endpoint}`,
-      );
+      super(message);
       this.name = "CallsApiError";
+      this.endpoint = options.endpoint;
+      this.kind = options.kind;
+      this.responseBody = options.responseBody;
+      this.statusText = options.statusText;
+    }
+
+    isInactiveSession(): boolean {
+      return this.kind === "session_not_found" || this.kind === "session_gone";
+    }
+
+    isSessionNotFound(): boolean {
+      return this.kind === "session_not_found";
     }
 
     toNegotiationClientError(
       fallbackText: string,
     ): { status: 400 | 415 | 422; text: string } | null {
-      if (
-        this.statusCode !== 400 &&
-        this.statusCode !== 415 &&
-        this.statusCode !== 422
-      ) {
-        return null;
-      }
-
       const text =
         typeof this.responseBody === "string" && this.responseBody.length > 0
           ? this.responseBody
           : fallbackText;
 
-      return {
-        status: this.statusCode,
-        text,
-      };
+      if (this.kind === "bad_request") {
+        return { status: 400, text };
+      }
+      if (this.kind === "unsupported_media_type") {
+        return { status: 415, text };
+      }
+      if (this.kind === "unprocessable_content") {
+        return { status: 422, text };
+      }
+
+      return null;
     }
   }
 
@@ -83,15 +122,45 @@ const callsMocks = vi.hoisted(() => {
 
 const discordMocks = vi.hoisted(() => {
   class MockDiscordApiError extends Error {
+    readonly endpoint: string;
+    readonly kind:
+      | "request_failed"
+      | "unauthorized"
+      | "forbidden"
+      | "not_found"
+      | "rate_limited"
+      | "http_error"
+      | "non_json_response"
+      | "unexpected_json_response";
+    readonly responseBodyJson: unknown;
+    readonly responseBodyText: string | undefined;
+    readonly statusText: string | undefined;
+
     constructor(
-      public readonly endpoint: string,
-      public readonly statusCode?: number,
-      public readonly statusText?: string,
-      public readonly responseBodyText?: string,
-      public readonly responseBodyJson?: unknown,
+      message: string,
+      options: {
+        endpoint: string;
+        kind:
+          | "request_failed"
+          | "unauthorized"
+          | "forbidden"
+          | "not_found"
+          | "rate_limited"
+          | "http_error"
+          | "non_json_response"
+          | "unexpected_json_response";
+        statusText?: string;
+        responseBodyText?: string;
+        responseBodyJson?: unknown;
+      },
     ) {
-      super("Discord API Error");
+      super(message);
       this.name = "DiscordApiError";
+      this.endpoint = options.endpoint;
+      this.kind = options.kind;
+      this.statusText = options.statusText;
+      this.responseBodyText = options.responseBodyText;
+      this.responseBodyJson = options.responseBodyJson;
     }
   }
 
@@ -427,11 +496,11 @@ describe("worker app", () => {
 
     discordMocks.getGuildMember.mockResolvedValue(
       err(
-        new discordMocks.DiscordApiError(
-          `https://discord.com/api/v10/users/@me/guilds/${env.AUTHORIZED_GUILD_ID}/member`,
-          404,
-          "Not Found",
-        ),
+        new discordMocks.DiscordApiError("Discord request failed: not found", {
+          endpoint: `https://discord.com/api/v10/users/@me/guilds/${env.AUTHORIZED_GUILD_ID}/member`,
+          kind: "not_found",
+          statusText: "Not Found",
+        }),
       ),
     );
 
@@ -632,12 +701,12 @@ describe("worker app", () => {
 
     callsMocks.startIngest.mockResolvedValue(
       err(
-        new callsMocks.CallsApiError(
-          422,
-          "Unprocessable Content",
-          "/tracks/new",
-          "Malformed SDP offer",
-        ),
+        new callsMocks.CallsApiError("Calls request failed: unprocessable content", {
+          endpoint: "/tracks/new",
+          kind: "unprocessable_content",
+          responseBody: "Malformed SDP offer",
+          statusText: "Unprocessable Content",
+        }),
       ),
     );
 
@@ -663,12 +732,12 @@ describe("worker app", () => {
 
     callsMocks.startIngest.mockResolvedValue(
       err(
-        new callsMocks.CallsApiError(
-          401,
-          "Unauthorized",
-          "/sessions/new",
-          "Calls auth failed",
-        ),
+        new callsMocks.CallsApiError("Calls request failed", {
+          endpoint: "/sessions/new",
+          kind: "http_error",
+          responseBody: "Calls auth failed",
+          statusText: "Unauthorized",
+        }),
       ),
     );
 
@@ -817,7 +886,13 @@ describe("worker app", () => {
       userId: "user-1",
     });
     callsMocks.closeTracks.mockResolvedValue(
-      err(new callsMocks.CallsApiError(404, "Not Found", "/tracks/close")),
+      err(
+        new callsMocks.CallsApiError("Calls request failed: session not found", {
+          endpoint: "/tracks/close",
+          kind: "session_not_found",
+          statusText: "Not Found",
+        }),
+      ),
     );
 
     const response = await app.fetch(
@@ -965,7 +1040,13 @@ describe("worker app", () => {
       userId: "streamer-1",
     });
     callsMocks.startPlay.mockResolvedValue(
-      err(new callsMocks.CallsApiError(404, "Not Found", "/tracks/new")),
+      err(
+        new callsMocks.CallsApiError("Calls request failed: session not found", {
+          endpoint: "/tracks/new",
+          kind: "session_not_found",
+          statusText: "Not Found",
+        }),
+      ),
     );
 
     const response = await app.fetch(
@@ -1086,12 +1167,12 @@ describe("worker app", () => {
     });
     callsMocks.startPlay.mockResolvedValue(
       err(
-        new callsMocks.CallsApiError(
-          422,
-          "Unprocessable Content",
-          "/tracks/new",
-          "Malformed SDP offer",
-        ),
+        new callsMocks.CallsApiError("Calls request failed: unprocessable content", {
+          endpoint: "/tracks/new",
+          kind: "unprocessable_content",
+          responseBody: "Malformed SDP offer",
+          statusText: "Unprocessable Content",
+        }),
       ),
     );
 
@@ -1305,12 +1386,12 @@ describe("worker app", () => {
 
     callsMocks.renegotiateSession.mockResolvedValue(
       err(
-        new callsMocks.CallsApiError(
-          422,
-          "Unprocessable Content",
-          "/renegotiate",
-          "Malformed SDP answer",
-        ),
+        new callsMocks.CallsApiError("Calls request failed: unprocessable content", {
+          endpoint: "/renegotiate",
+          kind: "unprocessable_content",
+          responseBody: "Malformed SDP answer",
+          statusText: "Unprocessable Content",
+        }),
       ),
     );
 

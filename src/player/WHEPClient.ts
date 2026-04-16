@@ -39,26 +39,46 @@ type WhepSessionResponse =
   | { kind: "accepted"; sdp: string; sessionUrl: URL }
   | { kind: "counterOffer"; sdp: string; sessionUrl: URL };
 
+type WHEPSessionErrorKind =
+  | "resource_not_found"
+  | "client_request_error"
+  | "server_request_error"
+  | "unexpected_response"
+  | "invalid_sdp_response"
+  | "missing_session_location"
+  | "aborted";
+
 type WHEPSessionErrorOptions = {
+  kind: WHEPSessionErrorKind;
   responseText: string | undefined;
   retryable?: boolean;
   stage: WHEPSessionRequestStage;
-  statusCode: number | undefined;
 };
 
 export class WHEPSessionError extends Error {
+  readonly kind: WHEPSessionErrorKind;
   readonly responseText: string | undefined;
   readonly retryable: boolean;
   readonly stage: WHEPSessionRequestStage;
-  readonly statusCode: number | undefined;
 
   constructor(message: string, options: WHEPSessionErrorOptions) {
     super(message);
     this.name = "WHEPSessionError";
+    this.kind = options.kind;
     this.responseText = options.responseText;
     this.retryable = options.retryable ?? true;
     this.stage = options.stage;
-    this.statusCode = options.statusCode;
+  }
+
+  isNotFound(): boolean {
+    return this.kind === "resource_not_found";
+  }
+
+  isClientRequestError(): boolean {
+    return (
+      this.kind === "resource_not_found" ||
+      this.kind === "client_request_error"
+    );
   }
 }
 
@@ -79,10 +99,19 @@ async function createResponseError(
   stage: WHEPSessionRequestStage,
 ): Promise<WHEPSessionError> {
   const responseText = await readResponseText(response);
+  let kind: WHEPSessionErrorKind = "unexpected_response";
+  if (response.status === 404) {
+    kind = "resource_not_found";
+  } else if (response.status >= 400 && response.status < 500) {
+    kind = "client_request_error";
+  } else if (response.status >= 500) {
+    kind = "server_request_error";
+  }
+
   return new WHEPSessionError(responseText ?? fallbackMessage, {
+    kind,
     responseText,
     stage,
-    statusCode: response.status,
   });
 }
 
@@ -90,20 +119,20 @@ async function readSdpResponse(response: Response): Promise<string> {
   const contentType = response.headers.get("content-type");
   if (!contentType?.toLowerCase().startsWith("application/sdp")) {
     throw new WHEPSessionError("Unexpected WHEP SDP response content type", {
+      kind: "invalid_sdp_response",
       responseText: undefined,
       retryable: false,
       stage: "post",
-      statusCode: response.status,
     });
   }
 
   const sdp = await response.text();
   if (sdp.trim().length === 0) {
     throw new WHEPSessionError("Empty SDP response", {
+      kind: "invalid_sdp_response",
       responseText: undefined,
       retryable: false,
       stage: "post",
-      statusCode: response.status,
     });
   }
 
@@ -125,10 +154,10 @@ async function parseWhepSessionResponse(
   const sessionLocation = response.headers.get("location");
   if (!sessionLocation) {
     throw new WHEPSessionError("Missing WHEP session location header", {
+      kind: "missing_session_location",
       responseText: undefined,
       retryable: false,
       stage: "post",
-      statusCode: response.status,
     });
   }
 
@@ -156,9 +185,9 @@ async function waitForIceGatheringComplete(
 ): Promise<void> {
   if (signal.aborted) {
     throw new WHEPSessionError("WHEP connection was aborted", {
+      kind: "aborted",
       responseText: undefined,
       stage: "local",
-      statusCode: undefined,
     });
   }
 
@@ -186,9 +215,9 @@ async function waitForIceGatheringComplete(
       cleanup();
       reject(
         new WHEPSessionError("WHEP connection was aborted", {
+          kind: "aborted",
           responseText: undefined,
           stage: "local",
-          statusCode: undefined,
         }),
       );
     };

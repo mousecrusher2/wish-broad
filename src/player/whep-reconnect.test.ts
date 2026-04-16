@@ -13,28 +13,28 @@ describe("whep-reconnect", () => {
     expect(
       resolveReconnectDisposition(
         new WHEPSessionError("missing live", {
+          kind: "resource_not_found",
           responseText: undefined,
           stage: "post",
-          statusCode: 404,
         }),
       ),
     ).toBe("ended");
     expect(
       resolveReconnectDisposition(
         new WHEPSessionError("unauthorized", {
+          kind: "client_request_error",
           responseText: undefined,
           stage: "post",
-          statusCode: 401,
         }),
       ),
     ).toBe("error");
     expect(
       resolveReconnectDisposition(
         new WHEPSessionError("malformed response", {
+          kind: "unexpected_response",
           responseText: undefined,
           retryable: false,
           stage: "post",
-          statusCode: 201,
         }),
       ),
     ).toBe("error");

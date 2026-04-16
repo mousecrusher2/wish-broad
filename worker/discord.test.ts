@@ -60,8 +60,8 @@ describe("worker discord helpers", () => {
 
     expect(result.error).toMatchObject({
       endpoint: "https://discord.com/api/v10/oauth2/token",
+      kind: "rate_limited",
       responseBodyText: "<html>rate limited</html>",
-      statusCode: 429,
       statusText: "Too Many Requests",
     });
   });
@@ -92,7 +92,7 @@ describe("worker discord helpers", () => {
 
     expect(result.error).toMatchObject({
       endpoint: "https://discord.com/api/v10/oauth2/token/revoke",
-      statusCode: 502,
+      kind: "http_error",
       statusText: "Bad Gateway",
     });
   });

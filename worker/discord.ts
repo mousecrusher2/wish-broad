@@ -35,17 +35,100 @@ export const DISCORD_OAUTH_SCOPES = [
 export const DISCORD_STATE_COOKIE_NAME = "discord_oauth_state";
 export const DISCORD_STATE_MAX_AGE_SECONDS = 60 * 10;
 
+type DiscordApiErrorKind =
+  | "request_failed"
+  | "unauthorized"
+  | "forbidden"
+  | "not_found"
+  | "rate_limited"
+  | "http_error"
+  | "non_json_response"
+  | "unexpected_json_response";
+
+const discordHttpKindMessage: Partial<Record<DiscordApiErrorKind, string>> = {
+  forbidden: "Forbidden",
+  not_found: "Not Found",
+  rate_limited: "Too Many Requests",
+  unauthorized: "Unauthorized",
+};
+
 export class DiscordApiError extends Error {
+  readonly endpoint: string;
+  readonly kind: DiscordApiErrorKind;
+  readonly responseBodyJson: unknown;
+  readonly responseBodyText: string | undefined;
+  readonly statusText: string | undefined;
+
   constructor(
     message: string,
-    public readonly endpoint: string,
-    public readonly statusCode?: number,
-    public readonly statusText?: string,
-    public readonly responseBodyText?: string,
-    public readonly responseBodyJson?: unknown,
+    options: {
+      endpoint: string;
+      kind: DiscordApiErrorKind;
+      statusText?: string | undefined;
+      responseBodyText?: string | undefined;
+      responseBodyJson?: unknown;
+    },
   ) {
     super(message);
     this.name = "DiscordApiError";
+    this.endpoint = options.endpoint;
+    this.kind = options.kind;
+    this.statusText = options.statusText;
+    this.responseBodyText = options.responseBodyText;
+    this.responseBodyJson = options.responseBodyJson;
+  }
+
+  static fromHttpFailure(
+    status: number,
+    statusText: string,
+    endpoint: string,
+    responseBodyText?: string,
+    responseBodyJson?: unknown,
+  ): DiscordApiError {
+    if (status === 401) {
+      return new DiscordApiError("Discord request failed: unauthorized", {
+        endpoint,
+        kind: "unauthorized",
+        statusText,
+        responseBodyText,
+        responseBodyJson,
+      });
+    }
+    if (status === 403) {
+      return new DiscordApiError("Discord request failed: forbidden", {
+        endpoint,
+        kind: "forbidden",
+        statusText,
+        responseBodyText,
+        responseBodyJson,
+      });
+    }
+    if (status === 404) {
+      return new DiscordApiError("Discord request failed: not found", {
+        endpoint,
+        kind: "not_found",
+        statusText,
+        responseBodyText,
+        responseBodyJson,
+      });
+    }
+    if (status === 429) {
+      return new DiscordApiError("Discord request failed: rate limited", {
+        endpoint,
+        kind: "rate_limited",
+        statusText,
+        responseBodyText,
+        responseBodyJson,
+      });
+    }
+
+    return new DiscordApiError("Discord request failed", {
+      endpoint,
+      kind: "http_error",
+      statusText,
+      responseBodyText,
+      responseBodyJson,
+    });
   }
 }
 
@@ -85,7 +168,14 @@ async function fetchDiscordJson<TInput, TOutput>(
 ): Promise<Result<TOutput, DiscordApiError>> {
   const responseResult = await fetch(endpoint, init)
     .then((response) => ok(response))
-    .catch((error: Error) => err(new DiscordApiError(error.message, endpoint)));
+    .catch((error: Error) =>
+      err(
+        new DiscordApiError(error.message, {
+          endpoint,
+          kind: "request_failed",
+        }),
+      ),
+    );
   if (responseResult.isErr()) {
     return err(responseResult.error);
   }
@@ -102,11 +192,10 @@ async function fetchDiscordJson<TInput, TOutput>(
 
   if (!response.ok) {
     return err(
-      new DiscordApiError(
-        `Discord request failed with status ${String(response.status)}`,
-        endpoint,
+      DiscordApiError.fromHttpFailure(
         response.status,
         response.statusText,
+        endpoint,
         trimResponseBody(responseText),
         responseJson,
       ),
@@ -115,28 +204,26 @@ async function fetchDiscordJson<TInput, TOutput>(
 
   if (responseJson === undefined) {
     return err(
-      new DiscordApiError(
-        "Discord returned a non-JSON response",
+      new DiscordApiError("Discord returned a non-JSON response", {
         endpoint,
-        response.status,
-        response.statusText,
-        trimResponseBody(responseText),
-        responseJson,
-      ),
+        kind: "non_json_response",
+        statusText: response.statusText,
+        responseBodyText: trimResponseBody(responseText),
+        responseBodyJson: responseJson,
+      }),
     );
   }
 
   const parsedBody = v.safeParse(schema, responseJson);
   if (!parsedBody.success) {
     return err(
-      new DiscordApiError(
-        "Discord returned an unexpected JSON response",
+      new DiscordApiError("Discord returned an unexpected JSON response", {
         endpoint,
-        response.status,
-        response.statusText,
-        trimResponseBody(responseText),
-        responseJson,
-      ),
+        kind: "unexpected_json_response",
+        statusText: response.statusText,
+        responseBodyText: trimResponseBody(responseText),
+        responseBodyJson: responseJson,
+      }),
     );
   }
 
@@ -149,7 +236,14 @@ async function fetchDiscord(
 ): Promise<Result<Response, DiscordApiError>> {
   return fetch(endpoint, init)
     .then((response) => ok(response))
-    .catch((error: Error) => err(new DiscordApiError(error.message, endpoint)));
+    .catch((error: Error) =>
+      err(
+        new DiscordApiError(error.message, {
+          endpoint,
+          kind: "request_failed",
+        }),
+      ),
+    );
 }
 
 export function createOAuthState(): string {
@@ -279,11 +373,10 @@ export async function revokeAccessToken(
     }
   }
   return err(
-    new DiscordApiError(
-      `Discord token revocation failed with status ${String(response.status)}`,
-      revokeEndpoint,
+    DiscordApiError.fromHttpFailure(
       response.status,
       response.statusText,
+      revokeEndpoint,
       trimResponseBody(responseText),
       responseJson,
     ),
@@ -310,8 +403,13 @@ export function getDiscordErrorMessage(error: DiscordApiError): string {
     return error.responseBodyText;
   }
 
-  if (error.statusCode) {
-    return `${String(error.statusCode)} ${error.statusText ?? ""}`.trim();
+  if (error.statusText && error.statusText.trim().length > 0) {
+    return error.statusText;
+  }
+
+  const mappedHttpMessage = discordHttpKindMessage[error.kind];
+  if (mappedHttpMessage) {
+    return mappedHttpMessage;
   }
 
   return error.message;

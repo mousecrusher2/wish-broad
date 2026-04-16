@@ -29,16 +29,11 @@ export function resolveReconnectDisposition(
   error: unknown,
 ): WHEPReconnectDisposition {
   if (error instanceof WHEPSessionError) {
-    if (error.statusCode === 404) {
+    if (error.isNotFound()) {
       return "ended";
     }
 
-    if (
-      !error.retryable ||
-      (error.statusCode !== undefined &&
-        error.statusCode >= 400 &&
-        error.statusCode < 500)
-    ) {
+    if (!error.retryable || error.isClientRequestError()) {
       return "error";
     }
   }
