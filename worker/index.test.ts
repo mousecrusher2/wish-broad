@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bindings } from "./types";
 import type { DiscordGuildMember, DiscordOAuthToken } from "./discord";
 import type { StoredTrack } from "./sfu";
+import { SfuApiError } from "./sfu";
 import { hashTokenWithPepper } from "./token-hash";
 
 const dbMocks = vi.hoisted(() => ({
@@ -24,87 +25,7 @@ const dbMocks = vi.hoisted(() => ({
 }));
 
 const callsMocks = vi.hoisted(() => {
-  class MockSfuApiError extends Error {
-    readonly endpoint: string;
-    readonly kind:
-      | "request_failed"
-      | "bad_request"
-      | "unsupported_media_type"
-      | "unprocessable_content"
-      | "session_not_found"
-      | "session_gone"
-      | "http_error"
-      | "invalid_response_json"
-      | "invalid_response_schema"
-      | "track_negotiation_error"
-      | "invalid_sfu_response";
-    readonly responseBody: unknown;
-    readonly statusText: string | undefined;
-
-    constructor(
-      message: string,
-      options: {
-        endpoint: string;
-        kind:
-          | "request_failed"
-          | "bad_request"
-          | "unsupported_media_type"
-          | "unprocessable_content"
-          | "session_not_found"
-          | "session_gone"
-          | "http_error"
-          | "invalid_response_json"
-          | "invalid_response_schema"
-          | "track_negotiation_error"
-          | "invalid_sfu_response";
-        responseBody?: unknown;
-        statusText?: string;
-      },
-    ) {
-      super(message);
-      this.name = "SfuApiError";
-      this.endpoint = options.endpoint;
-      this.kind = options.kind;
-      this.responseBody = options.responseBody;
-      this.statusText = options.statusText;
-    }
-
-    isSessionNotFound(): boolean {
-      return this.kind === "session_not_found";
-    }
-
-    toNegotiationClientError(
-      fallbackText: string,
-    ): { status: 400 | 415 | 422; text: string } | null {
-      const text =
-        typeof this.responseBody === "string" && this.responseBody.length > 0
-          ? this.responseBody
-          : fallbackText;
-
-      if (this.kind === "bad_request") {
-        return { status: 400, text };
-      }
-      if (this.kind === "unsupported_media_type") {
-        return { status: 415, text };
-      }
-      if (this.kind === "unprocessable_content") {
-        return { status: 422, text };
-      }
-
-      return null;
-    }
-  }
-
-  class MockLiveNotFoundError extends Error {
-    constructor(liveId: string) {
-      super(`Live stream not found: ${liveId}`);
-      this.name = "LiveNotFoundError";
-    }
-  }
-
   return {
-    SfuApiError: MockSfuApiError,
-    LiveNotFoundError: MockLiveNotFoundError,
     closeTracks: vi.fn<() => Promise<unknown>>(),
     isSessionActive: vi.fn<() => Promise<unknown>>(),
     renegotiateSession: vi.fn<() => Promise<unknown>>(),
@@ -193,15 +114,17 @@ const discordMocks = vi.hoisted(() => {
 });
 
 vi.mock("./database", () => dbMocks);
-vi.mock("./sfu", () => ({
-  SfuApiError: callsMocks.SfuApiError,
-  LiveNotFoundError: callsMocks.LiveNotFoundError,
-  closeTracks: callsMocks.closeTracks,
-  isSessionActive: callsMocks.isSessionActive,
-  renegotiateSession: callsMocks.renegotiateSession,
-  startIngest: callsMocks.startIngest,
-  startPlay: callsMocks.startPlay,
-}));
+vi.mock("./sfu", async () => {
+  const actual = await vi.importActual<typeof import("./sfu")>("./sfu");
+  return {
+    ...actual,
+    closeTracks: callsMocks.closeTracks,
+    isSessionActive: callsMocks.isSessionActive,
+    renegotiateSession: callsMocks.renegotiateSession,
+    startIngest: callsMocks.startIngest,
+    startPlay: callsMocks.startPlay,
+  };
+});
 vi.mock("./discord", () => ({
   DISCORD_STATE_COOKIE_NAME: discordMocks.DISCORD_STATE_COOKIE_NAME,
   DISCORD_STATE_MAX_AGE_SECONDS: 600,
@@ -692,7 +615,7 @@ describe("worker app", () => {
 
     callsMocks.startIngest.mockResolvedValue(
       err(
-        new callsMocks.SfuApiError("SFU request failed: unprocessable content", {
+        new SfuApiError("SFU request failed: unprocessable content", {
           endpoint: "/tracks/new",
           kind: "unprocessable_content",
           responseBody: "Malformed SDP offer",
@@ -723,7 +646,7 @@ describe("worker app", () => {
 
     callsMocks.startIngest.mockResolvedValue(
       err(
-        new callsMocks.SfuApiError("SFU request failed", {
+        new SfuApiError("SFU request failed", {
           endpoint: "/sessions/new",
           kind: "http_error",
           responseBody: "SFU auth failed",
@@ -878,7 +801,7 @@ describe("worker app", () => {
     });
     callsMocks.closeTracks.mockResolvedValue(
       err(
-        new callsMocks.SfuApiError("SFU request failed: session not found", {
+        new SfuApiError("SFU request failed: session not found", {
           endpoint: "/tracks/close",
           kind: "session_not_found",
           statusText: "Not Found",
@@ -1032,7 +955,7 @@ describe("worker app", () => {
     });
     callsMocks.startPlay.mockResolvedValue(
       err(
-        new callsMocks.SfuApiError("SFU request failed: session not found", {
+        new SfuApiError("SFU request failed: session not found", {
           endpoint: "/tracks/new",
           kind: "session_not_found",
           statusText: "Not Found",
@@ -1158,7 +1081,7 @@ describe("worker app", () => {
     });
     callsMocks.startPlay.mockResolvedValue(
       err(
-        new callsMocks.SfuApiError("SFU request failed: unprocessable content", {
+        new SfuApiError("SFU request failed: unprocessable content", {
           endpoint: "/tracks/new",
           kind: "unprocessable_content",
           responseBody: "Malformed SDP offer",
@@ -1377,7 +1300,7 @@ describe("worker app", () => {
 
     callsMocks.renegotiateSession.mockResolvedValue(
       err(
-        new callsMocks.SfuApiError("SFU request failed: unprocessable content", {
+        new SfuApiError("SFU request failed: unprocessable content", {
           endpoint: "/renegotiate",
           kind: "unprocessable_content",
           responseBody: "Malformed SDP answer",

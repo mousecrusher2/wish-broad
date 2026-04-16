@@ -4,6 +4,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 import sonarjs from "eslint-plugin-sonarjs";
 import tailwindcss from "eslint-plugin-tailwindcss";
+import unicorn from "eslint-plugin-unicorn";
 import tseslint from "typescript-eslint";
 
 const reactHooksConfig = reactHooks.configs.flat["recommended-latest"];
@@ -117,6 +118,15 @@ export default [
     files: ["vite.config.ts", "vitest.config.ts"],
     languageOptions: {
       globals: globals.node,
+    },
+  },
+  {
+    files: ["**/*.test.{ts,tsx}"],
+    plugins: {
+      unicorn,
+    },
+    rules: {
+      "unicorn/no-unused-properties": "error",
     },
   },
 ];

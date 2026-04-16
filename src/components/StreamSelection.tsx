@@ -23,55 +23,6 @@ export function StreamSelection({
   streamsLoading: boolean;
   playbackState: WHEPPlaybackState;
 }>) {
-  const loadButton = (
-    <button
-      onClick={onLoadClick}
-      disabled={isLoading || !resource.trim() || streamsLoading}
-      type="button"
-      className="inline-flex items-center justify-center rounded-full bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-    >
-      {isLoading ? "読み込み中..." : "Load"}
-    </button>
-  );
-
-  const streamCards =
-    streams.length > 0 ? (
-      streams.map((stream) => {
-        const isSelected = resource === stream.owner.userId;
-
-        return (
-          <label
-            key={stream.owner.userId}
-            className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 transition ${
-              isSelected
-                ? "border-cyan-400/60 bg-cyan-400/10 shadow-lg shadow-cyan-950/30"
-                : "border-white/10 bg-slate-950/40 hover:border-cyan-400/40 hover:bg-slate-950/70"
-            }`}
-          >
-            <input
-              type="radio"
-              name="stream"
-              value={stream.owner.userId}
-              checked={isSelected}
-              onChange={(e) => {
-                onResourceChange(e.target.value);
-              }}
-              className="mt-1 size-4 accent-cyan-400"
-            />
-            <span className="min-w-0">
-              <span className="block text-sm font-semibold text-white">
-                {stream.owner.displayName}
-              </span>
-            </span>
-          </label>
-        );
-      })
-    ) : (
-      <div className="rounded-2xl border border-dashed border-white/15 bg-slate-950/30 px-5 py-6 text-sm text-slate-400">
-        現在利用可能な配信はありません
-      </div>
-    );
-
   return (
     <section className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -116,8 +67,54 @@ export function StreamSelection({
           )}
         </div>
         <div className="flex items-start gap-3">
-          <div className="min-w-0 flex-1 space-y-3">{streamCards}</div>
-          <div className="shrink-0">{loadButton}</div>
+          <div className="min-w-0 flex-1 space-y-3">
+            {streams.length > 0 ? (
+              streams.map((stream) => {
+                const isSelected = resource === stream.owner.userId;
+
+                return (
+                  <label
+                    key={stream.owner.userId}
+                    className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 transition ${
+                      isSelected
+                        ? "border-cyan-400/60 bg-cyan-400/10 shadow-lg shadow-cyan-950/30"
+                        : "border-white/10 bg-slate-950/40 hover:border-cyan-400/40 hover:bg-slate-950/70"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="stream"
+                      value={stream.owner.userId}
+                      checked={isSelected}
+                      onChange={(e) => {
+                        onResourceChange(e.target.value);
+                      }}
+                      className="mt-1 size-4 accent-cyan-400"
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-semibold text-white">
+                        {stream.owner.displayName}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })
+            ) : (
+              <div className="rounded-2xl border border-dashed border-white/15 bg-slate-950/30 px-5 py-6 text-sm text-slate-400">
+                現在利用可能な配信はありません
+              </div>
+            )}
+          </div>
+          <div className="shrink-0">
+            <button
+              onClick={onLoadClick}
+              disabled={isLoading || !resource.trim() || streamsLoading}
+              type="button"
+              className="inline-flex items-center justify-center rounded-full bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+            >
+              {isLoading ? "読み込み中..." : "Load"}
+            </button>
+          </div>
         </div>
       </div>
 
