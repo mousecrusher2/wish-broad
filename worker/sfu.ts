@@ -2,16 +2,16 @@ import { Bindings } from "./types";
 import { err, ok, type Result } from "neverthrow";
 import * as v from "valibot";
 
-export type SessionDescription = {
+type SessionDescription = {
   sdp: string;
   type: string;
 };
 
-export type NewSessionResponse = {
+type NewSessionResponse = {
   sessionId: string;
 };
 
-export type NewTrackResponse = {
+type NewTrackResponse = {
   trackName: string;
   mid?: string | undefined;
   sessionId?: string | undefined;
@@ -19,7 +19,7 @@ export type NewTrackResponse = {
   errorDescription?: string | undefined;
 };
 
-export type NewTracksResponse = {
+type NewTracksResponse = {
   errorCode?: string | undefined;
   errorDescription?: string | undefined;
   requiresImmediateRenegotiation?: boolean | undefined;
@@ -37,7 +37,7 @@ export type StoredTrack = TrackLocator & {
   mid: string;
 };
 
-export type ClosedTrack = {
+type ClosedTrack = {
   mid: string;
   errorCode?: string | undefined;
   errorDescription?: string | undefined;
@@ -45,7 +45,7 @@ export type ClosedTrack = {
   trackName?: string | undefined;
 };
 
-export type CloseTracksResponse = {
+type CloseTracksResponse = {
   errorCode?: string | undefined;
   errorDescription?: string | undefined;
   requiresImmediateRenegotiation?: boolean | undefined;
@@ -264,7 +264,7 @@ function normalizeTrackLocator(track: TrackLocator): TrackLocatorRequest {
 /**
  * 新しいセッションを作成
  */
-export async function createSession(
+async function createSession(
   env: SfuEnv,
 ): Promise<Result<NewSessionResponse, SfuApiError>> {
   const endpoint = getEndpoint(env, "/sessions/new");
@@ -333,7 +333,7 @@ export async function createSession(
 /**
  * 配信者用：新しいトラックを作成（WHIP）
  */
-export async function createIngestTracks(
+async function createIngestTracks(
   env: SfuEnv,
   sessionId: string,
   sdpOffer: string,
@@ -413,7 +413,7 @@ export async function createIngestTracks(
 /**
  * 視聴者用：既存のトラックに接続（WHEP）
  */
-export async function connectToTracks(
+async function connectToTracks(
   env: SfuEnv,
   sessionId: string,
   tracks: TrackLocator[],

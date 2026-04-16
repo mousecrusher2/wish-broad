@@ -1,16 +1,16 @@
 import type { StoredTrack } from "./sfu";
 import * as v from "valibot";
 
-export type User = {
+type User = {
   userId: string;
   displayName: string;
 };
 
-export type Live = {
+type Live = {
   owner: User;
 };
 
-export type LiveTrackRecord = {
+type LiveTrackRecord = {
   userId: string;
   sessionId: string;
   tracks: StoredTrack[];

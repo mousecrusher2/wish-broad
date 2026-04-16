@@ -38,6 +38,7 @@ export default [
     },
     rules: {
       "@typescript-eslint/no-confusing-void-expression": "error",
+      "@typescript-eslint/no-deprecated": "error",
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-non-null-assertion": "error",
       "@typescript-eslint/restrict-template-expressions": [

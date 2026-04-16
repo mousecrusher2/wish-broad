@@ -27,7 +27,7 @@ export type DiscordOAuthToken = {
   refreshToken?: string | undefined;
 };
 
-export const DISCORD_OAUTH_SCOPES = [
+const DISCORD_OAUTH_SCOPES = [
   "identify",
   "guilds.members.read",
 ] satisfies readonly [string, string];

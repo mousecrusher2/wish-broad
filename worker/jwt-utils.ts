@@ -1,13 +1,8 @@
 // JWT関連のユーティリティ関数
 
 // 現在のUnixタイムスタンプを取得
-export function getCurrentTimestamp(): number {
+function getCurrentTimestamp(): number {
   return Math.floor(Date.now() / 1000);
-}
-
-// 指定した秒数後のUnixタイムスタンプを取得
-export function getExpirationTimestamp(durationInSeconds: number): number {
-  return getCurrentTimestamp() + durationInSeconds;
 }
 
 // JWT用のiat（issued at）とexp（expiration）を計算

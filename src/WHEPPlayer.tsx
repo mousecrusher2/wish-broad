@@ -11,7 +11,7 @@ import {
 } from "./player/WHEPPlaybackController";
 import { getPlaybackPlaceholderText } from "./player/whep-playback";
 
-export type WHEPPlayerSnapshot = WHEPPlaybackControllerSnapshot;
+type WHEPPlayerSnapshot = WHEPPlaybackControllerSnapshot;
 
 function VideoPlaceholder({ message }: Readonly<{ message: string }>) {
   return (

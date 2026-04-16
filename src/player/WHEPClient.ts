@@ -6,7 +6,7 @@ export type WHEPConnectionStatus =
   | "connected"
   | "failed";
 
-export type WHEPSessionRequestStage = "post" | "patch" | "delete" | "local";
+type WHEPSessionRequestStage = "post" | "patch" | "delete" | "local";
 
 export type WHEPSessionSnapshot = {
   connectionState: RTCPeerConnectionState;

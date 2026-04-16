@@ -8,7 +8,7 @@ export const WHEP_PLAYBACK_STALL_GRACE_MS = 4_000;
 export const WHEP_RETRY_PLAYBACK_START_GRACE_MS = 5_000;
 export const WHEP_SESSION_RECOVERY_GRACE_MS = 3_000;
 
-export type WHEPReconnectDisposition = "ended" | "error" | "retry";
+type WHEPReconnectDisposition = "ended" | "error" | "retry";
 export type WHEPReconnectAttemptMode = "initial" | "retry";
 
 export function getReconnectDelayMs(
