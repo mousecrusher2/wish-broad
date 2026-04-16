@@ -1,7 +1,7 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { sign } from "hono/jwt";
 import { Context } from "hono";
-import { setUser } from "./database";
+import * as db from "./database";
 import {
   buildDiscordAuthorizationUrl,
   createOAuthState,
@@ -68,7 +68,7 @@ async function issueDiscordLoginJwt<E extends ContextWithBindings>(
   const displayName =
     member.nick || member.user.global_name || member.user.username;
 
-  await setUser(c.env.LIVE_DB, {
+  await db.setUser(c.env.LIVE_DB, {
     userId: member.user.id,
     displayName,
   });

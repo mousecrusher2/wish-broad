@@ -1,15 +1,7 @@
 /* eslint-disable sonarjs/cognitive-complexity */
 import { Context, Hono } from "hono";
 import { JWTPayload, Bindings } from "./types";
-import {
-  deleteTracksForSession,
-  getAllLives,
-  getLiveTokenHash,
-  getLiveTrackRecord,
-  hasLiveToken,
-  setLiveToken,
-  setTracks,
-} from "./database";
+import * as db from "./database";
 import {
   clearAuthCookie,
   completeDiscordLogin,
@@ -120,7 +112,7 @@ app.use(
     pepper: (c) => c.env.LIVE_TOKEN_PEPPER,
     token: (c) => {
       const { userId } = c.req.param();
-      return getLiveTokenHash(c.env.LIVE_DB, userId);
+      return db.getLiveTokenHash(c.env.LIVE_DB, userId);
     },
   }),
 );
@@ -142,7 +134,7 @@ app.post("/ingest/:userId", async (c) => {
     return c.text("SDP offer is required", 400);
   }
 
-  const existingLive = await getLiveTrackRecord(c.env.LIVE_DB, userId);
+  const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
   if (existingLive) {
     const isActiveResult = await isSessionActive(c.env, existingLive.sessionId);
     if (isActiveResult.isErr()) {
@@ -157,7 +149,7 @@ app.post("/ingest/:userId", async (c) => {
       return c.text("A live stream is already active for this user", 400);
     }
 
-    await deleteTracksForSession(
+    await db.deleteTracksForSession(
       c.env.LIVE_DB,
       userId,
       existingLive.sessionId,
@@ -182,7 +174,7 @@ app.post("/ingest/:userId", async (c) => {
 
   const result = ingestResult.value;
   // トラック情報をデータベースに保存（session_idも含める）
-  await setTracks(c.env.LIVE_DB, userId, result.sessionId, result.tracks);
+  await db.setTracks(c.env.LIVE_DB, userId, result.sessionId, result.tracks);
 
   return c.body(result.sdpAnswer, 201, {
     "content-type": "application/sdp",
@@ -200,7 +192,7 @@ app.get("/ingest/:userId/:sessionId", async () => {
 app.delete("/ingest/:userId/:sessionId", async (c) => {
   const { userId, sessionId } = c.req.param();
 
-  const existingLive = await getLiveTrackRecord(c.env.LIVE_DB, userId);
+  const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
   if (!existingLive) {
     return c.text("No live stream found for this user", 400);
   }
@@ -236,7 +228,7 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     return c.text("Failed to close live tracks", 502);
   }
 
-  const deleted = await deleteTracksForSession(
+  const deleted = await db.deleteTracksForSession(
     c.env.LIVE_DB,
     userId,
     sessionId,
@@ -291,7 +283,7 @@ app.post("/play/:userId", async (c) => {
   );
 
   // SFU APIクライアントを初期化
-  const liveTrackRecord = await getLiveTrackRecord(c.env.LIVE_DB, userId);
+  const liveTrackRecord = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
   const tracks = liveTrackRecord?.tracks ?? [];
   let hasActiveSession = false;
   if (liveTrackRecord) {
@@ -307,7 +299,7 @@ app.post("/play/:userId", async (c) => {
   }
 
   if (liveTrackRecord && !hasActiveSession) {
-    await deleteTracksForSession(
+    await db.deleteTracksForSession(
       c.env.LIVE_DB,
       userId,
       liveTrackRecord.sessionId,
@@ -336,7 +328,7 @@ app.post("/play/:userId", async (c) => {
     }
     if (error instanceof SfuApiError && error.isSessionNotFound()) {
       if (liveTrackRecord) {
-        await deleteTracksForSession(
+        await db.deleteTracksForSession(
           c.env.LIVE_DB,
           userId,
           liveTrackRecord.sessionId,
@@ -473,7 +465,7 @@ app.post("/api/me/livetoken", async (c) => {
   const tokenHash = await hashTokenWithPepper(c.env.LIVE_TOKEN_PEPPER, token);
 
   type SaveTokenResult = { ok: true } | { ok: false; error: Error };
-  const saveResult: SaveTokenResult = await setLiveToken(
+  const saveResult: SaveTokenResult = await db.setLiveToken(
     c.env.LIVE_DB,
     userId,
     tokenHash,
@@ -499,7 +491,7 @@ app.get("/api/me/livetoken", async (c) => {
   type HasTokenResult =
     | { ok: true; hasToken: boolean }
     | { ok: false; error: Error };
-  const hasTokenResult: HasTokenResult = await hasLiveToken(c.env.LIVE_DB, userId)
+  const hasTokenResult: HasTokenResult = await db.hasLiveToken(c.env.LIVE_DB, userId)
     .then((hasToken): HasTokenResult => ({ ok: true, hasToken }))
     .catch((error: Error): HasTokenResult => ({ ok: false, error }));
   if (!hasTokenResult.ok) {
@@ -516,7 +508,7 @@ app.get("/api/me/livetoken", async (c) => {
 });
 
 app.get("/api/lives", async (c) => {
-  const lives = await getAllLives(c.env.LIVE_DB);
+  const lives = await db.getAllLives(c.env.LIVE_DB);
   return c.json(lives);
 });
 
