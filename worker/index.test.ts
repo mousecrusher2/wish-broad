@@ -70,11 +70,13 @@ const discordMocks = vi.hoisted(() => {
     ) {
       super(message);
       this.name = "DiscordApiError";
-      this.endpoint = options.endpoint;
-      this.kind = options.kind;
-      this.statusText = options.statusText;
-      this.responseBodyText = options.responseBodyText;
-      this.responseBodyJson = options.responseBodyJson;
+      ({
+        endpoint: this.endpoint,
+        kind: this.kind,
+        statusText: this.statusText,
+        responseBodyText: this.responseBodyText,
+        responseBodyJson: this.responseBodyJson,
+      } = options);
     }
   }
 
@@ -237,6 +239,34 @@ async function createAuthCookie(
   );
 
   return `authtoken=${token}`;
+}
+
+async function requestPlayOffer(env: Bindings): Promise<Response> {
+  return app.fetch(
+    new Request("http://localhost/play/streamer-1", {
+      body: "viewer-offer",
+      headers: {
+        Cookie: await createAuthCookie(env),
+        "Content-Type": "application/sdp",
+      },
+      method: "POST",
+    }),
+    env,
+    createExecutionContext(),
+  );
+}
+
+async function expectPlayNotFoundAndCleanup(
+  response: Response,
+  env: Bindings,
+): Promise<void> {
+  expect(response.status).toBe(404);
+  expect(await response.text()).toBe("Live stream not found: streamer-1");
+  expect(dbMocks.deleteTracksForSession).toHaveBeenCalledWith(
+    env.LIVE_DB,
+    "streamer-1",
+    "live-session",
+  );
 }
 
 describe("worker app", () => {
@@ -914,26 +944,8 @@ describe("worker app", () => {
     });
     callsMocks.isSessionActive.mockResolvedValue(ok(false));
 
-    const response = await app.fetch(
-      new Request("http://localhost/play/streamer-1", {
-        body: "viewer-offer",
-        headers: {
-          Cookie: await createAuthCookie(env),
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      createExecutionContext(),
-    );
-
-    expect(response.status).toBe(404);
-    expect(await response.text()).toBe("Live stream not found: streamer-1");
-    expect(dbMocks.deleteTracksForSession).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "streamer-1",
-      "live-session",
-    );
+    const response = await requestPlayOffer(env);
+    await expectPlayNotFoundAndCleanup(response, env);
     expect(callsMocks.startPlay).not.toHaveBeenCalled();
   });
 
@@ -963,26 +975,8 @@ describe("worker app", () => {
       ),
     );
 
-    const response = await app.fetch(
-      new Request("http://localhost/play/streamer-1", {
-        body: "viewer-offer",
-        headers: {
-          Cookie: await createAuthCookie(env),
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      createExecutionContext(),
-    );
-
-    expect(response.status).toBe(404);
-    expect(await response.text()).toBe("Live stream not found: streamer-1");
-    expect(dbMocks.deleteTracksForSession).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "streamer-1",
-      "live-session",
-    );
+    const response = await requestPlayOffer(env);
+    await expectPlayNotFoundAndCleanup(response, env);
   });
 
   it("returns 400 for an empty WHEP offer", async () => {
