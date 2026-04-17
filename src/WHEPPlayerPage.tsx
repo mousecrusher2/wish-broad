@@ -39,6 +39,20 @@ function WHEPPlayerPageContent({ user }: Readonly<{ user: User }>) {
     setLoadSequence((currentValue) => currentValue + 1);
   }, [resource]);
 
+  const handlePlayerSnapshotChange = useCallback(
+    (nextSnapshot: WHEPPlaybackControllerSnapshot) => {
+      if (
+        playerSnapshot.playbackState.phase !== "ended" &&
+        nextSnapshot.playbackState.phase === "ended"
+      ) {
+        refresh();
+      }
+
+      setPlayerSnapshot(nextSnapshot);
+    },
+    [playerSnapshot.playbackState.phase, refresh],
+  );
+
   const { isLoading, playbackState } = playerSnapshot;
 
   return (
@@ -95,7 +109,7 @@ function WHEPPlayerPageContent({ user }: Readonly<{ user: User }>) {
 
           <div className="min-w-0 flex-1">
             <WHEPPlayer
-              onSnapshotChange={setPlayerSnapshot}
+              onSnapshotChange={handlePlayerSnapshotChange}
               resourceUserId={activeResource}
               snapshot={playerSnapshot}
               key={loadSequence}

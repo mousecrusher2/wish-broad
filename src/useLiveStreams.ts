@@ -1,3 +1,4 @@
+import { useCallback, useRef } from "react";
 import useSWR from "swr";
 import { err, ok, type Result } from "neverthrow";
 import * as v from "valibot";
@@ -62,13 +63,23 @@ export function useLiveStreams(): UseLiveStreamsState {
       shouldRetryOnError: false,
     },
   );
+  const refreshInFlightRef = useRef(false);
+
+  const refresh = useCallback(() => {
+    if (refreshInFlightRef.current) {
+      return;
+    }
+
+    refreshInFlightRef.current = true;
+    void mutate().finally(() => {
+      refreshInFlightRef.current = false;
+    });
+  }, [mutate]);
 
   return {
     streams: data?.isOk() ? data.value : [],
     isLoading: isLoading || isValidating,
     error: data?.isErr() ? data.error.message : null,
-    refresh: () => {
-      void mutate();
-    },
+    refresh,
   };
 }

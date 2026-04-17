@@ -62,9 +62,14 @@ export function StreamSelection({
           <p className="text-sm font-medium text-slate-300">
             利用可能な配信一覧
           </p>
-          {streamsLoading && (
-            <span className="text-sm text-slate-400">配信一覧を更新中...</span>
-          )}
+          <button
+            onClick={onRefresh}
+            disabled={streamsLoading}
+            type="button"
+            className="inline-flex items-center justify-center rounded-full border border-cyan-400/30 bg-cyan-400/10 px-5 py-3 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20 active:translate-y-px active:scale-[0.98] active:border-cyan-300/60 active:bg-cyan-300/25 disabled:cursor-not-allowed disabled:border-slate-600 disabled:bg-slate-700 disabled:text-slate-400"
+          >
+            Reload
+          </button>
         </div>
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1 space-y-3">
