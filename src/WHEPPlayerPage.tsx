@@ -93,7 +93,7 @@ function WHEPPlayerPageContent({ user }: Readonly<{ user: User }>) {
         <OBSStreamingInfo user={user} popoverId={OBS_SETTINGS_POPOVER_ID} />
 
         <div className="flex flex-col gap-6 min-[75rem]:flex-row min-[75rem]:items-start">
-          <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur min-[75rem]:w-[24rem] min-[75rem]:flex-none">
+          <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur min-[75rem]:w-[20rem] min-[75rem]:flex-none">
             <StreamSelection
               resource={resource}
               onResourceChange={handleResourceChange}

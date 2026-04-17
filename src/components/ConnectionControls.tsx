@@ -8,6 +8,8 @@ export function ConnectionControls({
 }: Readonly<{
   playbackState: WHEPPlaybackState;
 }>) {
+  const message = getPlaybackPhaseMessage(playbackState.phase);
+
   const panelStyle = {
     idle: "border-white/10 bg-slate-900/70",
     connected: "border-emerald-400/20 bg-emerald-500/10",
@@ -36,17 +38,13 @@ export function ConnectionControls({
   }[playbackState.phase];
 
   return (
-    <section
-      className={`ml-auto w-fit max-w-full rounded-2xl border p-4 sm:p-5 ${panelStyle}`}
+    <div
+      className={`flex min-w-0 max-w-full items-center gap-3 rounded-2xl border px-4 py-3 ${panelStyle}`}
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <span
-          className={`inline-flex items-center gap-3 text-sm font-medium ${textStyle}`}
-        >
-          <span className={`inline-block size-2.5 rounded-full ${dotStyle}`} />
-          {getPlaybackPhaseMessage(playbackState.phase)}
-        </span>
-      </div>
-    </section>
+      <span className={`inline-block size-3 shrink-0 rounded-full ${dotStyle}`} />
+      <span className={`min-h-5 truncate text-sm leading-5 font-semibold ${textStyle}`}>
+        {message ?? "\u00A0"}
+      </span>
+    </div>
   );
 }
