@@ -1,7 +1,6 @@
 import { WHEPSession, WHEPSessionError } from "./WHEPClient";
 import {
   type WHEPReconnectAttemptMode,
-  WHEP_PLAYBACK_STALL_GRACE_MS,
   WHEP_RECONNECT_WINDOW_MS,
   WHEP_RETRY_PLAYBACK_START_GRACE_MS,
   WHEP_SESSION_RECOVERY_GRACE_MS,
@@ -23,23 +22,17 @@ type PendingAttempt = {
   mode: AttemptMode;
 };
 
-type PlaybackMonitorVideoElement = HTMLVideoElement & {
-  cancelVideoFrameCallback?: (handle: number) => void;
-  requestVideoFrameCallback?: (
-    callback: (now: number, metadata: VideoFrameCallbackMetadata) => void,
-  ) => number;
-};
-
 type PlaybackMonitorState = {
   attemptId: number;
+  intervalId: number | null;
   lastCurrentTime: number;
   mode: AttemptMode;
   resourceUserId: string;
   sawPlaybackProgress: boolean;
   session: WHEPSession;
-  timeoutId: number | null;
-  videoElement: PlaybackMonitorVideoElement;
-  videoFrameRequestId: number | null;
+  startGraceTimeoutId: number | null;
+  stalledForMs: number;
+  videoElement: HTMLVideoElement;
   cleanup: () => void;
 };
 
@@ -102,7 +95,7 @@ export class WHEPPlaybackController {
   private snapshot = createDefaultSnapshot();
   private snapshotSubscriber: SnapshotSubscriber | null = null;
   private targetResourceUserId: string | null = null;
-  private videoElement: PlaybackMonitorVideoElement | null = null;
+  private videoElement: HTMLVideoElement | null = null;
 
   attachVideoElement(videoElement: HTMLVideoElement | null): void {
     if (this.disposed) {
@@ -219,13 +212,11 @@ export class WHEPPlaybackController {
       return;
     }
 
-    if (playbackMonitor.timeoutId !== null) {
-      window.clearTimeout(playbackMonitor.timeoutId);
+    if (playbackMonitor.intervalId !== null) {
+      window.clearInterval(playbackMonitor.intervalId);
     }
-    if (playbackMonitor.videoFrameRequestId !== null) {
-      playbackMonitor.videoElement.cancelVideoFrameCallback(
-        playbackMonitor.videoFrameRequestId,
-      );
+    if (playbackMonitor.startGraceTimeoutId !== null) {
+      window.clearTimeout(playbackMonitor.startGraceTimeoutId);
     }
     playbackMonitor.cleanup();
     this.playbackMonitor = null;
@@ -494,84 +485,38 @@ export class WHEPPlaybackController {
     const sawPlaybackProgress = Number.isFinite(currentTime) && currentTime > 0;
     const playbackMonitor: PlaybackMonitorState = {
       attemptId,
+      intervalId: null,
       lastCurrentTime: currentTime,
       mode,
       resourceUserId,
       sawPlaybackProgress,
       session,
-      timeoutId: null,
+      startGraceTimeoutId: null,
+      stalledForMs: 0,
       videoElement,
-      videoFrameRequestId: null,
       cleanup: () => {},
     };
 
-    const armWatchdog = () => {
+    const stopInterval = () => {
+      if (playbackMonitor.intervalId !== null) {
+        window.clearInterval(playbackMonitor.intervalId);
+        playbackMonitor.intervalId = null;
+      }
+    };
+
+    const clearStartGraceTimeout = () => {
+      if (playbackMonitor.startGraceTimeoutId !== null) {
+        window.clearTimeout(playbackMonitor.startGraceTimeoutId);
+        playbackMonitor.startGraceTimeoutId = null;
+      }
+    };
+
+    const markPlaybackProgress = (nextCurrentTime: number) => {
       if (this.playbackMonitor !== playbackMonitor) {
         return;
       }
 
-      if (playbackMonitor.timeoutId !== null) {
-        window.clearTimeout(playbackMonitor.timeoutId);
-        playbackMonitor.timeoutId = null;
-      }
-
-      if (
-        !playbackMonitor.sawPlaybackProgress &&
-        playbackMonitor.mode === "initial"
-      ) {
-        return;
-      }
-
-      const timeoutMs = playbackMonitor.sawPlaybackProgress
-        ? WHEP_PLAYBACK_STALL_GRACE_MS
-        : WHEP_RETRY_PLAYBACK_START_GRACE_MS;
-      playbackMonitor.timeoutId = window.setTimeout(() => {
-        playbackMonitor.timeoutId = null;
-
-        if (
-          this.playbackMonitor !== playbackMonitor ||
-          !this.isActiveSession(attemptId, session)
-        ) {
-          return;
-        }
-
-        if (
-          document.visibilityState !== "visible" ||
-          videoElement.paused ||
-          !Number.isFinite(videoElement.currentTime)
-        ) {
-          armWatchdog();
-          return;
-        }
-
-        if (videoElement.currentTime > playbackMonitor.lastCurrentTime + 0.05) {
-          markPlaybackProgress(videoElement.currentTime);
-          return;
-        }
-
-        if (
-          !shouldReconnectForPlaybackStall(
-            playbackMonitor.mode,
-            playbackMonitor.sawPlaybackProgress,
-            timeoutMs,
-          )
-        ) {
-          armWatchdog();
-          return;
-        }
-
-        this.clearPlaybackMonitor();
-        this.updateRecoveringPlaybackState("disconnected");
-        this.disposeSession();
-        this.queueReconnect({ immediate: true });
-      }, timeoutMs);
-    };
-
-    const markPlaybackProgress = (nextCurrentTime: number) => {
-      if (
-        this.playbackMonitor !== playbackMonitor ||
-        !Number.isFinite(nextCurrentTime)
-      ) {
+      if (!Number.isFinite(nextCurrentTime)) {
         return;
       }
 
@@ -582,7 +527,9 @@ export class WHEPPlaybackController {
         playbackMonitor.sawPlaybackProgress = true;
       }
 
+      clearStartGraceTimeout();
       playbackMonitor.lastCurrentTime = nextCurrentTime;
+      playbackMonitor.stalledForMs = 0;
 
       if (
         this.snapshot.playbackState.phase !== "connected" ||
@@ -592,61 +539,113 @@ export class WHEPPlaybackController {
           createConnectedPlaybackState(playbackMonitor.resourceUserId, true),
         );
       }
-
-      armWatchdog();
     };
 
-    const handleTimeUpdate = () => {
-      markPlaybackProgress(videoElement.currentTime);
-    };
-    const handlePlaying = () => {
-      markPlaybackProgress(videoElement.currentTime);
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        armWatchdog();
-      } else if (playbackMonitor.timeoutId !== null) {
-        window.clearTimeout(playbackMonitor.timeoutId);
-        playbackMonitor.timeoutId = null;
-      }
-    };
-    const scheduleVideoFrameCallback = () => {
+    const tick = () => {
       if (
         this.playbackMonitor !== playbackMonitor ||
-        typeof videoElement.requestVideoFrameCallback !== "function"
+        !this.isActiveSession(attemptId, session)
       ) {
         return;
       }
 
-      playbackMonitor.videoFrameRequestId =
-        videoElement.requestVideoFrameCallback((_now, metadata) => {
-          playbackMonitor.videoFrameRequestId = null;
+      if (
+        document.visibilityState !== "visible" ||
+        videoElement.paused ||
+        !Number.isFinite(videoElement.currentTime)
+      ) {
+        playbackMonitor.stalledForMs = 0;
+        return;
+      }
 
-          if (this.playbackMonitor !== playbackMonitor) {
-            return;
-          }
+      if (videoElement.currentTime > playbackMonitor.lastCurrentTime + 0.05) {
+        markPlaybackProgress(videoElement.currentTime);
+        return;
+      }
 
-          markPlaybackProgress(
-            Number.isFinite(metadata.mediaTime)
-              ? metadata.mediaTime
-              : videoElement.currentTime,
-          );
-          scheduleVideoFrameCallback();
-        });
+      if (
+        !shouldReconnectForPlaybackStall(
+          playbackMonitor.mode,
+          playbackMonitor.sawPlaybackProgress,
+          playbackMonitor.stalledForMs + 1_000,
+        )
+      ) {
+        playbackMonitor.stalledForMs += 1_000;
+        return;
+      }
+
+      this.clearPlaybackMonitor();
+      this.updateRecoveringPlaybackState("disconnected");
+      this.disposeSession();
+      this.queueReconnect({ immediate: true });
     };
 
-    videoElement.addEventListener("timeupdate", handleTimeUpdate);
+    const startInterval = () => {
+      if (
+        this.playbackMonitor !== playbackMonitor ||
+        playbackMonitor.intervalId !== null
+      ) {
+        return;
+      }
+
+      playbackMonitor.intervalId = window.setInterval(tick, 1_000);
+    };
+
+    const handlePlaying = () => {
+      markPlaybackProgress(videoElement.currentTime);
+      startInterval();
+    };
+    const handlePause = () => {
+      stopInterval();
+      playbackMonitor.stalledForMs = 0;
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        if (!videoElement.paused) {
+          startInterval();
+        }
+      } else {
+        stopInterval();
+        playbackMonitor.stalledForMs = 0;
+      }
+    };
     videoElement.addEventListener("playing", handlePlaying);
+    videoElement.addEventListener("pause", handlePause);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     playbackMonitor.cleanup = () => {
-      videoElement.removeEventListener("timeupdate", handleTimeUpdate);
       videoElement.removeEventListener("playing", handlePlaying);
+      videoElement.removeEventListener("pause", handlePause);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
 
     this.playbackMonitor = playbackMonitor;
-    armWatchdog();
-    scheduleVideoFrameCallback();
+
+    if (!playbackMonitor.sawPlaybackProgress && playbackMonitor.mode === "retry") {
+      playbackMonitor.startGraceTimeoutId = window.setTimeout(() => {
+        playbackMonitor.startGraceTimeoutId = null;
+
+        if (
+          this.playbackMonitor !== playbackMonitor ||
+          !this.isActiveSession(attemptId, session) ||
+          playbackMonitor.sawPlaybackProgress
+        ) {
+          return;
+        }
+
+        this.clearPlaybackMonitor();
+        this.updateRecoveringPlaybackState("disconnected");
+        this.disposeSession();
+        this.queueReconnect({ immediate: true });
+      }, WHEP_RETRY_PLAYBACK_START_GRACE_MS);
+    }
+
+    if (
+      document.visibilityState === "visible" &&
+      !videoElement.paused &&
+      playbackMonitor.sawPlaybackProgress
+    ) {
+      startInterval();
+    }
   }
 
   private async startAttempt({

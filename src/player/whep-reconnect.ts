@@ -4,7 +4,6 @@ const WHEP_RECONNECT_BASE_DELAY_MS = 500;
 const WHEP_RECONNECT_MAX_DELAY_MS = 2_000;
 
 export const WHEP_RECONNECT_WINDOW_MS = 30_000;
-export const WHEP_PLAYBACK_STALL_GRACE_MS = 4_000;
 export const WHEP_RETRY_PLAYBACK_START_GRACE_MS = 5_000;
 export const WHEP_SESSION_RECOVERY_GRACE_MS = 3_000;
 
@@ -53,7 +52,7 @@ export function shouldReconnectForPlaybackStall(
   stalledForMs: number,
 ): boolean {
   if (sawPlaybackProgress) {
-    return stalledForMs >= WHEP_PLAYBACK_STALL_GRACE_MS;
+    return stalledForMs >= 4_000;
   }
 
   return mode === "retry" && stalledForMs >= WHEP_RETRY_PLAYBACK_START_GRACE_MS;
