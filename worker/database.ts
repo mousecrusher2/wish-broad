@@ -16,23 +16,25 @@ type LiveTrackRecord = {
   tracks: StoredTrack[];
 };
 
-// D1データベースでTrackLocatorを管理する関数群
-export async function setTracks(
+// D1データベースでライブ配信情報を管理する関数群
+export async function insertLive(
   database: D1Database,
   userId: string,
   sessionId: string,
   tracks: StoredTrack[],
 ): Promise<void> {
   const tracksJson = JSON.stringify(tracks);
+  // Do not upsert here. A concurrent second ingest should fail closed instead of
+  // replacing the existing live row with a later session.
   await database
     .prepare(
-      "INSERT OR REPLACE INTO live_tracks (user_id, session_id, tracks_json) VALUES (?, ?, ?)",
+      "INSERT INTO lives (user_id, session_id, tracks_json) VALUES (?, ?, ?)",
     )
     .bind(userId, sessionId, tracksJson)
     .run();
 }
 
-export async function getLiveTrackRecord(
+export async function getLive(
   database: D1Database,
   userId: string,
 ): Promise<LiveTrackRecord | null> {
@@ -51,7 +53,7 @@ export async function getLiveTrackRecord(
 
   const result = await database
     .prepare(
-      "SELECT user_id, session_id, tracks_json FROM live_tracks WHERE user_id = ?",
+      "SELECT user_id, session_id, tracks_json FROM lives WHERE user_id = ?",
     )
     .bind(userId)
     .first();
@@ -62,14 +64,14 @@ export async function getLiveTrackRecord(
 
   const rowResult = v.safeParse(liveTrackRowSchema, result);
   if (!rowResult.success) {
-    throw new Error("Invalid D1 live_tracks row");
+    throw new Error("Invalid D1 lives row");
   }
   const row = rowResult.output;
 
   const parsedTracksInput: unknown = JSON.parse(row.tracks_json);
   const tracksResult = v.safeParse(storedTracksSchema, parsedTracksInput);
   if (!tracksResult.success) {
-    throw new Error("Invalid D1 live_tracks.tracks_json");
+    throw new Error("Invalid D1 lives.tracks_json");
   }
 
   return {
@@ -79,13 +81,13 @@ export async function getLiveTrackRecord(
   };
 }
 
-export async function deleteTracksForSession(
+export async function deleteLiveForSession(
   database: D1Database,
   userId: string,
   sessionId: string,
 ): Promise<boolean> {
   const result = await database
-    .prepare("DELETE FROM live_tracks WHERE user_id = ? AND session_id = ?")
+    .prepare("DELETE FROM lives WHERE user_id = ? AND session_id = ?")
     .bind(userId, sessionId)
     .run();
 
@@ -160,7 +162,7 @@ export async function getAllLives(database: D1Database): Promise<Live[]> {
 
   const results = await database
     .prepare(
-      "SELECT users.user_id, display_name FROM live_tracks JOIN users ON live_tracks.user_id = users.user_id",
+      "SELECT users.user_id, display_name FROM lives JOIN users ON lives.user_id = users.user_id",
     )
     .all();
 

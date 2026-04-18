@@ -8,10 +8,10 @@ import { SfuApiError } from "./sfu";
 import { hashTokenWithPepper } from "./token-hash";
 
 const dbMocks = vi.hoisted(() => ({
-  deleteTracksForSession: vi.fn<() => Promise<boolean>>(),
+  deleteLiveForSession: vi.fn<() => Promise<boolean>>(),
   getAllLives: vi.fn<() => Promise<unknown[]>>(),
   getLiveTokenHash: vi.fn<() => Promise<string | null>>(),
-  getLiveTrackRecord: vi.fn<
+  getLive: vi.fn<
     () => Promise<{
       userId: string;
       sessionId: string;
@@ -19,8 +19,8 @@ const dbMocks = vi.hoisted(() => ({
     } | null>
   >(),
   hasLiveToken: vi.fn<() => Promise<boolean>>(),
+  insertLive: vi.fn<() => Promise<void>>(),
   setLiveToken: vi.fn<() => Promise<void>>(),
-  setTracks: vi.fn<() => Promise<void>>(),
   setUser: vi.fn<() => Promise<void>>(),
 }));
 
@@ -262,7 +262,7 @@ async function expectPlayNotFoundAndCleanup(
 ): Promise<void> {
   expect(response.status).toBe(404);
   expect(await response.text()).toBe("Live stream not found: streamer-1");
-  expect(dbMocks.deleteTracksForSession).toHaveBeenCalledWith(
+  expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
     env.LIVE_DB,
     "streamer-1",
     "live-session",
@@ -276,15 +276,15 @@ describe("worker app", () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-    dbMocks.deleteTracksForSession.mockResolvedValue(true);
+    dbMocks.deleteLiveForSession.mockResolvedValue(true);
     dbMocks.getAllLives.mockResolvedValue([]);
     dbMocks.getLiveTokenHash.mockResolvedValue(
       await hashTokenWithPepper("test-live-token-pepper", "live-token"),
     );
-    dbMocks.getLiveTrackRecord.mockResolvedValue(null);
+    dbMocks.getLive.mockResolvedValue(null);
     dbMocks.hasLiveToken.mockResolvedValue(false);
     dbMocks.setLiveToken.mockResolvedValue();
-    dbMocks.setTracks.mockResolvedValue();
+    dbMocks.insertLive.mockResolvedValue();
     dbMocks.setUser.mockResolvedValue();
 
     discordMocks.buildDiscordAuthorizationUrl.mockReset();
@@ -535,7 +535,7 @@ describe("worker app", () => {
       },
     ];
 
-    dbMocks.getLiveTrackRecord.mockResolvedValue({
+    dbMocks.getLive.mockResolvedValue({
       sessionId: "stale-session",
       tracks: staleTracks,
       userId: "user-1",
@@ -557,7 +557,7 @@ describe("worker app", () => {
 
     expect(response.status).toBe(201);
     expect(response.headers.get("protocol-version")).toBeNull();
-    expect(dbMocks.deleteTracksForSession).toHaveBeenCalledWith(
+    expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
       env.LIVE_DB,
       "user-1",
       "stale-session",
@@ -567,7 +567,7 @@ describe("worker app", () => {
       "user-1",
       "offer-sdp",
     );
-    expect(dbMocks.setTracks).toHaveBeenCalledWith(
+    expect(dbMocks.insertLive).toHaveBeenCalledWith(
       env.LIVE_DB,
       "user-1",
       "new-session",
@@ -705,7 +705,7 @@ describe("worker app", () => {
   it("rejects a new ingest when the user already has an active live", async () => {
     const env = createBindings();
 
-    dbMocks.getLiveTrackRecord.mockResolvedValue({
+    dbMocks.getLive.mockResolvedValue({
       sessionId: "active-session",
       tracks: [
         {
@@ -736,9 +736,9 @@ describe("worker app", () => {
     expect(await response.text()).toBe(
       "A live stream is already active for this user",
     );
-    expect(dbMocks.deleteTracksForSession).not.toHaveBeenCalled();
+    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
     expect(callsMocks.startIngest).not.toHaveBeenCalled();
-    expect(dbMocks.setTracks).not.toHaveBeenCalled();
+    expect(dbMocks.insertLive).not.toHaveBeenCalled();
   });
 
   it("closes publisher tracks before deleting an ingest session", async () => {
@@ -752,7 +752,7 @@ describe("worker app", () => {
       },
     ];
 
-    dbMocks.getLiveTrackRecord.mockResolvedValue({
+    dbMocks.getLive.mockResolvedValue({
       sessionId: "session-1",
       tracks,
       userId: "user-1",
@@ -773,7 +773,7 @@ describe("worker app", () => {
       "session-1",
       tracks,
     );
-    expect(dbMocks.deleteTracksForSession).toHaveBeenCalledWith(
+    expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
       env.LIVE_DB,
       "user-1",
       "session-1",
@@ -783,7 +783,7 @@ describe("worker app", () => {
   it("keeps the live row when SFU reports track close errors", async () => {
     const env = createBindings();
 
-    dbMocks.getLiveTrackRecord.mockResolvedValue({
+    dbMocks.getLive.mockResolvedValue({
       sessionId: "session-1",
       tracks: [
         {
@@ -811,13 +811,13 @@ describe("worker app", () => {
     const response = await app.fetch(request, env, createExecutionContext());
 
     expect(response.status).toBe(502);
-    expect(dbMocks.deleteTracksForSession).not.toHaveBeenCalled();
+    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
   });
 
   it("deletes the live row when SFU says tracks are already gone", async () => {
     const env = createBindings();
 
-    dbMocks.getLiveTrackRecord.mockResolvedValue({
+    dbMocks.getLive.mockResolvedValue({
       sessionId: "session-1",
       tracks: [
         {
@@ -851,7 +851,7 @@ describe("worker app", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(dbMocks.deleteTracksForSession).toHaveBeenCalledWith(
+    expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
       env.LIVE_DB,
       "user-1",
       "session-1",
@@ -861,7 +861,7 @@ describe("worker app", () => {
   it("rejects ingest deletion when the session id does not match", async () => {
     const env = createBindings();
 
-    dbMocks.getLiveTrackRecord.mockResolvedValue({
+    dbMocks.getLive.mockResolvedValue({
       sessionId: "actual-session",
       tracks: [
         {
@@ -890,13 +890,13 @@ describe("worker app", () => {
       "Session ID does not match the active live stream",
     );
     expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-    expect(dbMocks.deleteTracksForSession).not.toHaveBeenCalled();
+    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
   });
 
   it("returns 500 when stored live track data is invalid on ingest delete", async () => {
     const env = createBindings();
 
-    dbMocks.getLiveTrackRecord.mockResolvedValue({
+    dbMocks.getLive.mockResolvedValue({
       sessionId: "session-1",
       tracks: [
         {
@@ -923,7 +923,7 @@ describe("worker app", () => {
     expect(response.status).toBe(500);
     expect(await response.text()).toBe("Stored live track data is invalid");
     expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-    expect(dbMocks.deleteTracksForSession).not.toHaveBeenCalled();
+    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
   });
 
   it("returns 404 and cleans up when a stored play session is inactive", async () => {
@@ -937,7 +937,7 @@ describe("worker app", () => {
       },
     ];
 
-    dbMocks.getLiveTrackRecord.mockResolvedValue({
+    dbMocks.getLive.mockResolvedValue({
       sessionId: "live-session",
       tracks: liveTracks,
       userId: "streamer-1",
@@ -960,7 +960,7 @@ describe("worker app", () => {
       },
     ];
 
-    dbMocks.getLiveTrackRecord.mockResolvedValue({
+    dbMocks.getLive.mockResolvedValue({
       sessionId: "live-session",
       tracks: liveTracks,
       userId: "streamer-1",
@@ -1068,7 +1068,7 @@ describe("worker app", () => {
       },
     ];
 
-    dbMocks.getLiveTrackRecord.mockResolvedValue({
+    dbMocks.getLive.mockResolvedValue({
       sessionId: "live-session",
       tracks: liveTracks,
       userId: "streamer-1",
@@ -1112,7 +1112,7 @@ describe("worker app", () => {
       },
     ];
 
-    dbMocks.getLiveTrackRecord.mockResolvedValue({
+    dbMocks.getLive.mockResolvedValue({
       sessionId: "live-session",
       tracks: liveTracks,
       userId: "streamer-1",
@@ -1143,6 +1143,7 @@ describe("worker app", () => {
       liveTracks,
       "viewer-offer",
     );
+    expect(response.headers.get("Wish-Live-Track-Count")).toBe("1");
     expect(response.headers.get("access-control-expose-headers")).toBeNull();
     expect(response.headers.get("accept-patch")).toBeNull();
     expect(response.headers.get("location")).toBe(
@@ -1161,7 +1162,7 @@ describe("worker app", () => {
       },
     ];
 
-    dbMocks.getLiveTrackRecord.mockResolvedValue({
+    dbMocks.getLive.mockResolvedValue({
       sessionId: "live-session",
       tracks: liveTracks,
       userId: "streamer-1",
@@ -1197,6 +1198,7 @@ describe("worker app", () => {
 
     expect(response.status).toBe(406);
     expect(await response.text()).toBe("viewer-counter-offer-sdp");
+    expect(response.headers.get("Wish-Live-Track-Count")).toBe("1");
     expect(response.headers.get("location")).toBe(
       "http://localhost/play/streamer-1/viewer-session?mid=0",
     );

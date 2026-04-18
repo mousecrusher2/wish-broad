@@ -240,6 +240,8 @@ type TrackLocatorRequest = Pick<
   "location" | "sessionId" | "trackName"
 >;
 
+const WHIP_MAX_TRACK_COUNT = 2;
+
 function getHeaders(env: SfuEnv): Record<string, string> {
   return {
     Authorization: `Bearer ${env.CALLS_APP_SECRET}`,
@@ -703,6 +705,15 @@ export async function startIngest(
   if (!responseTracks || responseTracks.length === 0 || !sdpAnswer) {
     return err(
       new SfuApiError("SFU response did not include ingest tracks or SDP", {
+        endpoint: ingestEndpoint,
+        kind: "invalid_sfu_response",
+        responseBody: tracksResult.value,
+      }),
+    );
+  }
+  if (responseTracks.length > WHIP_MAX_TRACK_COUNT) {
+    return err(
+      new SfuApiError("WHIP does not allow more than two ingest tracks", {
         endpoint: ingestEndpoint,
         kind: "invalid_sfu_response",
         responseBody: tracksResult.value,

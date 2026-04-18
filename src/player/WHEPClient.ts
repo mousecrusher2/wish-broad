@@ -20,6 +20,12 @@ export type WHEPSessionSnapshot = {
   status: WHEPConnectionStatus;
 };
 
+export type WHEPInboundReceiverStat = {
+  bytesReceived: number;
+  id: string;
+  kind: "audio" | "video";
+};
+
 type WHEPSessionCallbacks = {
   onStatusChange?: (status: WHEPConnectionStatus) => void;
   onStreamChange?: (hasStream: boolean) => void;
@@ -36,8 +42,18 @@ type ServerSessionState =
   | { kind: "registered"; location: string };
 
 type WhepSessionResponse =
-  | { kind: "accepted"; sdp: string; sessionUrl: URL }
-  | { kind: "counterOffer"; sdp: string; sessionUrl: URL };
+  | {
+      expectedRemoteTrackCount: number | null;
+      kind: "accepted";
+      sdp: string;
+      sessionUrl: URL;
+    }
+  | {
+      expectedRemoteTrackCount: number | null;
+      kind: "counterOffer";
+      sdp: string;
+      sessionUrl: URL;
+    };
 
 type WHEPSessionErrorKind =
   | "resource_not_found"
@@ -162,13 +178,52 @@ async function parseWhepSessionResponse(
   }
 
   const sessionUrl = new URL(sessionLocation, resourceUrl);
+  const expectedRemoteTrackCountHeader = response.headers.get(
+    "Wish-Live-Track-Count",
+  );
+  const parsedExpectedRemoteTrackCount =
+    expectedRemoteTrackCountHeader === null
+      ? null
+      : Number.parseInt(expectedRemoteTrackCountHeader, 10);
+  if (expectedRemoteTrackCountHeader !== null) {
+    if (
+      !Number.isInteger(parsedExpectedRemoteTrackCount) ||
+      parsedExpectedRemoteTrackCount === null ||
+      parsedExpectedRemoteTrackCount < 1
+    ) {
+      throw new WHEPSessionError("Invalid Wish-Live-Track-Count header", {
+        kind: "unexpected_response",
+        responseText: expectedRemoteTrackCountHeader,
+        retryable: false,
+        stage: "post",
+      });
+    }
+  }
+  const expectedRemoteTrackCount: number | null =
+    expectedRemoteTrackCountHeader === null
+      ? null
+      : parsedExpectedRemoteTrackCount;
   const sdp = await readSdpResponse(response);
 
   if (response.status === 406) {
-    return { kind: "counterOffer", sdp, sessionUrl };
+    return { expectedRemoteTrackCount, kind: "counterOffer", sdp, sessionUrl };
   }
 
-  return { kind: "accepted", sdp, sessionUrl };
+  return { expectedRemoteTrackCount, kind: "accepted", sdp, sessionUrl };
+}
+
+function readInboundReceiverBytes(report: unknown): number | null {
+  if (typeof report !== "object" || report === null) {
+    return null;
+  }
+
+  const type: unknown = Reflect.get(report, "type");
+  const bytesReceived: unknown = Reflect.get(report, "bytesReceived");
+  if (type !== "inbound-rtp" || typeof bytesReceived !== "number") {
+    return null;
+  }
+
+  return bytesReceived;
 }
 
 function isIceGatheringFinished(pc: RTCPeerConnection): boolean {
@@ -240,6 +295,7 @@ export class WHEPSession {
   private readonly videoElement: HTMLVideoElement;
   private cleanupPromise: Promise<void> | null = null;
   private disposed = false;
+  private expectedRemoteTrackCount = 0;
   private hasStream = false;
   private localResourcesReleased = false;
   private maxRemoteTrackCount = 0;
@@ -299,6 +355,7 @@ export class WHEPSession {
     return {
       connectionState: this.pc.connectionState,
       expectedRemoteTrackCount: Math.max(
+        this.expectedRemoteTrackCount,
         this.maxRemoteTrackCount,
         remoteTracks.length,
       ),
@@ -310,6 +367,53 @@ export class WHEPSession {
       signalingState: this.pc.signalingState,
       status: this.status,
     };
+  }
+
+  async getInboundReceiverStats(): Promise<WHEPInboundReceiverStat[]> {
+    const statsByReceiver = await Promise.all(
+      this.pc.getReceivers().map(async (receiver) => {
+        const track = receiver.track;
+        if (track.kind !== "audio" && track.kind !== "video") {
+          return null;
+        }
+
+        const receiverStats = await receiver.getStats();
+        let bytesReceived: number | undefined;
+        receiverStats.forEach((report) => {
+          if (bytesReceived !== undefined) {
+            return;
+          }
+
+          const nextBytesReceived = readInboundReceiverBytes(report);
+          if (typeof nextBytesReceived === "number") {
+            bytesReceived = nextBytesReceived;
+          }
+        });
+
+        if (bytesReceived === undefined) {
+          return null;
+        }
+
+        const transceiver = this.pc
+          .getTransceivers()
+          .find((candidate) => candidate.receiver === receiver);
+        const id =
+          (typeof transceiver?.mid === "string" && transceiver.mid.length > 0
+            ? transceiver.mid
+            : track.id) || null;
+        if (!id) {
+          return null;
+        }
+
+        return {
+          bytesReceived,
+          id,
+          kind: track.kind,
+        } satisfies WHEPInboundReceiverStat;
+      }),
+    );
+
+    return statsByReceiver.filter((stat) => stat !== null);
   }
 
   private deriveIceConnectionStatus(
@@ -644,6 +748,9 @@ export class WHEPSession {
           return parseWhepSessionResponse(offerResponseResult.value, resourceUrl);
         });
       const sessionResponse = await this.registrationPromise;
+      if (sessionResponse.expectedRemoteTrackCount !== null) {
+        this.expectedRemoteTrackCount = sessionResponse.expectedRemoteTrackCount;
+      }
       this.serverSession = {
         kind: "registered",
         location: sessionResponse.sessionUrl.toString(),

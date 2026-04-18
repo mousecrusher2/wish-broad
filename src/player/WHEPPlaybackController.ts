@@ -1,12 +1,17 @@
-import { WHEPSession, WHEPSessionError } from "./WHEPClient";
+import {
+  WHEPSession,
+  WHEPSessionError,
+  type WHEPInboundReceiverStat,
+} from "./WHEPClient";
 import {
   type WHEPReconnectAttemptMode,
   WHEP_RECONNECT_WINDOW_MS,
-  WHEP_RETRY_PLAYBACK_START_GRACE_MS,
   WHEP_SESSION_RECOVERY_GRACE_MS,
+  WHEP_TRACK_DISCOVERY_GRACE_MS,
   getReconnectDelayMs,
   resolveReconnectDisposition,
   shouldReconnectForPlaybackStall,
+  shouldReconnectForTrackDiscoveryTimeout,
   shouldRecoverEstablishedSession,
 } from "./whep-reconnect";
 import {
@@ -24,15 +29,15 @@ type PendingAttempt = {
 
 type PlaybackMonitorState = {
   attemptId: number;
+  discoveryTimeoutId: number | null;
+  expectedTrackCount: number;
   intervalId: number | null;
-  lastCurrentTime: number;
-  mode: AttemptMode;
+  lastBytesReceivedByReceiver: Map<string, number>;
+  requiredReceiverIds: string[] | null;
+  receiverStalledForMs: Map<string, number>;
   resourceUserId: string;
-  sawPlaybackProgress: boolean;
   session: WHEPSession;
-  startGraceTimeoutId: number | null;
-  stalledForMs: number;
-  videoElement: HTMLVideoElement;
+  sync: () => void;
   cleanup: () => void;
 };
 
@@ -215,8 +220,8 @@ export class WHEPPlaybackController {
     if (playbackMonitor.intervalId !== null) {
       window.clearInterval(playbackMonitor.intervalId);
     }
-    if (playbackMonitor.startGraceTimeoutId !== null) {
-      window.clearTimeout(playbackMonitor.startGraceTimeoutId);
+    if (playbackMonitor.discoveryTimeoutId !== null) {
+      window.clearTimeout(playbackMonitor.discoveryTimeoutId);
     }
     playbackMonitor.cleanup();
     this.playbackMonitor = null;
@@ -326,7 +331,6 @@ export class WHEPPlaybackController {
   private handleConnected(
     resourceUserId: string,
     session: WHEPSession,
-    mode: AttemptMode,
   ): void {
     const currentAttemptId = this.attemptId;
     this.clearRecoveryTimer();
@@ -337,7 +341,7 @@ export class WHEPPlaybackController {
         session.getSnapshot().hasStream,
       ),
     );
-    this.startPlaybackMonitor(currentAttemptId, session, resourceUserId, mode);
+    this.startPlaybackMonitor(currentAttemptId, session, resourceUserId);
   }
 
   private updateRecoveringPlaybackState(
@@ -469,31 +473,27 @@ export class WHEPPlaybackController {
     attemptId: number,
     session: WHEPSession,
     resourceUserId: string,
-    mode: AttemptMode,
   ): void {
-    if (
-      !this.isActiveSession(attemptId, session) ||
-      this.videoElement === null
-    ) {
+    if (!this.isActiveSession(attemptId, session)) {
       return;
     }
 
     this.clearPlaybackMonitor();
 
-    const videoElement = this.videoElement;
-    const currentTime = videoElement.currentTime;
-    const sawPlaybackProgress = Number.isFinite(currentTime) && currentTime > 0;
     const playbackMonitor: PlaybackMonitorState = {
       attemptId,
+      discoveryTimeoutId: null,
+      expectedTrackCount: Math.max(
+        1,
+        session.getSnapshot().expectedRemoteTrackCount,
+      ),
       intervalId: null,
-      lastCurrentTime: currentTime,
-      mode,
+      lastBytesReceivedByReceiver: new Map(),
+      requiredReceiverIds: null,
+      receiverStalledForMs: new Map(),
       resourceUserId,
-      sawPlaybackProgress,
       session,
-      startGraceTimeoutId: null,
-      stalledForMs: 0,
-      videoElement,
+      sync: () => {},
       cleanup: () => {},
     };
 
@@ -504,81 +504,14 @@ export class WHEPPlaybackController {
       }
     };
 
-    const clearStartGraceTimeout = () => {
-      if (playbackMonitor.startGraceTimeoutId !== null) {
-        window.clearTimeout(playbackMonitor.startGraceTimeoutId);
-        playbackMonitor.startGraceTimeoutId = null;
+    const clearDiscoveryTimeout = () => {
+      if (playbackMonitor.discoveryTimeoutId !== null) {
+        window.clearTimeout(playbackMonitor.discoveryTimeoutId);
+        playbackMonitor.discoveryTimeoutId = null;
       }
     };
 
-    const markPlaybackProgress = (nextCurrentTime: number) => {
-      if (this.playbackMonitor !== playbackMonitor) {
-        return;
-      }
-
-      if (!Number.isFinite(nextCurrentTime)) {
-        return;
-      }
-
-      if (
-        nextCurrentTime > playbackMonitor.lastCurrentTime + 0.05 ||
-        (!playbackMonitor.sawPlaybackProgress && nextCurrentTime > 0)
-      ) {
-        playbackMonitor.sawPlaybackProgress = true;
-      }
-
-      clearStartGraceTimeout();
-      playbackMonitor.lastCurrentTime = nextCurrentTime;
-      playbackMonitor.stalledForMs = 0;
-
-      if (
-        this.snapshot.playbackState.phase !== "connected" ||
-        !this.snapshot.playbackState.hasStream
-      ) {
-        this.updatePlaybackState(
-          createConnectedPlaybackState(playbackMonitor.resourceUserId, true),
-        );
-      }
-    };
-
-    const tick = () => {
-      if (
-        this.playbackMonitor !== playbackMonitor ||
-        !this.isActiveSession(attemptId, session)
-      ) {
-        return;
-      }
-
-      if (
-        document.visibilityState !== "visible" ||
-        videoElement.paused ||
-        !Number.isFinite(videoElement.currentTime)
-      ) {
-        playbackMonitor.stalledForMs = 0;
-        return;
-      }
-
-      if (videoElement.currentTime > playbackMonitor.lastCurrentTime + 0.05) {
-        markPlaybackProgress(videoElement.currentTime);
-        return;
-      }
-
-      if (
-        !shouldReconnectForPlaybackStall(
-          playbackMonitor.mode,
-          playbackMonitor.sawPlaybackProgress,
-          playbackMonitor.stalledForMs + 1_000,
-        )
-      ) {
-        playbackMonitor.stalledForMs += 1_000;
-        return;
-      }
-
-      this.clearPlaybackMonitor();
-      this.updateRecoveringPlaybackState("disconnected");
-      this.disposeSession();
-      this.queueReconnect({ immediate: true });
-    };
+    let pollInFlight = false;
 
     const startInterval = () => {
       if (
@@ -591,61 +524,155 @@ export class WHEPPlaybackController {
       playbackMonitor.intervalId = window.setInterval(tick, 1_000);
     };
 
-    const handlePlaying = () => {
-      markPlaybackProgress(videoElement.currentTime);
-      startInterval();
-    };
-    const handlePause = () => {
-      stopInterval();
-      playbackMonitor.stalledForMs = 0;
-    };
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        if (!videoElement.paused) {
-          startInterval();
-        }
-      } else {
+    const syncMonitor = () => {
+      if (this.playbackMonitor !== playbackMonitor) {
+        return;
+      }
+
+      const shouldPoll = document.visibilityState === "visible";
+
+      if (!shouldPoll) {
         stopInterval();
-        playbackMonitor.stalledForMs = 0;
+        clearDiscoveryTimeout();
+        return;
+      }
+
+      startInterval();
+
+      if (
+        playbackMonitor.requiredReceiverIds === null &&
+        playbackMonitor.discoveryTimeoutId === null
+      ) {
+        playbackMonitor.discoveryTimeoutId = window.setTimeout(() => {
+          playbackMonitor.discoveryTimeoutId = null;
+
+          if (
+            this.playbackMonitor !== playbackMonitor ||
+            !this.isActiveSession(attemptId, session) ||
+            playbackMonitor.requiredReceiverIds !== null
+          ) {
+            return;
+          }
+
+          if (
+            !shouldReconnectForTrackDiscoveryTimeout(
+              WHEP_TRACK_DISCOVERY_GRACE_MS,
+            )
+          ) {
+            return;
+          }
+
+          this.clearPlaybackMonitor();
+          this.updateRecoveringPlaybackState("disconnected");
+          this.disposeSession();
+          this.queueReconnect({ immediate: true });
+        }, WHEP_TRACK_DISCOVERY_GRACE_MS);
       }
     };
-    videoElement.addEventListener("playing", handlePlaying);
-    videoElement.addEventListener("pause", handlePause);
+
+    const initializeRequiredReceivers = (
+      receiverStats: WHEPInboundReceiverStat[],
+    ) => {
+      if (
+        this.playbackMonitor !== playbackMonitor ||
+        !this.isActiveSession(attemptId, session)
+      ) {
+        return;
+      }
+
+      playbackMonitor.requiredReceiverIds = receiverStats.map((stat) => stat.id);
+      playbackMonitor.lastBytesReceivedByReceiver.clear();
+      playbackMonitor.receiverStalledForMs.clear();
+      for (const receiverStat of receiverStats) {
+        playbackMonitor.lastBytesReceivedByReceiver.set(
+          receiverStat.id,
+          receiverStat.bytesReceived,
+        );
+        playbackMonitor.receiverStalledForMs.set(receiverStat.id, 0);
+      }
+      clearDiscoveryTimeout();
+    };
+
+    const tick = () => {
+      if (
+        this.playbackMonitor !== playbackMonitor ||
+        !this.isActiveSession(attemptId, session) ||
+        document.visibilityState !== "visible" ||
+        pollInFlight
+      ) {
+        return;
+      }
+
+      pollInFlight = true;
+      void session
+        .getInboundReceiverStats()
+        .then((receiverStats) => {
+          if (
+            this.playbackMonitor !== playbackMonitor ||
+            !this.isActiveSession(attemptId, session)
+          ) {
+            return;
+          }
+
+          if (playbackMonitor.requiredReceiverIds === null) {
+            if (receiverStats.length < playbackMonitor.expectedTrackCount) {
+              return;
+            }
+
+            initializeRequiredReceivers(receiverStats);
+            return;
+          }
+
+          const receiverStatsById = new Map(
+            receiverStats.map((receiverStat) => [receiverStat.id, receiverStat]),
+          );
+
+          for (const receiverId of playbackMonitor.requiredReceiverIds) {
+            const receiverStat = receiverStatsById.get(receiverId);
+            const previousBytesReceived =
+              playbackMonitor.lastBytesReceivedByReceiver.get(receiverId) ?? 0;
+            const nextStalledForMs =
+              receiverStat === undefined ||
+              receiverStat.bytesReceived <= previousBytesReceived
+                ? (playbackMonitor.receiverStalledForMs.get(receiverId) ?? 0) +
+                  1_000
+                : 0;
+
+            if (receiverStat !== undefined) {
+              playbackMonitor.lastBytesReceivedByReceiver.set(
+                receiverId,
+                receiverStat.bytesReceived,
+              );
+            }
+            playbackMonitor.receiverStalledForMs.set(receiverId, nextStalledForMs);
+
+            if (!shouldReconnectForPlaybackStall(nextStalledForMs)) {
+              continue;
+            }
+
+            this.clearPlaybackMonitor();
+            this.updateRecoveringPlaybackState("disconnected");
+            this.disposeSession();
+            this.queueReconnect({ immediate: true });
+            return;
+          }
+        })
+        .finally(() => {
+          pollInFlight = false;
+        });
+    };
+
+    const handleVisibilityChange = () => {
+      syncMonitor();
+    };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     playbackMonitor.cleanup = () => {
-      videoElement.removeEventListener("playing", handlePlaying);
-      videoElement.removeEventListener("pause", handlePause);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
 
     this.playbackMonitor = playbackMonitor;
-
-    if (!playbackMonitor.sawPlaybackProgress && playbackMonitor.mode === "retry") {
-      playbackMonitor.startGraceTimeoutId = window.setTimeout(() => {
-        playbackMonitor.startGraceTimeoutId = null;
-
-        if (
-          this.playbackMonitor !== playbackMonitor ||
-          !this.isActiveSession(attemptId, session) ||
-          playbackMonitor.sawPlaybackProgress
-        ) {
-          return;
-        }
-
-        this.clearPlaybackMonitor();
-        this.updateRecoveringPlaybackState("disconnected");
-        this.disposeSession();
-        this.queueReconnect({ immediate: true });
-      }, WHEP_RETRY_PLAYBACK_START_GRACE_MS);
-    }
-
-    if (
-      document.visibilityState === "visible" &&
-      !videoElement.paused &&
-      playbackMonitor.sawPlaybackProgress
-    ) {
-      startInterval();
-    }
+    playbackMonitor.sync = syncMonitor;
+    syncMonitor();
   }
 
   private async startAttempt({
@@ -683,7 +710,7 @@ export class WHEPPlaybackController {
 
           if (status === "connected") {
             sessionWasConnected = true;
-            this.handleConnected(resourceUserId, session, mode);
+            this.handleConnected(resourceUserId, session);
             return;
           }
 
@@ -743,7 +770,7 @@ export class WHEPPlaybackController {
 
       if (session.getSnapshot().status === "connected") {
         sessionWasConnected = true;
-        this.handleConnected(resourceUserId, session, mode);
+        this.handleConnected(resourceUserId, session);
       }
     } finally {
       if (mode === "initial" && this.loadingAttemptId === attemptId) {

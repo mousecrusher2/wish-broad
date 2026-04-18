@@ -8,6 +8,8 @@
 
 Run `pnpm install` after cloning. Use `pnpm dev` for the Vite client, `pnpm dev:worker` for a local Worker-only session, and `pnpm dev:full` when you need Wrangler to serve the integrated app. Run `pnpm build` to type-check and bundle the frontend. Run `pnpm check` before opening a PR; it executes TypeScript and ESLint. Use `pnpm format` to apply Prettier defaults repo-wide. `pnpm deploy` publishes the Worker and static assets to Cloudflare.
 
+Do not invoke executables under `node_modules/` directly, including `.cmd` or `.ps1` shims. Always use `pnpm run <script>` for package scripts or `pnpm exec <binary>` for package binaries. In this environment, `pnpm exec ...` may fail under the sandbox and should be rerun with elevated permissions instead of falling back to direct `node_modules` executables.
+
 ## Coding Style & Naming Conventions
 
 This repo uses TypeScript ES modules with Prettier defaults: 2-space indentation, semicolons, and double quotes. Follow existing naming: PascalCase for React components (`WHEPPlayer.tsx`), camelCase for utilities, and `useX` for hooks (`useLiveStreams.ts`). Keep protected frontend requests relative to origin, for example `fetch("/api/me", { credentials: "include" })`. Put new SQL access in `worker/database.ts` rather than scattering queries across route handlers.

@@ -131,7 +131,7 @@ app.post("/ingest/:userId", async (c) => {
     return c.text("SDP offer is required", 400);
   }
 
-  const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
+  const existingLive = await db.getLive(c.env.LIVE_DB, userId);
   if (existingLive) {
     const isActiveResult = await isSessionActive(c.env, existingLive.sessionId);
     if (isActiveResult.isErr()) {
@@ -146,7 +146,7 @@ app.post("/ingest/:userId", async (c) => {
       return c.text("A live stream is already active for this user", 400);
     }
 
-    await db.deleteTracksForSession(
+    await db.deleteLiveForSession(
       c.env.LIVE_DB,
       userId,
       existingLive.sessionId,
@@ -171,7 +171,7 @@ app.post("/ingest/:userId", async (c) => {
 
   const result = ingestResult.value;
   // トラック情報をデータベースに保存（session_idも含める）
-  await db.setTracks(c.env.LIVE_DB, userId, result.sessionId, result.tracks);
+  await db.insertLive(c.env.LIVE_DB, userId, result.sessionId, result.tracks);
 
   return c.body(result.sdpAnswer, 201, {
     "content-type": "application/sdp",
@@ -189,7 +189,7 @@ app.get("/ingest/:userId/:sessionId", async () => {
 app.delete("/ingest/:userId/:sessionId", async (c) => {
   const { userId, sessionId } = c.req.param();
 
-  const existingLive = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
+  const existingLive = await db.getLive(c.env.LIVE_DB, userId);
   if (!existingLive) {
     return c.text("No live stream found for this user", 400);
   }
@@ -225,7 +225,7 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     return c.text("Failed to close live tracks", 502);
   }
 
-  const deleted = await db.deleteTracksForSession(
+  const deleted = await db.deleteLiveForSession(
     c.env.LIVE_DB,
     userId,
     sessionId,
@@ -280,7 +280,7 @@ app.post("/play/:userId", async (c) => {
   );
 
   // SFU APIクライアントを初期化
-  const liveTrackRecord = await db.getLiveTrackRecord(c.env.LIVE_DB, userId);
+  const liveTrackRecord = await db.getLive(c.env.LIVE_DB, userId);
   const tracks = liveTrackRecord?.tracks ?? [];
   let hasActiveSession = false;
   if (liveTrackRecord) {
@@ -296,7 +296,7 @@ app.post("/play/:userId", async (c) => {
   }
 
   if (liveTrackRecord && !hasActiveSession) {
-    await db.deleteTracksForSession(
+    await db.deleteLiveForSession(
       c.env.LIVE_DB,
       userId,
       liveTrackRecord.sessionId,
@@ -316,16 +316,12 @@ app.post("/play/:userId", async (c) => {
   const playResult = await startPlay(c.env, userId, tracks, sdpOffer);
   if (playResult.isErr()) {
     const error = playResult.error;
-    console.error(
-      `Failed to start play for user ${userId} by user ${jwtPayload.userId}:`,
-      error,
-    );
     if (error instanceof LiveNotFoundError) {
       return c.text(`Live stream not found: ${userId}`, 404);
     }
     if (error instanceof SfuApiError && error.isSessionNotFound()) {
       if (liveTrackRecord) {
-        await db.deleteTracksForSession(
+        await db.deleteLiveForSession(
           c.env.LIVE_DB,
           userId,
           liveTrackRecord.sessionId,
@@ -333,6 +329,10 @@ app.post("/play/:userId", async (c) => {
       }
       return c.text(`Live stream not found: ${userId}`, 404);
     }
+    console.error(
+      `Failed to start play for user ${userId} by user ${jwtPayload.userId}:`,
+      error,
+    );
     if (error instanceof SfuApiError) {
       const negotiationError = error.toNegotiationClientError(
         "Failed to negotiate playback session",
@@ -347,9 +347,14 @@ app.post("/play/:userId", async (c) => {
 
   const result = playResult.value;
   const status = result.sdpType === "offer" ? 406 : 201;
+  // Use the stored live track count, not the negotiated playback track count.
+  // If playback only negotiates a subset, treat it as incomplete and let the
+  // client reconnect instead of accepting the degraded session as healthy.
+  const expectedTrackCount = tracks.length;
 
   return c.body(result.sdpAnswer, status, {
     "content-type": "application/sdp",
+    "Wish-Live-Track-Count": String(expectedTrackCount),
     etag: `"${result.sessionId}"`,
     location: createPlaySessionLocation(
       c.req.url,

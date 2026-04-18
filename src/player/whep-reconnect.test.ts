@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { WHEPSessionError } from "./WHEPClient";
 import {
   WHEP_RECONNECT_WINDOW_MS,
+  WHEP_TRACK_DISCOVERY_GRACE_MS,
   getReconnectDelayMs,
   resolveReconnectDisposition,
   shouldReconnectForPlaybackStall,
+  shouldReconnectForTrackDiscoveryTimeout,
   shouldRecoverEstablishedSession,
 } from "./whep-reconnect";
 
@@ -104,14 +106,18 @@ describe("whep-reconnect", () => {
     ).toBe(true);
   });
 
-  it("reconnects only for real playback stalls", () => {
-    expect(shouldReconnectForPlaybackStall("initial", false, 10_000)).toBe(
-      false,
-    );
-    expect(shouldReconnectForPlaybackStall("retry", false, 4_000)).toBe(false);
-    expect(shouldReconnectForPlaybackStall("retry", false, 5_000)).toBe(true);
-    expect(shouldReconnectForPlaybackStall("initial", true, 4_000)).toBe(true);
-    expect(shouldReconnectForPlaybackStall("retry", true, 4_000)).toBe(true);
+  it("reconnects after three seconds without new frames", () => {
+    expect(shouldReconnectForPlaybackStall(0)).toBe(false);
+    expect(shouldReconnectForPlaybackStall(999)).toBe(false);
+    expect(shouldReconnectForPlaybackStall(1_000)).toBe(false);
+    expect(shouldReconnectForPlaybackStall(2_999)).toBe(false);
+    expect(shouldReconnectForPlaybackStall(3_000)).toBe(true);
+  });
+
+  it("waits for all expected tracks before reconnecting", () => {
+    expect(WHEP_TRACK_DISCOVERY_GRACE_MS).toBe(15_000);
+    expect(shouldReconnectForTrackDiscoveryTimeout(14_999)).toBe(false);
+    expect(shouldReconnectForTrackDiscoveryTimeout(15_000)).toBe(true);
   });
 
   it("keeps the reconnect window at thirty seconds", () => {

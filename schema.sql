@@ -1,7 +1,7 @@
 -- D1データベースのスキーマ
 -- useridにつき1行で、StoredTrack配列のJSONを保存する
 -- useridはlive_idと同一
-CREATE TABLE IF NOT EXISTS live_tracks (
+CREATE TABLE IF NOT EXISTS lives (
     user_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     tracks_json TEXT NOT NULL
