@@ -53,10 +53,11 @@ type CloseTracksResponse = {
   tracks?: ClosedTrack[] | undefined;
 };
 
-type SfuNegotiationClientStatus = 400 | 415 | 422;
+type SfuNegotiationClientStatus = 400 | 415 | 422 | 504;
 
 type SfuApiErrorKind =
   | "request_failed"
+  | "request_timeout"
   | "bad_request"
   | "unsupported_media_type"
   | "unprocessable_content"
@@ -181,6 +182,9 @@ export class SfuApiError extends Error {
     if (this.kind === "unprocessable_content") {
       return { status: 422, text };
     }
+    if (this.kind === "request_timeout") {
+      return { status: 504, text };
+    }
 
     return null;
   }
@@ -241,6 +245,7 @@ type TrackLocatorRequest = Pick<
 >;
 
 const WHIP_MAX_TRACK_COUNT = 2;
+const SFU_FETCH_TIMEOUT_MS = 8_000;
 
 function getHeaders(env: SfuEnv): Record<string, string> {
   return {
@@ -248,22 +253,42 @@ function getHeaders(env: SfuEnv): Record<string, string> {
   };
 }
 
+function isAbortError(error: Error): boolean {
+  return error.name === "AbortError";
+}
+
 async function fetchSfu(
   endpoint: string,
   init: RequestInit,
 ): Promise<Result<Response, SfuFailure>> {
-  return fetch(endpoint, init)
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => {
+    abortController.abort();
+  }, SFU_FETCH_TIMEOUT_MS);
+
+  return fetch(endpoint, {
+    ...init,
+    signal: abortController.signal,
+  })
     .then((response) => ok(response))
-    .catch((error: Error) =>
-      err(
+    .catch((error: Error) => {
+      const kind: SfuApiErrorKind = isAbortError(error)
+        ? "request_timeout"
+        : "request_failed";
+      return err(
         {
-          message: "SFU request failed",
+          message: isAbortError(error)
+            ? "SFU request timed out"
+            : "SFU request failed",
           endpoint,
-          kind: "request_failed",
+          kind,
           responseBody: error.message,
         },
-      ),
-    );
+      );
+    })
+    .finally(() => {
+      clearTimeout(timeoutId);
+    });
 }
 
 function normalizeTrackLocator(track: TrackLocator): TrackLocatorRequest {

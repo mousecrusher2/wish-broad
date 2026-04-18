@@ -34,9 +34,11 @@ const DISCORD_OAUTH_SCOPES = [
 
 export const DISCORD_STATE_COOKIE_NAME = "discord_oauth_state";
 export const DISCORD_STATE_MAX_AGE_SECONDS = 60 * 10;
+const DISCORD_FETCH_TIMEOUT_MS = 10_000;
 
 type DiscordApiErrorKind =
   | "request_failed"
+  | "request_timeout"
   | "unauthorized"
   | "forbidden"
   | "not_found"
@@ -160,22 +162,49 @@ function createDiscordBasicAuthHeader(env: DiscordEnv): string {
   return `Basic ${btoa(credentials)}`;
 }
 
+function isAbortError(error: Error): boolean {
+  return error.name === "AbortError";
+}
+
+async function fetchDiscordWithTimeout(
+  endpoint: string,
+  init: RequestInit,
+): Promise<Result<Response, DiscordApiError>> {
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => {
+    abortController.abort();
+  }, DISCORD_FETCH_TIMEOUT_MS);
+
+  return fetch(endpoint, {
+    ...init,
+    signal: abortController.signal,
+  })
+    .then((response) => ok(response))
+    .catch((error: Error) =>
+      err(
+        new DiscordApiError(
+          isAbortError(error)
+            ? "Discord request timed out"
+            : error.message,
+          {
+            endpoint,
+            kind: isAbortError(error) ? "request_timeout" : "request_failed",
+          },
+        ),
+      ),
+    )
+    .finally(() => {
+      clearTimeout(timeoutId);
+    });
+}
+
 async function fetchDiscordJson<TInput, TOutput>(
   endpoint: string,
   init: RequestInit,
   schema: v.GenericSchema<unknown, TInput>,
   mapParsed: (parsed: TInput) => TOutput,
 ): Promise<Result<TOutput, DiscordApiError>> {
-  const responseResult = await fetch(endpoint, init)
-    .then((response) => ok(response))
-    .catch((error: Error) =>
-      err(
-        new DiscordApiError(error.message, {
-          endpoint,
-          kind: "request_failed",
-        }),
-      ),
-    );
+  const responseResult = await fetchDiscordWithTimeout(endpoint, init);
   if (responseResult.isErr()) {
     return err(responseResult.error);
   }
@@ -234,16 +263,7 @@ async function fetchDiscord(
   endpoint: string,
   init: RequestInit,
 ): Promise<Result<Response, DiscordApiError>> {
-  return fetch(endpoint, init)
-    .then((response) => ok(response))
-    .catch((error: Error) =>
-      err(
-        new DiscordApiError(error.message, {
-          endpoint,
-          kind: "request_failed",
-        }),
-      ),
-    );
+  return fetchDiscordWithTimeout(endpoint, init);
 }
 
 export function createOAuthState(): string {

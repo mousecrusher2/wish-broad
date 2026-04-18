@@ -25,7 +25,7 @@ const sonarjsRecommendedConfig = sonarjs.configs?.recommended ?? {
 };
 
 export default [
-  { ignores: ["dist", "worker-configuration.d.ts"] },
+  { ignores: ["debug", "dist", "worker-configuration.d.ts"] },
   js.configs.recommended,
   ...tsTypeCheckedConfigs,
   sonarjsRecommendedConfig,

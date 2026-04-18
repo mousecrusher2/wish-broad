@@ -96,4 +96,29 @@ describe("worker discord helpers", () => {
       statusText: "Bad Gateway",
     });
   });
+
+  it("returns a timeout error result when the Discord request is aborted", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(
+      new DOMException("The operation was aborted", "AbortError"),
+    );
+
+    const result = await exchangeCodeForToken(
+      {
+        DISCORD_CLIENT_ID: "client-id",
+        DISCORD_CLIENT_SECRET: "client-secret",
+      },
+      "auth-code",
+      "https://example.com/login",
+    );
+
+    expect(result.isErr()).toBe(true);
+    if (result.isOk()) {
+      throw new Error("Expected token exchange to fail");
+    }
+
+    expect(result.error).toMatchObject({
+      endpoint: "https://discord.com/api/v10/oauth2/token",
+      kind: "request_timeout",
+    });
+  });
 });
