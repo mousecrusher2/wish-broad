@@ -34,6 +34,10 @@ const callsMocks = vi.hoisted(() => {
   };
 });
 
+const notificationsMocks = vi.hoisted(() => ({
+  sendLiveStartedNotification: vi.fn<() => Promise<unknown>>(),
+}));
+
 const discordMocks = vi.hoisted(() => {
   class MockDiscordApiError extends Error {
     readonly endpoint: string;
@@ -138,6 +142,9 @@ vi.mock("./discord", () => ({
   getGuildMember: discordMocks.getGuildMember,
   revokeAccessToken: discordMocks.revokeAccessToken,
 }));
+vi.mock("./notifications", () => ({
+  sendLiveStartedNotification: notificationsMocks.sendLiveStartedNotification,
+}));
 
 import app from "./index";
 
@@ -205,6 +212,23 @@ function createExecutionContext(): ExecutionContext {
   };
 }
 
+function createObservedExecutionContext(): {
+  context: ExecutionContext;
+  waitUntilPromises: Promise<unknown>[];
+} {
+  const waitUntilPromises: Promise<unknown>[] = [];
+  return {
+    context: {
+      passThroughOnException() {},
+      waitUntil(promise: Promise<unknown>) {
+        waitUntilPromises.push(promise);
+      },
+      props: undefined,
+    },
+    waitUntilPromises,
+  };
+}
+
 function createBindings(): Bindings {
   return {
     AUTHORIZED_GUILD_ID: "guild-1",
@@ -216,6 +240,8 @@ function createBindings(): Bindings {
     JWT_SECRET: "test-jwt-secret",
     LIVE_DB: createUnusedD1Database(),
     LIVE_TOKEN_PEPPER: "test-live-token-pepper",
+    NOTIFICATIONS_DISCORD_WEBHOOK_URL:
+      "https://discord.com/api/webhooks/123/token",
   };
 }
 
@@ -356,6 +382,8 @@ describe("worker app", () => {
         ],
       }),
     );
+    notificationsMocks.sendLiveStartedNotification.mockReset();
+    notificationsMocks.sendLiveStartedNotification.mockResolvedValue(ok(undefined));
   });
 
   it("redirects to Discord when login starts", async () => {
@@ -580,7 +608,73 @@ describe("worker app", () => {
         },
       ],
     );
+    expect(notificationsMocks.sendLiveStartedNotification).toHaveBeenCalledWith(
+      env,
+      "user-1",
+      "http://localhost/",
+    );
     expect(response.headers.get("location")).toBe("/ingest/user-1/new-session");
+  });
+
+  it("schedules the live start notification via waitUntil", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+
+    const response = await app.fetch(
+      new Request("https://wish-broad.example/ingest/user-1", {
+        body: "offer-sdp",
+        headers: {
+          Authorization: "Bearer live-token",
+          "Content-Type": "application/sdp",
+        },
+        method: "POST",
+      }),
+      env,
+      execution.context,
+    );
+
+    expect(response.status).toBe(201);
+    expect(execution.waitUntilPromises).toHaveLength(1);
+
+    await Promise.all(execution.waitUntilPromises);
+
+    expect(notificationsMocks.sendLiveStartedNotification).toHaveBeenCalledWith(
+      env,
+      "user-1",
+      "https://wish-broad.example/",
+    );
+  });
+
+  it("keeps ingest successful when the live start notification fails", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    notificationsMocks.sendLiveStartedNotification.mockResolvedValue(
+      err(new Error("webhook failed")),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1", {
+        body: "offer-sdp",
+        headers: {
+          Authorization: "Bearer live-token",
+          "Content-Type": "application/sdp",
+        },
+        method: "POST",
+      }),
+      env,
+      execution.context,
+    );
+
+    expect(response.status).toBe(201);
+
+    await Promise.all(execution.waitUntilPromises);
+
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      "Failed to send live start notification for user user-1 session new-session:",
+      expect.any(Error),
+    );
   });
 
   it("returns 204 for GET on the WHIP endpoint", async () => {
@@ -642,6 +736,7 @@ describe("worker app", () => {
 
   it("returns SFU client errors for invalid ingest offers", async () => {
     const env = createBindings();
+    const execution = createObservedExecutionContext();
 
     callsMocks.startIngest.mockResolvedValue(
       err(
@@ -664,11 +759,13 @@ describe("worker app", () => {
         method: "POST",
       }),
       env,
-      createExecutionContext(),
+      execution.context,
     );
 
     expect(response.status).toBe(422);
     expect(await response.text()).toBe("Malformed SDP offer");
+    expect(notificationsMocks.sendLiveStartedNotification).not.toHaveBeenCalled();
+    expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
   it("keeps SFU auth failures as worker errors during ingest", async () => {
@@ -704,6 +801,7 @@ describe("worker app", () => {
 
   it("rejects a new ingest when the user already has an active live", async () => {
     const env = createBindings();
+    const execution = createObservedExecutionContext();
 
     dbMocks.getLive.mockResolvedValue({
       sessionId: "active-session",
@@ -729,7 +827,7 @@ describe("worker app", () => {
         method: "POST",
       }),
       env,
-      createExecutionContext(),
+      execution.context,
     );
 
     expect(response.status).toBe(400);
@@ -739,6 +837,33 @@ describe("worker app", () => {
     expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
     expect(callsMocks.startIngest).not.toHaveBeenCalled();
     expect(dbMocks.insertLive).not.toHaveBeenCalled();
+    expect(notificationsMocks.sendLiveStartedNotification).not.toHaveBeenCalled();
+    expect(execution.waitUntilPromises).toHaveLength(0);
+  });
+
+  it("does not schedule a notification when persisting the live row fails", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+
+    dbMocks.insertLive.mockRejectedValue(new Error("insert failed"));
+
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1", {
+        body: "offer-sdp",
+        headers: {
+          Authorization: "Bearer live-token",
+          "Content-Type": "application/sdp",
+        },
+        method: "POST",
+      }),
+      env,
+      execution.context,
+    );
+
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe("Internal Server Error");
+    expect(notificationsMocks.sendLiveStartedNotification).not.toHaveBeenCalled();
+    expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
   it("closes publisher tracks before deleting an ingest session", async () => {

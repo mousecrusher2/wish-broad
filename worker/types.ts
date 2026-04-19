@@ -5,6 +5,4 @@ export type JWTPayload = {
   displayName: string;
 };
 
-export type Bindings = CloudflareBindings & {
-  LIVE_TOKEN_PEPPER: string;
-};
+export type Bindings = CloudflareBindings;

@@ -22,6 +22,7 @@ import { hashedBearerAuth } from "./hashed-bearer-auth";
 import { logger } from "hono/logger";
 import { HTTPException } from "hono/http-exception";
 import { jwt } from "hono/jwt";
+import { sendLiveStartedNotification } from "./notifications";
 import { hashTokenWithPepper } from "./token-hash";
 
 type AppEnv = {
@@ -50,6 +51,10 @@ function createPlaySessionLocation(
   }
 
   return sessionUrl.toString();
+}
+
+function createSiteRootLocation(requestUrl: string): string {
+  return new URL("/", requestUrl).toString();
 }
 
 function getRequestedTrackMids(requestUrl: string): string[] {
@@ -172,6 +177,21 @@ app.post("/ingest/:userId", async (c) => {
   const result = ingestResult.value;
   // トラック情報をデータベースに保存（session_idも含める）
   await db.insertLive(c.env.LIVE_DB, userId, result.sessionId, result.tracks);
+
+  c.executionCtx.waitUntil(
+    sendLiveStartedNotification(
+      c.env,
+      userId,
+      createSiteRootLocation(c.req.url),
+    ).then((notificationResult) => {
+      if (notificationResult.isErr()) {
+        console.warn(
+          `Failed to send live start notification for user ${userId} session ${result.sessionId}:`,
+          notificationResult.error,
+        );
+      }
+    }),
+  );
 
   return c.body(result.sdpAnswer, 201, {
     "content-type": "application/sdp",
