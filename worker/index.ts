@@ -74,6 +74,35 @@ function createWhepCloseTracks(
   }));
 }
 
+function scheduleTrackClose(
+  c: Context<AppEnv>,
+  sessionId: string,
+  tracks: StoredTrack[],
+  failureLabel: string,
+  errorLabel: string,
+): void {
+  c.executionCtx.waitUntil(
+    closeTracks(c.env, sessionId, tracks).then((closeResult) => {
+      if (closeResult.isErr()) {
+        if (
+          closeResult.error.kind !== "session_not_found" &&
+          closeResult.error.kind !== "session_gone"
+        ) {
+          console.warn(failureLabel, closeResult.error);
+        }
+        return;
+      }
+
+      if (
+        closeResult.value.errorCode ||
+        closeResult.value.tracks?.some((track) => track.errorCode)
+      ) {
+        console.warn(errorLabel, closeResult.value);
+      }
+    }),
+  );
+}
+
 function isSdpContentType(contentType: string | undefined): boolean {
   if (!contentType) {
     return false;
@@ -225,26 +254,6 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     return c.text("Stored live track data is invalid", 500);
   }
 
-  const closeResult = await closeTracks(c.env, sessionId, existingLive.tracks);
-  if (closeResult.isErr()) {
-    if (!closeResult.error.isSessionNotFound()) {
-      console.error(
-        `Failed to close live tracks for user ${userId}:`,
-        closeResult.error,
-      );
-      return c.text("Failed to close live tracks", 502);
-    }
-  } else if (
-    closeResult.value.errorCode ||
-    closeResult.value.tracks?.some((track) => track.errorCode)
-  ) {
-    console.error(
-      `SFU reported track close errors for user ${userId}:`,
-      closeResult.value,
-    );
-    return c.text("Failed to close live tracks", 502);
-  }
-
   const deleted = await db.deleteLiveForSession(
     c.env.LIVE_DB,
     userId,
@@ -253,6 +262,14 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
   if (!deleted) {
     return c.text("Failed to delete the requested live stream", 400);
   }
+
+  scheduleTrackClose(
+    c,
+    sessionId,
+    existingLive.tracks,
+    `Failed to close live tracks for user ${userId}:`,
+    `SFU reported track close errors for user ${userId}:`,
+  );
 
   return c.text("OK", 200);
 });
@@ -398,32 +415,13 @@ app
       return c.text("WHEP session track mids are required", 400);
     }
 
-    const closeResult = await closeTracks(
-      c.env,
+    scheduleTrackClose(
+      c,
       sessionId,
       createWhepCloseTracks(sessionId, mids),
+      `Failed to close WHEP session ${sessionId}:`,
+      `SFU reported WHEP session close errors for session ${sessionId}:`,
     );
-    if (closeResult.isErr()) {
-      if (
-        closeResult.error.kind !== "session_not_found" &&
-        closeResult.error.kind !== "session_gone"
-      ) {
-        console.error(
-          `Failed to close WHEP session ${sessionId}:`,
-          closeResult.error,
-        );
-        return c.text("Failed to close WHEP session", 502);
-      }
-    } else if (
-      closeResult.value.errorCode ||
-      closeResult.value.tracks?.some((track) => track.errorCode)
-    ) {
-      console.error(
-        `SFU reported WHEP session close errors for session ${sessionId}:`,
-        closeResult.value,
-      );
-      return c.text("Failed to close WHEP session", 502);
-    }
 
     return c.body(null, 200);
   }) // ICE候補やセッション再交渉用のPATCHエンドポイント

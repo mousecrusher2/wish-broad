@@ -868,6 +868,7 @@ describe("worker app", () => {
 
   it("closes publisher tracks before deleting an ingest session", async () => {
     const env = createBindings();
+    const execution = createObservedExecutionContext();
     const tracks: StoredTrack[] = [
       {
         location: "remote",
@@ -890,23 +891,29 @@ describe("worker app", () => {
       method: "DELETE",
     });
 
-    const response = await app.fetch(request, env, createExecutionContext());
+    const response = await app.fetch(request, env, execution.context);
 
     expect(response.status).toBe(200);
-    expect(callsMocks.closeTracks).toHaveBeenCalledWith(
-      env,
-      "session-1",
-      tracks,
-    );
     expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
       env.LIVE_DB,
       "user-1",
       "session-1",
     );
+    expect(execution.waitUntilPromises).toHaveLength(1);
+
+    await Promise.all(execution.waitUntilPromises);
+
+    expect(callsMocks.closeTracks).toHaveBeenCalledWith(
+      env,
+      "session-1",
+      tracks,
+    );
   });
 
-  it("keeps the live row when SFU reports track close errors", async () => {
+  it("returns success and logs when ingest close reports track errors", async () => {
     const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     dbMocks.getLive.mockResolvedValue({
       sessionId: "session-1",
@@ -933,14 +940,28 @@ describe("worker app", () => {
       method: "DELETE",
     });
 
-    const response = await app.fetch(request, env, createExecutionContext());
+    const response = await app.fetch(request, env, execution.context);
 
-    expect(response.status).toBe(502);
-    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
+      env.LIVE_DB,
+      "user-1",
+      "session-1",
+    );
+
+    await Promise.all(execution.waitUntilPromises);
+
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      "SFU reported track close errors for user user-1:",
+      {
+        tracks: [{ errorCode: "failed_to_close", mid: "0" }],
+      },
+    );
   });
 
-  it("deletes the live row when SFU says tracks are already gone", async () => {
+  it("returns success when ingest close says tracks are already gone", async () => {
     const env = createBindings();
+    const execution = createObservedExecutionContext();
 
     dbMocks.getLive.mockResolvedValue({
       sessionId: "session-1",
@@ -972,7 +993,7 @@ describe("worker app", () => {
         method: "DELETE",
       }),
       env,
-      createExecutionContext(),
+      execution.context,
     );
 
     expect(response.status).toBe(200);
@@ -981,10 +1002,13 @@ describe("worker app", () => {
       "user-1",
       "session-1",
     );
+
+    await Promise.all(execution.waitUntilPromises);
   });
 
   it("rejects ingest deletion when the session id does not match", async () => {
     const env = createBindings();
+    const execution = createObservedExecutionContext();
 
     dbMocks.getLive.mockResolvedValue({
       sessionId: "actual-session",
@@ -1007,7 +1031,7 @@ describe("worker app", () => {
         method: "DELETE",
       }),
       env,
-      createExecutionContext(),
+      execution.context,
     );
 
     expect(response.status).toBe(400);
@@ -1016,10 +1040,12 @@ describe("worker app", () => {
     );
     expect(callsMocks.closeTracks).not.toHaveBeenCalled();
     expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
+    expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
   it("returns 500 when stored live track data is invalid on ingest delete", async () => {
     const env = createBindings();
+    const execution = createObservedExecutionContext();
 
     dbMocks.getLive.mockResolvedValue({
       sessionId: "session-1",
@@ -1042,13 +1068,49 @@ describe("worker app", () => {
         method: "DELETE",
       }),
       env,
-      createExecutionContext(),
+      execution.context,
     );
 
     expect(response.status).toBe(500);
     expect(await response.text()).toBe("Stored live track data is invalid");
     expect(callsMocks.closeTracks).not.toHaveBeenCalled();
     expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
+    expect(execution.waitUntilPromises).toHaveLength(0);
+  });
+
+  it("does not schedule ingest close when deleting the live row fails", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+
+    dbMocks.getLive.mockResolvedValue({
+      sessionId: "session-1",
+      tracks: [
+        {
+          location: "remote",
+          mid: "0",
+          sessionId: "session-1",
+          trackName: "video",
+        },
+      ],
+      userId: "user-1",
+    });
+    dbMocks.deleteLiveForSession.mockResolvedValue(false);
+
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1/session-1", {
+        headers: {
+          Authorization: "Bearer live-token",
+        },
+        method: "DELETE",
+      }),
+      env,
+      execution.context,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("Failed to delete the requested live stream");
+    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
+    expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
   it("returns 404 and cleans up when a stored play session is inactive", async () => {
@@ -1332,6 +1394,7 @@ describe("worker app", () => {
 
   it("closes WHEP playback tracks on DELETE", async () => {
     const env = createBindings();
+    const execution = createObservedExecutionContext();
 
     const response = await app.fetch(
       new Request("http://localhost/play/streamer-1/viewer-session?mid=0", {
@@ -1341,10 +1404,15 @@ describe("worker app", () => {
         method: "DELETE",
       }),
       env,
-      createExecutionContext(),
+      execution.context,
     );
 
     expect(response.status).toBe(200);
+
+    expect(execution.waitUntilPromises).toHaveLength(1);
+
+    await Promise.all(execution.waitUntilPromises);
+
     expect(callsMocks.closeTracks).toHaveBeenCalledWith(env, "viewer-session", [
       {
         location: "remote",
@@ -1357,6 +1425,7 @@ describe("worker app", () => {
 
   it("rejects WHEP playback DELETE without track mids", async () => {
     const env = createBindings();
+    const execution = createObservedExecutionContext();
 
     const response = await app.fetch(
       new Request("http://localhost/play/streamer-1/viewer-session", {
@@ -1366,12 +1435,47 @@ describe("worker app", () => {
         method: "DELETE",
       }),
       env,
-      createExecutionContext(),
+      execution.context,
     );
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe("WHEP session track mids are required");
     expect(callsMocks.closeTracks).not.toHaveBeenCalled();
+    expect(execution.waitUntilPromises).toHaveLength(0);
+  });
+
+  it("returns success and logs when WHEP close reports track errors", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    callsMocks.closeTracks.mockResolvedValue(
+      ok({
+        tracks: [{ errorCode: "failed_to_close", mid: "0" }],
+      }),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/play/streamer-1/viewer-session?mid=0", {
+        headers: {
+          Cookie: await createAuthCookie(env),
+        },
+        method: "DELETE",
+      }),
+      env,
+      execution.context,
+    );
+
+    expect(response.status).toBe(200);
+
+    await Promise.all(execution.waitUntilPromises);
+
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      "SFU reported WHEP session close errors for session viewer-session:",
+      {
+        tracks: [{ errorCode: "failed_to_close", mid: "0" }],
+      },
+    );
   });
 
   it("returns 400 for an empty renegotiation SDP answer", async () => {
