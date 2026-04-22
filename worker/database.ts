@@ -11,6 +11,7 @@ type Live = {
 };
 
 type LiveTrackRecord = {
+  notificationMessageId?: bigint | null | undefined;
   userId: string;
   sessionId: string;
   tracks: StoredTrack[];
@@ -39,6 +40,7 @@ export async function getLive(
   userId: string,
 ): Promise<LiveTrackRecord | null> {
   const liveTrackRowSchema = v.object({
+    notification_message_id: v.optional(v.nullish(v.union([v.number(), v.bigint()]))),
     user_id: v.string(),
     session_id: v.string(),
     tracks_json: v.string(),
@@ -53,7 +55,7 @@ export async function getLive(
 
   const result = await database
     .prepare(
-      "SELECT user_id, session_id, tracks_json FROM lives WHERE user_id = ?",
+      "SELECT user_id, session_id, tracks_json, notification_message_id FROM lives WHERE user_id = ?",
     )
     .bind(userId)
     .first();
@@ -75,10 +77,31 @@ export async function getLive(
   }
 
   return {
+    notificationMessageId:
+      row.notification_message_id === null ||
+      row.notification_message_id === undefined
+        ? null
+        : BigInt(row.notification_message_id),
     userId: row.user_id,
     sessionId: row.session_id,
     tracks: tracksResult.output,
   };
+}
+
+export async function setLiveNotificationMessageId(
+  database: D1Database,
+  userId: string,
+  sessionId: string,
+  notificationMessageId: bigint,
+): Promise<boolean> {
+  const result = await database
+    .prepare(
+      "UPDATE lives SET notification_message_id = ? WHERE user_id = ? AND session_id = ?",
+    )
+    .bind(notificationMessageId, userId, sessionId)
+    .run();
+
+  return result.meta.changes > 0;
 }
 
 export async function deleteLiveForSession(

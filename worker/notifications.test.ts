@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  deleteLiveStartedNotification,
   DiscordWebhookError,
   sendLiveStartedNotification,
 } from "./notifications";
@@ -11,8 +12,8 @@ describe("worker live start notifications", () => {
 
   it("posts a Discord webhook with a user mention and site url", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(null, {
-        status: 204,
+      new Response(JSON.stringify({ id: "1" }), {
+        status: 200,
       }),
     );
 
@@ -26,10 +27,11 @@ describe("worker live start notifications", () => {
     );
 
     expect(result.isOk()).toBe(true);
+    expect(result._unsafeUnwrap()).toEqual({ messageId: 1n });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     const [endpoint, init] = fetchSpy.mock.calls[0] ?? [];
-    expect(endpoint).toBe("https://discord.com/api/webhooks/123/token");
+    expect(endpoint).toBe("https://discord.com/api/webhooks/123/token?wait=true");
     expect(init?.method).toBe("POST");
     expect(init?.headers).toEqual({
       "Content-Type": "application/json",
@@ -71,7 +73,7 @@ describe("worker live start notifications", () => {
 
     expect(result.error).toBeInstanceOf(DiscordWebhookError);
     expect(result.error).toMatchObject({
-      endpoint: "https://discord.com/api/webhooks/123/token",
+      endpoint: "https://discord.com/api/webhooks/123/token?wait=true",
       kind: "http_error",
       responseBodyText: "bad gateway",
       statusText: "Bad Gateway",
@@ -99,8 +101,33 @@ describe("worker live start notifications", () => {
 
     expect(result.error).toBeInstanceOf(DiscordWebhookError);
     expect(result.error).toMatchObject({
-      endpoint: "https://discord.com/api/webhooks/123/token",
+      endpoint: "https://discord.com/api/webhooks/123/token?wait=true",
       kind: "request_timeout",
     });
+  });
+
+  it("deletes a Discord webhook message by id", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, {
+        status: 204,
+      }),
+    );
+
+    const result = await deleteLiveStartedNotification(
+      {
+        NOTIFICATIONS_DISCORD_WEBHOOK_URL:
+          "https://discord.com/api/webhooks/123/token",
+      },
+      1n,
+    );
+
+    expect(result.isOk()).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const [endpoint, init] = fetchSpy.mock.calls[0] ?? [];
+    expect(endpoint).toBe(
+      "https://discord.com/api/webhooks/123/token/messages/1",
+    );
+    expect(init?.method).toBe("DELETE");
   });
 });

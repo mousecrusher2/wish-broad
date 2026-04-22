@@ -59,29 +59,61 @@ function trimResponseBody(text: string | undefined): string | undefined {
   return normalized.slice(0, 200);
 }
 
-export async function sendLiveStartedNotification(
-  env: NotificationsEnv,
-  userId: string,
-  siteUrl: string,
-): Promise<Result<void, DiscordWebhookError>> {
-  const endpoint = env.NOTIFICATIONS_DISCORD_WEBHOOK_URL;
+function createWebhookExecutionEndpoint(webhookUrl: string): string {
+  const url = new URL(webhookUrl);
+  url.searchParams.set("wait", "true");
+  return url.toString();
+}
+
+function createWebhookMessageEndpoint(
+  webhookUrl: string,
+  messageId: bigint,
+): string {
+  const url = new URL(webhookUrl);
+  let pathname = url.pathname;
+  while (pathname.endsWith("/")) {
+    pathname = pathname.slice(0, -1);
+  }
+  url.pathname = `${pathname}/messages/${messageId.toString()}`;
+  return url.toString();
+}
+
+function parseMessageId(rawMessageId: unknown): bigint | null {
+  if (typeof rawMessageId === "bigint") {
+    return rawMessageId >= 0n ? rawMessageId : null;
+  }
+
+  if (typeof rawMessageId === "number") {
+    if (!Number.isInteger(rawMessageId) || rawMessageId < 0) {
+      return null;
+    }
+
+    return BigInt(rawMessageId);
+  }
+
+  if (typeof rawMessageId !== "string" || rawMessageId.length === 0) {
+    return null;
+  }
+
+  try {
+    const messageId = BigInt(rawMessageId);
+    return messageId >= 0n ? messageId : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchDiscordWebhook(
+  endpoint: string,
+  init: RequestInit,
+): Promise<Result<Response, DiscordWebhookError>> {
   const abortController = new AbortController();
   const timeoutId = setTimeout(() => {
     abortController.abort();
   }, DISCORD_WEBHOOK_TIMEOUT_MS);
 
-  const responseResult = await fetch(endpoint, {
-    body: JSON.stringify({
-      allowed_mentions: {
-        parse: [],
-        users: [userId],
-      },
-      content: `配信開始: <@${userId}>\n${siteUrl}`,
-    }),
-    headers: {
-      "Content-Type": "application/json",
-    },
-    method: "POST",
+  return fetch(endpoint, {
+    ...init,
     signal: abortController.signal,
   })
     .then((response) => ok(response))
@@ -102,6 +134,98 @@ export async function sendLiveStartedNotification(
     .finally(() => {
       clearTimeout(timeoutId);
     });
+}
+
+export async function sendLiveStartedNotification(
+  env: NotificationsEnv,
+  userId: string,
+  siteUrl: string,
+): Promise<Result<{ messageId: bigint }, DiscordWebhookError>> {
+  const endpoint = createWebhookExecutionEndpoint(
+    env.NOTIFICATIONS_DISCORD_WEBHOOK_URL,
+  );
+  const responseResult = await fetchDiscordWebhook(endpoint, {
+    body: JSON.stringify({
+      allowed_mentions: {
+        parse: [],
+        users: [userId],
+      },
+      content: `配信開始: <@${userId}>\n${siteUrl}`,
+    }),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+
+  if (responseResult.isErr()) {
+    return err(responseResult.error);
+  }
+
+  const response = responseResult.value;
+  const responseText = await response.text();
+  if (!response.ok) {
+    return err(
+      new DiscordWebhookError("Discord webhook request failed", {
+        endpoint,
+        kind: "http_error",
+        responseBodyText: trimResponseBody(responseText),
+        statusText: response.statusText,
+      }),
+    );
+  }
+
+  let responseJson: unknown;
+  try {
+    responseJson = JSON.parse(responseText);
+  } catch {
+    return err(
+      new DiscordWebhookError("Discord webhook response was not valid JSON", {
+        endpoint,
+        kind: "http_error",
+        responseBodyText: trimResponseBody(responseText),
+        statusText: response.statusText,
+      }),
+    );
+  }
+
+  if (typeof responseJson !== "object" || responseJson === null || !("id" in responseJson)) {
+    return err(
+      new DiscordWebhookError("Discord webhook response did not include a message id", {
+        endpoint,
+        kind: "http_error",
+        responseBodyText: trimResponseBody(responseText),
+        statusText: response.statusText,
+      }),
+    );
+  }
+
+  const messageId = parseMessageId(responseJson.id);
+  if (messageId === null) {
+    return err(
+      new DiscordWebhookError("Discord webhook response did not include a valid message id", {
+        endpoint,
+        kind: "http_error",
+        responseBodyText: trimResponseBody(responseText),
+        statusText: response.statusText,
+      }),
+    );
+  }
+
+  return ok({ messageId });
+}
+
+export async function deleteLiveStartedNotification(
+  env: NotificationsEnv,
+  messageId: bigint,
+): Promise<Result<void, DiscordWebhookError>> {
+  const endpoint = createWebhookMessageEndpoint(
+    env.NOTIFICATIONS_DISCORD_WEBHOOK_URL,
+    messageId,
+  );
+  const responseResult = await fetchDiscordWebhook(endpoint, {
+    method: "DELETE",
+  });
 
   if (responseResult.isErr()) {
     return err(responseResult.error);

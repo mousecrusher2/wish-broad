@@ -22,7 +22,7 @@ import { hashedBearerAuth } from "./hashed-bearer-auth";
 import { logger } from "hono/logger";
 import { HTTPException } from "hono/http-exception";
 import { jwt } from "hono/jwt";
-import { sendLiveStartedNotification } from "./notifications";
+import { deleteLiveStartedNotification, sendLiveStartedNotification } from "./notifications";
 import { hashTokenWithPepper } from "./token-hash";
 
 type AppEnv = {
@@ -103,6 +103,57 @@ function scheduleTrackClose(
   );
 }
 
+async function sendLiveStartNotification(
+  c: Context<AppEnv>,
+  userId: string,
+  sessionId: string,
+  siteUrl: string,
+): Promise<void> {
+  const notificationResult = await sendLiveStartedNotification(
+    c.env,
+    userId,
+    siteUrl,
+  );
+  if (notificationResult.isErr()) {
+    console.warn(
+      `Failed to send live start notification for user ${userId} session ${sessionId}:`,
+      notificationResult.error,
+    );
+    return;
+  }
+
+  const { messageId } = notificationResult.value;
+
+  type PersistNotificationResult =
+    | { ok: true; saved: boolean }
+    | { ok: false; error: Error };
+  const persistResult: PersistNotificationResult = await db
+    .setLiveNotificationMessageId(c.env.LIVE_DB, userId, sessionId, messageId)
+    .then((saved): PersistNotificationResult => ({ ok: true, saved }))
+    .catch(
+      (error: Error): PersistNotificationResult => ({ ok: false, error }),
+    );
+
+  if (!persistResult.ok) {
+    console.warn(
+      `Failed to persist live start notification id for user ${userId} session ${sessionId}:`,
+      persistResult.error,
+    );
+  }
+
+  if (persistResult.ok && persistResult.saved) {
+    return;
+  }
+
+  const deleteResult = await deleteLiveStartedNotification(c.env, messageId);
+  if (deleteResult.isErr()) {
+    console.warn(
+      `Failed to delete orphaned live start notification for user ${userId} session ${sessionId}:`,
+      deleteResult.error,
+    );
+  }
+}
+
 function isSdpContentType(contentType: string | undefined): boolean {
   if (!contentType) {
     return false;
@@ -180,11 +231,28 @@ app.post("/ingest/:userId", async (c) => {
       return c.text("A live stream is already active for this user", 400);
     }
 
-    await db.deleteLiveForSession(
+    const deleted = await db.deleteLiveForSession(
       c.env.LIVE_DB,
       userId,
       existingLive.sessionId,
     );
+    if (deleted) {
+      const notificationMessageId = existingLive.notificationMessageId;
+      if (notificationMessageId !== null && notificationMessageId !== undefined) {
+        c.executionCtx.waitUntil(
+          deleteLiveStartedNotification(c.env, notificationMessageId).then(
+            (deleteResult) => {
+              if (deleteResult.isErr()) {
+                console.warn(
+                  `Failed to delete live start notification for user ${userId} session ${existingLive.sessionId}:`,
+                  deleteResult.error,
+                );
+              }
+            },
+          ),
+        );
+      }
+    }
   }
 
   const ingestResult = await startIngest(c.env, userId, sdpOffer);
@@ -208,18 +276,12 @@ app.post("/ingest/:userId", async (c) => {
   await db.insertLive(c.env.LIVE_DB, userId, result.sessionId, result.tracks);
 
   c.executionCtx.waitUntil(
-    sendLiveStartedNotification(
-      c.env,
+    sendLiveStartNotification(
+      c,
       userId,
+      result.sessionId,
       createSiteRootLocation(c.req.url),
-    ).then((notificationResult) => {
-      if (notificationResult.isErr()) {
-        console.warn(
-          `Failed to send live start notification for user ${userId} session ${result.sessionId}:`,
-          notificationResult.error,
-        );
-      }
-    }),
+    ),
   );
 
   return c.body(result.sdpAnswer, 201, {
@@ -270,6 +332,23 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     `Failed to close live tracks for user ${userId}:`,
     `SFU reported track close errors for user ${userId}:`,
   );
+  if (
+    existingLive.notificationMessageId !== null &&
+    existingLive.notificationMessageId !== undefined
+  ) {
+    c.executionCtx.waitUntil(
+      deleteLiveStartedNotification(c.env, existingLive.notificationMessageId).then(
+        (deleteResult) => {
+          if (deleteResult.isErr()) {
+            console.warn(
+              `Failed to delete live start notification for user ${userId} session ${sessionId}:`,
+              deleteResult.error,
+            );
+          }
+        },
+      ),
+    );
+  }
 
   return c.text("OK", 200);
 });
@@ -333,11 +412,28 @@ app.post("/play/:userId", async (c) => {
   }
 
   if (liveTrackRecord && !hasActiveSession) {
-    await db.deleteLiveForSession(
+    const deleted = await db.deleteLiveForSession(
       c.env.LIVE_DB,
       userId,
       liveTrackRecord.sessionId,
     );
+    if (deleted) {
+      const notificationMessageId = liveTrackRecord.notificationMessageId;
+      if (notificationMessageId !== null && notificationMessageId !== undefined) {
+        c.executionCtx.waitUntil(
+          deleteLiveStartedNotification(c.env, notificationMessageId).then(
+            (deleteResult) => {
+              if (deleteResult.isErr()) {
+                console.warn(
+                  `Failed to delete live start notification for user ${userId} session ${liveTrackRecord.sessionId}:`,
+                  deleteResult.error,
+                );
+              }
+            },
+          ),
+        );
+      }
+    }
     return c.text(`Live stream not found: ${userId}`, 404);
   }
 
@@ -358,11 +454,28 @@ app.post("/play/:userId", async (c) => {
     }
     if (error instanceof SfuApiError && error.isSessionNotFound()) {
       if (liveTrackRecord) {
-        await db.deleteLiveForSession(
+        const deleted = await db.deleteLiveForSession(
           c.env.LIVE_DB,
           userId,
           liveTrackRecord.sessionId,
         );
+        if (deleted) {
+          const notificationMessageId = liveTrackRecord.notificationMessageId;
+          if (notificationMessageId !== null && notificationMessageId !== undefined) {
+            c.executionCtx.waitUntil(
+              deleteLiveStartedNotification(c.env, notificationMessageId).then(
+                (deleteResult) => {
+                  if (deleteResult.isErr()) {
+                    console.warn(
+                      `Failed to delete live start notification for user ${userId} session ${liveTrackRecord.sessionId}:`,
+                      deleteResult.error,
+                    );
+                  }
+                },
+              ),
+            );
+          }
+        }
       }
       return c.text(`Live stream not found: ${userId}`, 404);
     }

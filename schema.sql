@@ -4,7 +4,8 @@
 CREATE TABLE IF NOT EXISTS lives (
     user_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
-    tracks_json TEXT NOT NULL
+    tracks_json TEXT NOT NULL,
+    notification_message_id INTEGER
 );
 
 -- 配信用トークンを保存するテーブル
