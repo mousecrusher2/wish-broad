@@ -8,6 +8,18 @@
   // "compatibility_flags": [
   //   "nodejs_compat"
   // ],
+  "secrets": {
+    "required": [
+      "AUTHORIZED_GUILD_ID",
+      "CALLS_APP_ID",
+      "CALLS_APP_SECRET",
+      "DISCORD_CLIENT_ID",
+      "DISCORD_CLIENT_SECRET",
+      "JWT_SECRET",
+      "LIVE_TOKEN_PEPPER",
+      "NOTIFICATIONS_DISCORD_WEBHOOK_URL"
+    ]
+  },
   // "vars": {
   //   "AUTHORIZED_GUILD_ID": "your-discord-guild-id-here",
   //   "ENVIRONMENT": "development"

@@ -240,7 +240,7 @@ function createBindings(): Bindings {
     CALLS_APP_SECRET: "calls-app-secret",
     DISCORD_CLIENT_ID: "discord-client-id",
     DISCORD_CLIENT_SECRET: "discord-client-secret",
-    ENVIRONMENT: "test",
+    ENVIRONMENT: "production",
     JWT_SECRET: "test-jwt-secret",
     LIVE_DB: createUnusedD1Database(),
     LIVE_TOKEN_PEPPER: "test-live-token-pepper",

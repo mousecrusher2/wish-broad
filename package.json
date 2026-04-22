@@ -11,7 +11,7 @@
     "build": "tsc -b && vite build",
     "build:analyze": "tsc -b && vite build --mode analyze",
     "preview": "pnpm run build && vite preview",
-    "cf-typegen": "wrangler types --env-interface CloudflareBindings --include-runtime false",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings --include-runtime false --strict-vars=false",
     "deploy": "pnpm run build && wrangler deploy",
     "test": "vitest run",
     "test:watch": "vitest",
