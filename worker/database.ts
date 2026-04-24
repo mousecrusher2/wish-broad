@@ -17,7 +17,6 @@ type LiveTrackRecord = {
   tracks: StoredTrack[];
 };
 
-// D1データベースでライブ配信情報を管理する関数群
 export async function insertLive(
   database: D1Database,
   userId: string,
@@ -26,7 +25,8 @@ export async function insertLive(
 ): Promise<void> {
   const tracksJson = JSON.stringify(tracks);
   // Do not upsert here. A concurrent second ingest should fail closed instead of
-  // replacing the existing live row with a later session.
+  // replacing the existing live row with a later session. Reconnects are handled
+  // by deleting or proving the old Calls session is stale before inserting.
   await database
     .prepare(
       "INSERT INTO lives (user_id, session_id, tracks_json) VALUES (?, ?, ?)",
@@ -40,7 +40,9 @@ export async function getLive(
   userId: string,
 ): Promise<LiveTrackRecord | null> {
   const liveTrackRowSchema = v.object({
-    notification_message_id: v.optional(v.nullish(v.union([v.number(), v.bigint()]))),
+    notification_message_id: v.optional(
+      v.nullish(v.union([v.number(), v.bigint()])),
+    ),
     user_id: v.string(),
     session_id: v.string(),
     tracks_json: v.string(),
@@ -117,7 +119,6 @@ export async function deleteLiveForSession(
   return result.meta.changes > 0;
 }
 
-// 配信用トークンの管理機能
 export async function setLiveToken(
   database: D1Database,
   userId: string,
@@ -183,6 +184,8 @@ export async function getAllLives(database: D1Database): Promise<Live[]> {
     display_name: v.string(),
   });
 
+  // This intentionally does not verify every Calls session. Listing must stay
+  // cheap; stale rows are reconciled on user-specific ingest/play requests.
   const results = await database
     .prepare(
       "SELECT users.user_id, display_name FROM lives JOIN users ON lives.user_id = users.user_id",

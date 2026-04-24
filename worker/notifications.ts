@@ -61,6 +61,8 @@ function trimResponseBody(text: string | undefined): string | undefined {
 
 function createWebhookExecutionEndpoint(webhookUrl: string): string {
   const url = new URL(webhookUrl);
+  // wait=true is required because the returned message id is what lets us delete
+  // best-effort start notifications when the matching live row is removed.
   url.searchParams.set("wait", "true");
   return url.toString();
 }
@@ -189,26 +191,36 @@ export async function sendLiveStartedNotification(
     );
   }
 
-  if (typeof responseJson !== "object" || responseJson === null || !("id" in responseJson)) {
+  if (
+    typeof responseJson !== "object" ||
+    responseJson === null ||
+    !("id" in responseJson)
+  ) {
     return err(
-      new DiscordWebhookError("Discord webhook response did not include a message id", {
-        endpoint,
-        kind: "http_error",
-        responseBodyText: trimResponseBody(responseText),
-        statusText: response.statusText,
-      }),
+      new DiscordWebhookError(
+        "Discord webhook response did not include a message id",
+        {
+          endpoint,
+          kind: "http_error",
+          responseBodyText: trimResponseBody(responseText),
+          statusText: response.statusText,
+        },
+      ),
     );
   }
 
   const messageId = parseMessageId(responseJson.id);
   if (messageId === null) {
     return err(
-      new DiscordWebhookError("Discord webhook response did not include a valid message id", {
-        endpoint,
-        kind: "http_error",
-        responseBodyText: trimResponseBody(responseText),
-        statusText: response.statusText,
-      }),
+      new DiscordWebhookError(
+        "Discord webhook response did not include a valid message id",
+        {
+          endpoint,
+          kind: "http_error",
+          responseBodyText: trimResponseBody(responseText),
+          statusText: response.statusText,
+        },
+      ),
     );
   }
 

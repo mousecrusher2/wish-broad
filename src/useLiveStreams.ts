@@ -54,15 +54,11 @@ async function fetchLiveStreams(): Promise<Result<Live[], Error>> {
 export function useLiveStreams(): UseLiveStreamsState {
   const { data, isLoading, isValidating, mutate } = useSWR<
     Result<Live[], Error>
-  >(
-    "/api/lives",
-    fetchLiveStreams,
-    {
-      revalidateOnFocus: false,
-      revalidateOnReconnect: false,
-      shouldRetryOnError: false,
-    },
-  );
+  >("/api/lives", fetchLiveStreams, {
+    revalidateOnFocus: false,
+    revalidateOnReconnect: false,
+    shouldRetryOnError: false,
+  });
   const refreshInFlightRef = useRef(false);
 
   const refresh = useCallback(() => {

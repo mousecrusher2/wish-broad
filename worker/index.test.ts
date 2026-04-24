@@ -113,9 +113,7 @@ const discordMocks = vi.hoisted(() => {
       >(),
     getDiscordErrorMessage: vi.fn<(error: unknown) => string>(),
     getGuildMember:
-      vi.fn<
-        (accessToken: string, guildId: string) => Promise<unknown>
-      >(),
+      vi.fn<(accessToken: string, guildId: string) => Promise<unknown>>(),
     revokeAccessToken:
       vi.fn<
         (
@@ -150,7 +148,8 @@ vi.mock("./discord", () => ({
   revokeAccessToken: discordMocks.revokeAccessToken,
 }));
 vi.mock("./notifications", () => ({
-  deleteLiveStartedNotification: notificationsMocks.deleteLiveStartedNotification,
+  deleteLiveStartedNotification:
+    notificationsMocks.deleteLiveStartedNotification,
   sendLiveStartedNotification: notificationsMocks.sendLiveStartedNotification,
 }));
 vi.mock("./turn", () => ({
@@ -689,10 +688,9 @@ describe("worker app", () => {
 
     await Promise.all(execution.waitUntilPromises);
 
-    expect(notificationsMocks.deleteLiveStartedNotification).toHaveBeenCalledWith(
-      env,
-      2n,
-    );
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).toHaveBeenCalledWith(env, 2n);
     expect(notificationsMocks.sendLiveStartedNotification).toHaveBeenCalledWith(
       env,
       "user-1",
@@ -745,7 +743,9 @@ describe("worker app", () => {
   it("keeps ingest successful when the live start notification fails", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
-    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const consoleWarnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => {});
 
     notificationsMocks.sendLiveStartedNotification.mockResolvedValue(
       err(new Error("webhook failed")),
@@ -798,10 +798,9 @@ describe("worker app", () => {
 
     await Promise.all(execution.waitUntilPromises);
 
-    expect(notificationsMocks.deleteLiveStartedNotification).toHaveBeenCalledWith(
-      env,
-      1n,
-    );
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).toHaveBeenCalledWith(env, 1n);
   });
 
   it("returns 204 for GET on the WHIP endpoint", async () => {
@@ -891,7 +890,9 @@ describe("worker app", () => {
 
     expect(response.status).toBe(422);
     expect(await response.text()).toBe("Malformed SDP offer");
-    expect(notificationsMocks.sendLiveStartedNotification).not.toHaveBeenCalled();
+    expect(
+      notificationsMocks.sendLiveStartedNotification,
+    ).not.toHaveBeenCalled();
     expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
@@ -964,7 +965,9 @@ describe("worker app", () => {
     expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
     expect(callsMocks.startIngest).not.toHaveBeenCalled();
     expect(dbMocks.insertLive).not.toHaveBeenCalled();
-    expect(notificationsMocks.sendLiveStartedNotification).not.toHaveBeenCalled();
+    expect(
+      notificationsMocks.sendLiveStartedNotification,
+    ).not.toHaveBeenCalled();
     expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
@@ -989,7 +992,9 @@ describe("worker app", () => {
 
     expect(response.status).toBe(500);
     expect(await response.text()).toBe("Internal Server Error");
-    expect(notificationsMocks.sendLiveStartedNotification).not.toHaveBeenCalled();
+    expect(
+      notificationsMocks.sendLiveStartedNotification,
+    ).not.toHaveBeenCalled();
     expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
@@ -1036,16 +1041,17 @@ describe("worker app", () => {
       "session-1",
       tracks,
     );
-    expect(notificationsMocks.deleteLiveStartedNotification).toHaveBeenCalledWith(
-      env,
-      1n,
-    );
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).toHaveBeenCalledWith(env, 1n);
   });
 
   it("returns success and logs when ingest close reports track errors", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
-    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const consoleWarnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => {});
 
     dbMocks.getLive.mockResolvedValue({
       notificationMessageId: 1n,
@@ -1090,10 +1096,9 @@ describe("worker app", () => {
         tracks: [{ errorCode: "failed_to_close", mid: "0" }],
       },
     );
-    expect(notificationsMocks.deleteLiveStartedNotification).toHaveBeenCalledWith(
-      env,
-      1n,
-    );
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).toHaveBeenCalledWith(env, 1n);
   });
 
   it("returns success when ingest close says tracks are already gone", async () => {
@@ -1143,10 +1148,9 @@ describe("worker app", () => {
 
     await Promise.all(execution.waitUntilPromises);
 
-    expect(notificationsMocks.deleteLiveStartedNotification).toHaveBeenCalledWith(
-      env,
-      1n,
-    );
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).toHaveBeenCalledWith(env, 1n);
   });
 
   it("rejects ingest deletion when the session id does not match", async () => {
@@ -1183,7 +1187,9 @@ describe("worker app", () => {
     );
     expect(callsMocks.closeTracks).not.toHaveBeenCalled();
     expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
-    expect(notificationsMocks.deleteLiveStartedNotification).not.toHaveBeenCalled();
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).not.toHaveBeenCalled();
     expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
@@ -1219,7 +1225,9 @@ describe("worker app", () => {
     expect(await response.text()).toBe("Stored live track data is invalid");
     expect(callsMocks.closeTracks).not.toHaveBeenCalled();
     expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
-    expect(notificationsMocks.deleteLiveStartedNotification).not.toHaveBeenCalled();
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).not.toHaveBeenCalled();
     expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
@@ -1254,9 +1262,13 @@ describe("worker app", () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.text()).toBe("Failed to delete the requested live stream");
+    expect(await response.text()).toBe(
+      "Failed to delete the requested live stream",
+    );
     expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-    expect(notificationsMocks.deleteLiveStartedNotification).not.toHaveBeenCalled();
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).not.toHaveBeenCalled();
     expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
@@ -1283,10 +1295,9 @@ describe("worker app", () => {
     const response = await requestPlayOffer(env, execution.context);
     await expectPlayNotFoundAndCleanup(response, env);
     await Promise.all(execution.waitUntilPromises);
-    expect(notificationsMocks.deleteLiveStartedNotification).toHaveBeenCalledWith(
-      env,
-      1n,
-    );
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).toHaveBeenCalledWith(env, 1n);
     expect(callsMocks.startPlay).not.toHaveBeenCalled();
   });
 
@@ -1321,10 +1332,9 @@ describe("worker app", () => {
     const response = await requestPlayOffer(env, execution.context);
     await expectPlayNotFoundAndCleanup(response, env);
     await Promise.all(execution.waitUntilPromises);
-    expect(notificationsMocks.deleteLiveStartedNotification).toHaveBeenCalledWith(
-      env,
-      1n,
-    );
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).toHaveBeenCalledWith(env, 1n);
   });
 
   it("returns 400 for an empty WHEP offer", async () => {
@@ -1608,7 +1618,9 @@ describe("worker app", () => {
   it("returns success and logs when WHEP close reports track errors", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
-    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const consoleWarnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => {});
 
     callsMocks.closeTracks.mockResolvedValue(
       ok({

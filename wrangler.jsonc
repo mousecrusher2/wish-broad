@@ -19,8 +19,8 @@
       "LIVE_TOKEN_PEPPER",
       "NOTIFICATIONS_DISCORD_WEBHOOK_URL",
       "TURN_KEY_API_TOKEN",
-      "TURN_KEY_ID"
-    ]
+      "TURN_KEY_ID",
+    ],
   },
   // "vars": {
   //   "AUTHORIZED_GUILD_ID": "your-discord-guild-id-here",

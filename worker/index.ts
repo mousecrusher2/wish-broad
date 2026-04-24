@@ -22,7 +22,10 @@ import { hashedBearerAuth } from "./hashed-bearer-auth";
 import { logger } from "hono/logger";
 import { HTTPException } from "hono/http-exception";
 import { jwt } from "hono/jwt";
-import { deleteLiveStartedNotification, sendLiveStartedNotification } from "./notifications";
+import {
+  deleteLiveStartedNotification,
+  sendLiveStartedNotification,
+} from "./notifications";
 import { hashTokenWithPepper } from "./token-hash";
 import { generateTurnIceServers } from "./turn";
 
@@ -82,6 +85,8 @@ function scheduleTrackClose(
   failureLabel: string,
   errorLabel: string,
 ): void {
+  // Track close is cleanup only. D1 is already updated before this runs, so a
+  // transient Calls failure should not keep invalid track locators visible.
   c.executionCtx.waitUntil(
     closeTracks(c.env, sessionId, tracks).then((closeResult) => {
       if (closeResult.isErr()) {
@@ -125,15 +130,15 @@ async function sendLiveStartNotification(
 
   const { messageId } = notificationResult.value;
 
+  // Notifications are tied to the exact live session. If that row has already
+  // disappeared, delete the Discord message instead of leaving an orphan.
   type PersistNotificationResult =
     | { ok: true; saved: boolean }
     | { ok: false; error: Error };
   const persistResult: PersistNotificationResult = await db
     .setLiveNotificationMessageId(c.env.LIVE_DB, userId, sessionId, messageId)
     .then((saved): PersistNotificationResult => ({ ok: true, saved }))
-    .catch(
-      (error: Error): PersistNotificationResult => ({ ok: false, error }),
-    );
+    .catch((error: Error): PersistNotificationResult => ({ ok: false, error }));
 
   if (!persistResult.ok) {
     console.warn(
@@ -167,10 +172,7 @@ function logUnexpectedError(error: Error): void {
   console.error("Unhandled error:", error, error.stack);
 }
 
-function toErrorResponse(
-  err: unknown,
-  c: Context<AppEnv>,
-): Response {
+function toErrorResponse(err: unknown, c: Context<AppEnv>): Response {
   if (err instanceof HTTPException) {
     return err.getResponse();
   }
@@ -188,7 +190,7 @@ app.onError((err, c) => {
 
 app.use(logger());
 
-// 配信取り込み用エンドポイントの認証ミドルウェア
+// OBS ingest authenticates with the per-user live token, not the viewer JWT.
 app.use(
   "/ingest/:userId/*",
   hashedBearerAuth<AppEnv, "/ingest/:userId/*">({
@@ -204,8 +206,8 @@ app.get("/ingest/:userId", async (c) => {
   return c.body(null, 204);
 });
 
-// ライブ配信開始エンドポイント（WHIP）
-// 配信者からのSDP Offerを受け取り、Cloudflareセッションを作成
+// WHIP ingest start. The Worker stores the resulting Calls session as the
+// current live row for this owner.
 app.post("/ingest/:userId", async (c) => {
   const { userId } = c.req.param();
   if (!isSdpContentType(c.req.header("content-type"))) {
@@ -219,6 +221,9 @@ app.post("/ingest/:userId", async (c) => {
 
   const existingLive = await db.getLive(c.env.LIVE_DB, userId);
   if (existingLive) {
+    // Avoid global SFU sweeps in Workers. Only check the one row that blocks
+    // this ingest attempt, then remove it if Calls has already garbage-collected
+    // the underlying session.
     const isActiveResult = await isSessionActive(c.env, existingLive.sessionId);
     if (isActiveResult.isErr()) {
       console.error(
@@ -239,7 +244,10 @@ app.post("/ingest/:userId", async (c) => {
     );
     if (deleted) {
       const notificationMessageId = existingLive.notificationMessageId;
-      if (notificationMessageId !== null && notificationMessageId !== undefined) {
+      if (
+        notificationMessageId !== null &&
+        notificationMessageId !== undefined
+      ) {
         c.executionCtx.waitUntil(
           deleteLiveStartedNotification(c.env, notificationMessageId).then(
             (deleteResult) => {
@@ -273,7 +281,9 @@ app.post("/ingest/:userId", async (c) => {
   }
 
   const result = ingestResult.value;
-  // トラック情報をデータベースに保存（session_idも含める）
+  // The live row is a pointer to this exact Calls session and track set. OBS
+  // reconnects create new SDP, sessions, and mids, so stale rows must not be
+  // reused across ingests.
   await db.insertLive(c.env.LIVE_DB, userId, result.sessionId, result.tracks);
 
   c.executionCtx.waitUntil(
@@ -292,8 +302,7 @@ app.post("/ingest/:userId", async (c) => {
   });
 });
 
-// ライブ配信終了エンドポイント
-// 配信セッションを削除し、関連データを清理
+// WHIP ingest end. Only the currently stored session can delete the live row.
 app.get("/ingest/:userId/:sessionId", async () => {
   return new Response(null, { status: 204 });
 });
@@ -326,6 +335,9 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     return c.text("Failed to delete the requested live stream", 400);
   }
 
+  // Delete the row immediately rather than keeping a pending-end state. Workers
+  // cannot reliably own timers, and the stored track locators are invalid once
+  // this ingest session is no longer current.
   scheduleTrackClose(
     c,
     sessionId,
@@ -338,29 +350,27 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     existingLive.notificationMessageId !== undefined
   ) {
     c.executionCtx.waitUntil(
-      deleteLiveStartedNotification(c.env, existingLive.notificationMessageId).then(
-        (deleteResult) => {
-          if (deleteResult.isErr()) {
-            console.warn(
-              `Failed to delete live start notification for user ${userId} session ${sessionId}:`,
-              deleteResult.error,
-            );
-          }
-        },
-      ),
+      deleteLiveStartedNotification(
+        c.env,
+        existingLive.notificationMessageId,
+      ).then((deleteResult) => {
+        if (deleteResult.isErr()) {
+          console.warn(
+            `Failed to delete live start notification for user ${userId} session ${sessionId}:`,
+            deleteResult.error,
+          );
+        }
+      }),
     );
   }
 
   return c.text("OK", 200);
 });
 
-// Discord認証開始エンドポイント
 app.get("/login", (c) => {
   return startDiscordLogin(c);
 });
 
-// Discord認証完了エンドポイント
-// Discord OAuth code flowを完了し、ギルドメンバーシップを確認後JWTトークンを発行
 app.get("/login/callback", async (c) => {
   return completeDiscordLogin(c);
 });
@@ -370,7 +380,7 @@ app.post("/logout", async (c) => {
   return c.redirect("/");
 });
 
-// ライブ視聴用エンドポイントの認証ミドルウェア
+// Viewing is restricted to authenticated app users.
 app.use("/play/*", async (c, next) => {
   const middleware = jwt({
     secret: c.env.JWT_SECRET,
@@ -381,8 +391,8 @@ app.use("/play/*", async (c, next) => {
   return middleware(c, next);
 });
 
-// ライブ視聴開始エンドポイント（WHEP）
-// 視聴者からのSDP Offerを受け取り、配信されているトラックへの接続セッションを作成
+// WHEP playback start. This is intentionally app-specific and cookie-protected,
+// not a public generic WHEP endpoint.
 app.get("/play/:userId", async (c) => {
   return c.body(null, 204);
 });
@@ -390,18 +400,21 @@ app.get("/play/:userId", async (c) => {
 app.post("/play/:userId", async (c) => {
   const { userId } = c.req.param();
 
-  // JWTペイロードからユーザー情報を取得してログ出力
   const jwtPayload = c.get("jwtPayload");
   console.log(
     `User ${jwtPayload.displayName} (${jwtPayload.userId}) is trying to play user: ${userId}`,
   );
 
-  // SFU APIクライアントを初期化
   const liveTrackRecord = await db.getLive(c.env.LIVE_DB, userId);
   const tracks = liveTrackRecord?.tracks ?? [];
   let hasActiveSession = false;
   if (liveTrackRecord) {
-    const isActiveResult = await isSessionActive(c.env, liveTrackRecord.sessionId);
+    // Playback names one live owner, so this is the cheapest safe point to
+    // reconcile stale D1 state with Calls without scanning every live row.
+    const isActiveResult = await isSessionActive(
+      c.env,
+      liveTrackRecord.sessionId,
+    );
     if (isActiveResult.isErr()) {
       console.error(
         `Failed to verify playback session activity for user ${userId}:`,
@@ -420,7 +433,10 @@ app.post("/play/:userId", async (c) => {
     );
     if (deleted) {
       const notificationMessageId = liveTrackRecord.notificationMessageId;
-      if (notificationMessageId !== null && notificationMessageId !== undefined) {
+      if (
+        notificationMessageId !== null &&
+        notificationMessageId !== undefined
+      ) {
         c.executionCtx.waitUntil(
           deleteLiveStartedNotification(c.env, notificationMessageId).then(
             (deleteResult) => {
@@ -462,7 +478,10 @@ app.post("/play/:userId", async (c) => {
         );
         if (deleted) {
           const notificationMessageId = liveTrackRecord.notificationMessageId;
-          if (notificationMessageId !== null && notificationMessageId !== undefined) {
+          if (
+            notificationMessageId !== null &&
+            notificationMessageId !== undefined
+          ) {
             c.executionCtx.waitUntil(
               deleteLiveStartedNotification(c.env, notificationMessageId).then(
                 (deleteResult) => {
@@ -516,7 +535,7 @@ app.post("/play/:userId", async (c) => {
   });
 });
 
-// ライブ視聴セッション管理エンドポイント
+// WHEP playback session cleanup and counter-offer answer submission.
 app.get("/play/:userId/:sessionId", async () => {
   return new Response(null, { status: 204 });
 });
@@ -538,7 +557,7 @@ app
     );
 
     return c.body(null, 200);
-  }) // ICE候補やセッション再交渉用のPATCHエンドポイント
+  }) // This PATCH submits the answer to a 406 counter-offer, not trickle ICE.
   .patch(async (c) => {
     const { sessionId } = c.req.param();
 
@@ -551,11 +570,16 @@ app
       return c.text("SDP answer is required", 400);
     }
 
-    const renegotiationResult = await renegotiateSession(c.env, sessionId, sdpAnswer);
+    const renegotiationResult = await renegotiateSession(
+      c.env,
+      sessionId,
+      sdpAnswer,
+    );
     if (renegotiationResult.isErr()) {
-      const negotiationError = renegotiationResult.error.toNegotiationClientError(
-        "Failed to submit WHEP answer",
-      );
+      const negotiationError =
+        renegotiationResult.error.toNegotiationClientError(
+          "Failed to submit WHEP answer",
+        );
       if (negotiationError) {
         return c.text(negotiationError.text, negotiationError.status);
       }
@@ -570,7 +594,7 @@ app
     return c.body(null, 204);
   });
 
-// API routes用の認証ミドルウェア
+// All /api routes are browser APIs that require the app JWT cookie.
 app.use("/api/*", async (c, next) => {
   const middleware = jwt({
     secret: c.env.JWT_SECRET,
@@ -581,8 +605,6 @@ app.use("/api/*", async (c, next) => {
   return middleware(c, next);
 });
 
-// ユーザー情報を取得するAPIエンドポイント
-// JWTトークンからユーザー情報を抽出して返す
 app.get("/api/me", async (c) => {
   const jwtPayload = c.get("jwtPayload");
 
@@ -594,6 +616,8 @@ app.get("/api/me", async (c) => {
 
 app.get("/api/turn-credentials", async (c) => {
   const jwtPayload = c.get("jwtPayload");
+  // Keep TURN credentials behind the authenticated Worker API. The browser
+  // client is not intended to be a generic unauthenticated WHEP endpoint client.
   const turnResult = await generateTurnIceServers(c.env, jwtPayload.userId);
   if (turnResult.isErr()) {
     console.error(
@@ -612,9 +636,8 @@ app.get("/api/turn-credentials", async (c) => {
   });
 });
 
-// 配信用トークンを発行するAPIエンドポイント
-// 何度でも発行可能で、新しいトークンで上書きされる
-// トークンは作成時にのみ表示される
+// Live tokens can be rotated at any time. Return the raw token only on creation;
+// D1 stores only the peppered HMAC.
 app.post("/api/me/livetoken", async (c) => {
   const jwtPayload = c.get("jwtPayload");
   const userId = jwtPayload.userId;
@@ -622,11 +645,8 @@ app.post("/api/me/livetoken", async (c) => {
   const tokenHash = await hashTokenWithPepper(c.env.LIVE_TOKEN_PEPPER, token);
 
   type SaveTokenResult = { ok: true } | { ok: false; error: Error };
-  const saveResult: SaveTokenResult = await db.setLiveToken(
-    c.env.LIVE_DB,
-    userId,
-    tokenHash,
-  )
+  const saveResult: SaveTokenResult = await db
+    .setLiveToken(c.env.LIVE_DB, userId, tokenHash)
     .then((): SaveTokenResult => ({ ok: true }))
     .catch((error: Error): SaveTokenResult => ({ ok: false, error }));
   if (!saveResult.ok) {
@@ -640,15 +660,15 @@ app.post("/api/me/livetoken", async (c) => {
   });
 });
 
-// 配信用トークンの発行状況を確認するAPIエンドポイント
-// 副作用なし：トークンは表示せず、発行状況のみを返す
+// Side-effect free token status check. Never reveal the existing token value.
 app.get("/api/me/livetoken", async (c) => {
   const jwtPayload = c.get("jwtPayload");
   const userId = jwtPayload.userId;
   type HasTokenResult =
     | { ok: true; hasToken: boolean }
     | { ok: false; error: Error };
-  const hasTokenResult: HasTokenResult = await db.hasLiveToken(c.env.LIVE_DB, userId)
+  const hasTokenResult: HasTokenResult = await db
+    .hasLiveToken(c.env.LIVE_DB, userId)
     .then((hasToken): HasTokenResult => ({ ok: true, hasToken }))
     .catch((error: Error): HasTokenResult => ({ ok: false, error }));
   if (!hasTokenResult.ok) {
@@ -665,6 +685,8 @@ app.get("/api/me/livetoken", async (c) => {
 });
 
 app.get("/api/lives", async (c) => {
+  // Keep listing cheap: do not poll Calls for every live row here. Stale rows are
+  // reconciled when a user tries to ingest or play the specific stream.
   const lives = await db.getAllLives(c.env.LIVE_DB);
   return c.json(lives);
 });

@@ -61,8 +61,8 @@ export default [
       "@typescript-eslint/consistent-type-assertions": [
         "error",
         {
-          "assertionStyle": "never"
-        }
+          assertionStyle: "never",
+        },
       ],
       "no-restricted-syntax": [
         "error",

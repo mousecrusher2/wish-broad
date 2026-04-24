@@ -118,6 +118,9 @@ function getIceServerPort(url: string): number | null {
 }
 
 function filterIceServerUrls(iceServer: RawIceServer): TurnIceServer | null {
+  // Cloudflare returns primary and alternate TURN ports, but browsers are known
+  // to block port 53. Because this client waits for full ICE gathering instead
+  // of using trickle ICE, keep blocked candidates out to avoid setup timeouts.
   const urls = toUrlList(iceServer.urls).filter((url) => {
     return getIceServerPort(url) !== 53;
   });
@@ -155,7 +158,8 @@ async function fetchTurnCredentials(
           {
             endpoint,
             kind: isAbortError(error) ? "request_timeout" : "request_failed",
-            responseBody: error instanceof Error ? error.message : String(error),
+            responseBody:
+              error instanceof Error ? error.message : String(error),
           },
         ),
       ),
@@ -254,11 +258,14 @@ export async function generateTurnIceServers(
     .filter((iceServer) => iceServer !== null);
   if (iceServers.length === 0) {
     return err(
-      new TurnApiError("TURN credential response did not contain usable ICE servers", {
-        endpoint,
-        kind: "empty_ice_servers",
-        responseBody: parsedResponseResult.value,
-      }),
+      new TurnApiError(
+        "TURN credential response did not contain usable ICE servers",
+        {
+          endpoint,
+          kind: "empty_ice_servers",
+          responseBody: parsedResponseResult.value,
+        },
+      ),
     );
   }
 

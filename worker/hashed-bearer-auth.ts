@@ -7,9 +7,7 @@ type ResolveableValue<
   E extends { Bindings: object },
   P extends string,
   T extends string | null,
-> =
-  | T
-  | ((c: Context<E, P>) => MaybePromise<T>);
+> = T | ((c: Context<E, P>) => MaybePromise<T>);
 
 type HashedBearerAuthOptions<
   E extends { Bindings: object },
@@ -82,9 +80,7 @@ export function hashedBearerAuth<
       bearerToken,
       expectedTokenHash,
     )
-      .then(
-        (isValidToken): TokenCheckResult => ({ kind: "ok", isValidToken }),
-      )
+      .then((isValidToken): TokenCheckResult => ({ kind: "ok", isValidToken }))
       .catch((error: Error): TokenCheckResult => ({ kind: "error", error }));
 
     if (tokenCheck.kind === "error") {

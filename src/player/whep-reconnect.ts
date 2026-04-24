@@ -3,6 +3,8 @@ import { WHEPSessionError, type WHEPSessionSnapshot } from "./WHEPClient";
 const WHEP_RECONNECT_BASE_DELAY_MS = 500;
 const WHEP_RECONNECT_MAX_DELAY_MS = 2_000;
 
+// Recovery is viewer-driven because the Worker does not continuously poll the
+// SFU. Keep retries bounded so a truly ended stream becomes visible quickly.
 export const WHEP_RECONNECT_WINDOW_MS = 30_000;
 export const WHEP_TRACK_DISCOVERY_GRACE_MS = 15_000;
 export const WHEP_SESSION_RECOVERY_GRACE_MS = 3_000;

@@ -9,7 +9,9 @@ type StableLiveTokenState =
 
 type LiveTokenState = { status: "loading" } | StableLiveTokenState;
 
-async function fetchLiveTokenState(): Promise<Result<StableLiveTokenState, Error>> {
+async function fetchLiveTokenState(): Promise<
+  Result<StableLiveTokenState, Error>
+> {
   const liveTokenResponseSchema = v.object({
     hasToken: v.boolean(),
   });

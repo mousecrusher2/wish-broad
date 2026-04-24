@@ -183,9 +183,7 @@ async function fetchDiscordWithTimeout(
     .catch((error: Error) =>
       err(
         new DiscordApiError(
-          isAbortError(error)
-            ? "Discord request timed out"
-            : error.message,
+          isAbortError(error) ? "Discord request timed out" : error.message,
           {
             endpoint,
             kind: isAbortError(error) ? "request_timeout" : "request_failed",

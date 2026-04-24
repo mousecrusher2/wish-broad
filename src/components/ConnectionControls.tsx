@@ -39,10 +39,14 @@ export function ConnectionControls({
 
   return (
     <div
-      className={`flex min-w-0 max-w-full items-center gap-3 rounded-2xl border px-4 py-3 ${panelStyle}`}
+      className={`flex max-w-full min-w-0 items-center gap-3 rounded-2xl border px-4 py-3 ${panelStyle}`}
     >
-      <span className={`inline-block size-3 shrink-0 rounded-full ${dotStyle}`} />
-      <span className={`min-h-5 truncate text-sm leading-5 font-semibold ${textStyle}`}>
+      <span
+        className={`inline-block size-3 shrink-0 rounded-full ${dotStyle}`}
+      />
+      <span
+        className={`min-h-5 truncate text-sm leading-5 font-semibold ${textStyle}`}
+      >
         {message ?? "\u00A0"}
       </span>
     </div>

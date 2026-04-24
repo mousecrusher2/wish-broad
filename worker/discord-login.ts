@@ -145,6 +145,9 @@ export async function completeDiscordLogin<E extends ContextWithBindings>(
     return c.text("Authorization code is required", 400);
   }
 
+  // Discord OAuth is used only to prove membership in the authorized guild.
+  // The app session is our own JWT cookie, so revoke the Discord access token
+  // after the membership check regardless of login success.
   let accessToken: string | null = null;
   const revokeAccessTokenIfNeeded = async () => {
     if (accessToken) {
@@ -170,12 +173,20 @@ export async function completeDiscordLogin<E extends ContextWithBindings>(
 
   accessToken = oauthTokenResult.value.accessToken;
 
-  const memberResult = await getGuildMember(accessToken, c.env.AUTHORIZED_GUILD_ID);
+  const memberResult = await getGuildMember(
+    accessToken,
+    c.env.AUTHORIZED_GUILD_ID,
+  );
   if (memberResult.isErr()) {
     console.error("Discord login failed:", memberResult.error);
     await revokeAccessTokenIfNeeded();
 
-    if (isGuildMembershipLookupFailure(memberResult.error, c.env.AUTHORIZED_GUILD_ID)) {
+    if (
+      isGuildMembershipLookupFailure(
+        memberResult.error,
+        c.env.AUTHORIZED_GUILD_ID,
+      )
+    ) {
       return c.text(
         "Unauthorized: You are not a member of the authorized Discord server",
         401,

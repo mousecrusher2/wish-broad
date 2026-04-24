@@ -3,7 +3,10 @@ import type { User } from "./types";
 import { OBSStreamingInfo } from "./OBSStreamingInfo";
 import { StreamSelection } from "./components/StreamSelection";
 import { WHEPPlayer } from "./WHEPPlayer";
-import { createDefaultSnapshot, type WHEPPlaybackControllerSnapshot } from "./player/WHEPPlaybackController";
+import {
+  createDefaultSnapshot,
+  type WHEPPlaybackControllerSnapshot,
+} from "./player/WHEPPlaybackController";
 import { useLiveStreams } from "./useLiveStreams";
 
 const OBS_SETTINGS_POPOVER_ID = "obs-settings-popover";
@@ -11,6 +14,8 @@ const OBS_SETTINGS_POPOVER_ID = "obs-settings-popover";
 function WHEPPlayerPageContent({ user }: Readonly<{ user: User }>) {
   const [resource, setResource] = useState("");
   const [activeResource, setActiveResource] = useState<string | null>(null);
+  // Loading the same stream again should still create a fresh controller and
+  // WHEP session, so explicit loads advance this remount key.
   const [loadSequence, setLoadSequence] = useState(0);
   const [playerSnapshot, setPlayerSnapshot] =
     useState<WHEPPlaybackControllerSnapshot>(createDefaultSnapshot);
@@ -45,6 +50,8 @@ function WHEPPlayerPageContent({ user }: Readonly<{ user: User }>) {
         playerSnapshot.playbackState.phase !== "ended" &&
         nextSnapshot.playbackState.phase === "ended"
       ) {
+        // The player is one of the targeted reconciliation points. Refresh the
+        // cheap list after playback proves the selected live ended.
         refresh();
       }
 

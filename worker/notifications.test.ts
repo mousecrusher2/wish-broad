@@ -31,7 +31,9 @@ describe("worker live start notifications", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     const [endpoint, init] = fetchSpy.mock.calls[0] ?? [];
-    expect(endpoint).toBe("https://discord.com/api/webhooks/123/token?wait=true");
+    expect(endpoint).toBe(
+      "https://discord.com/api/webhooks/123/token?wait=true",
+    );
     expect(init?.method).toBe("POST");
     expect(init?.headers).toEqual({
       "Content-Type": "application/json",

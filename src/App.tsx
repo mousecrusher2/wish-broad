@@ -21,7 +21,9 @@ function AppContent() {
       <div className={screenShellClasses}>
         <div className={panelClasses}>
           <h1 className={titleClasses}>ANGOU BROADCAST</h1>
-          <p className={bodyClasses}>認証状態の確認中にエラーが発生しました。</p>
+          <p className={bodyClasses}>
+            認証状態の確認中にエラーが発生しました。
+          </p>
           <p className="mt-2 text-sm leading-7 text-slate-400 sm:text-base">
             ページを再読み込みしてもう一度お試しください。
           </p>

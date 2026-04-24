@@ -8,6 +8,8 @@
 
 Static assets live in `public/`. D1 schema history lives in `migrations/`; keep `schema.sql` as the local schema snapshot when changing tables. `wrangler.jsonc` defines Worker bindings, secrets, assets, observability, and deployment settings. Generated Cloudflare binding types live in `worker-configuration.d.ts`, with app-facing aliases in `worker/types.ts`.
 
+Architecture and lifecycle decisions that are not obvious from code live in `docs/architecture.md`; update it when changing ingest/playback lifecycle, SFU reconciliation, notifications, or WHEP negotiation behavior.
+
 ## Build, Test, and Development Commands
 
 Run `pnpm install` after cloning. Use `pnpm dev` for the Vite client, `pnpm dev:worker` for a local Worker-only session, and `pnpm dev:full` when you need Wrangler to serve the integrated app. Run `pnpm build` to type-check and bundle the frontend. Run `pnpm test` for the Vitest suite and `pnpm test:watch` while iterating.

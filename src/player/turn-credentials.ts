@@ -13,6 +13,8 @@ const turnCredentialsResponseSchema = v.object({
 export async function fetchTurnIceServers(
   signal: AbortSignal,
 ): Promise<RTCIceServer[] | null> {
+  // This app keeps viewing behind the authenticated Worker, so TURN discovery is
+  // an app API instead of generic WHEP OPTIONS/Link discovery.
   const response = await fetch("/api/turn-credentials", {
     credentials: "include",
     headers: {

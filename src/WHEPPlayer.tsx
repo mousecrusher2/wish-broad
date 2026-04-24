@@ -54,6 +54,9 @@ export function WHEPPlayer({
     const disposeToken = disposeTokenRef.current;
 
     return () => {
+      // React Strict Mode can run an effect cleanup and setup back-to-back in
+      // development. Defer disposal so the replacement setup can claim the
+      // controller before the previous cleanup tears down the session.
       queueMicrotask(() => {
         if (disposeTokenRef.current === disposeToken) {
           controller.dispose();
@@ -74,7 +77,7 @@ export function WHEPPlayer({
     }
 
     controller.load(trimmedResourceUserId);
-  }, [controller,  resourceUserId]);
+  }, [controller, resourceUserId]);
 
   const videoRef = useCallback(
     (videoElement: HTMLVideoElement | null) => {

@@ -1,6 +1,6 @@
--- D1データベースのスキーマ
--- useridにつき1行で、StoredTrack配列のJSONを保存する
--- useridはlive_idと同一
+-- D1 schema snapshot.
+-- One live row exists per owner. user_id is also the live id, and tracks_json is
+-- the StoredTrack array for the exact Cloudflare Calls ingest session.
 CREATE TABLE IF NOT EXISTS lives (
     user_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
@@ -8,8 +8,8 @@ CREATE TABLE IF NOT EXISTS lives (
     notification_message_id INTEGER
 );
 
--- 配信用トークンを保存するテーブル
--- ユーザーあたり1つのトークンのみ発行可能
+-- Publisher tokens are stored as HMAC hashes, not raw bearer tokens. Each user
+-- has one current token.
 CREATE TABLE IF NOT EXISTS live_tokens (
     user_id TEXT PRIMARY KEY,
     token TEXT NOT NULL UNIQUE

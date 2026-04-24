@@ -92,7 +92,7 @@ export function StreamSelection({
         </div>
 
         <div className="h-72 rounded-xl border border-white/10 bg-slate-950/30">
-          <div className="h-full px-2 py-2 [overflow-y:overlay] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/15 hover:[&::-webkit-scrollbar-thumb]:bg-white/25">
+          <div className="h-full [overflow-y:overlay] px-2 py-2 [scrollbar-width:thin] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/15 hover:[&::-webkit-scrollbar-thumb]:bg-white/25 [&::-webkit-scrollbar-track]:bg-transparent">
             <div className="space-y-2">
               {streams.length > 0 ? (
                 streams.map((stream) => {

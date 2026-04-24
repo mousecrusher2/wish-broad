@@ -328,10 +328,7 @@ export class WHEPPlaybackController {
     }
   }
 
-  private handleConnected(
-    resourceUserId: string,
-    session: WHEPSession,
-  ): void {
+  private handleConnected(resourceUserId: string, session: WHEPSession): void {
     const currentAttemptId = this.attemptId;
     this.clearRecoveryTimer();
     this.clearReconnectState();
@@ -497,6 +494,8 @@ export class WHEPPlaybackController {
       cleanup: () => {},
     };
 
+    // The Worker cannot continuously poll Calls for all sessions. Let the active
+    // viewer detect missing tracks or stalled RTP and reconnect this one stream.
     const stopInterval = () => {
       if (playbackMonitor.intervalId !== null) {
         window.clearInterval(playbackMonitor.intervalId);
@@ -580,7 +579,9 @@ export class WHEPPlaybackController {
         return;
       }
 
-      playbackMonitor.requiredReceiverIds = receiverStats.map((stat) => stat.id);
+      playbackMonitor.requiredReceiverIds = receiverStats.map(
+        (stat) => stat.id,
+      );
       playbackMonitor.lastBytesReceivedByReceiver.clear();
       playbackMonitor.receiverStalledForMs.clear();
       for (const receiverStat of receiverStats) {
@@ -624,7 +625,10 @@ export class WHEPPlaybackController {
           }
 
           const receiverStatsById = new Map(
-            receiverStats.map((receiverStat) => [receiverStat.id, receiverStat]),
+            receiverStats.map((receiverStat) => [
+              receiverStat.id,
+              receiverStat,
+            ]),
           );
 
           for (const receiverId of playbackMonitor.requiredReceiverIds) {
@@ -644,7 +648,10 @@ export class WHEPPlaybackController {
                 receiverStat.bytesReceived,
               );
             }
-            playbackMonitor.receiverStalledForMs.set(receiverId, nextStalledForMs);
+            playbackMonitor.receiverStalledForMs.set(
+              receiverId,
+              nextStalledForMs,
+            );
 
             if (!shouldReconnectForPlaybackStall(nextStalledForMs)) {
               continue;

@@ -93,8 +93,7 @@ export class WHEPSessionError extends Error {
 
   isClientRequestError(): boolean {
     return (
-      this.kind === "resource_not_found" ||
-      this.kind === "client_request_error"
+      this.kind === "resource_not_found" || this.kind === "client_request_error"
     );
   }
 }
@@ -733,6 +732,8 @@ export class WHEPSession {
 
       const localOffer = await this.pc.createOffer();
       await this.pc.setLocalDescription(localOffer);
+      // The current Calls-backed Worker path is effectively non-trickle. Send a
+      // complete local offer instead of relying on later trickle ICE PATCHes.
       await waitForIceGatheringComplete(this.pc, this.abortController.signal);
 
       const localOfferSdp = this.pc.localDescription?.sdp;
@@ -756,11 +757,17 @@ export class WHEPSession {
             throw offerResponseResult.error;
           }
 
-          return parseWhepSessionResponse(offerResponseResult.value, resourceUrl);
+          return parseWhepSessionResponse(
+            offerResponseResult.value,
+            resourceUrl,
+          );
         });
       const sessionResponse = await this.registrationPromise;
       if (sessionResponse.expectedRemoteTrackCount !== null) {
-        this.expectedRemoteTrackCount = sessionResponse.expectedRemoteTrackCount;
+        // Custom Worker header: expected ingest track count. It lets the
+        // controller reject degraded playback that negotiates only a subset.
+        this.expectedRemoteTrackCount =
+          sessionResponse.expectedRemoteTrackCount;
       }
       this.serverSession = {
         kind: "registered",
@@ -789,6 +796,8 @@ export class WHEPSession {
 
         const localAnswer = await this.pc.createAnswer();
         await this.pc.setLocalDescription(localAnswer);
+        // This PATCH answers a WHEP 406 counter-offer. It is not a trickle ICE
+        // candidate PATCH, so gather the full answer before sending.
         await waitForIceGatheringComplete(this.pc, this.abortController.signal);
 
         const localAnswerSdp = this.pc.localDescription.sdp;

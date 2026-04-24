@@ -138,7 +138,6 @@ function sfuFailureFromHttpFailure(
   };
 }
 
-// カスタムエラークラス
 export class SfuApiError extends Error {
   readonly endpoint: string;
   readonly kind: SfuApiErrorKind;
@@ -275,16 +274,14 @@ async function fetchSfu(
       const kind: SfuApiErrorKind = isAbortError(error)
         ? "request_timeout"
         : "request_failed";
-      return err(
-        {
-          message: isAbortError(error)
-            ? "SFU request timed out"
-            : "SFU request failed",
-          endpoint,
-          kind,
-          responseBody: error.message,
-        },
-      );
+      return err({
+        message: isAbortError(error)
+          ? "SFU request timed out"
+          : "SFU request failed",
+        endpoint,
+        kind,
+        responseBody: error.message,
+      });
     })
     .finally(() => {
       clearTimeout(timeoutId);
@@ -320,21 +317,22 @@ async function readSfuJsonResponse(
     .json()
     .then((responseBody: unknown) => ok(responseBody))
     .catch((error: Error) =>
-      err(
-        {
-          message: "Invalid SFU response JSON",
-          endpoint: response.url,
-          kind: "invalid_response_json",
-          responseBody: {
-            error: error.message,
-          },
+      err({
+        message: "Invalid SFU response JSON",
+        endpoint: response.url,
+        kind: "invalid_response_json",
+        responseBody: {
+          error: error.message,
         },
-      ),
+      }),
     );
 }
 
 /**
- * 新しいセッションを作成
+ * Create a Cloudflare Calls session.
+ *
+ * Ingest sessions are later persisted in D1. Playback sessions are per viewer
+ * attempt and live only in the returned WHEP session URL.
  */
 async function createSession(
   env: SfuEnv,
@@ -353,29 +351,27 @@ async function createSession(
   }
   const responseBody = responseBodyResult.value;
 
-  const parsedResponse = v.safeParse(
-    newSessionResponseSchema,
-    responseBody,
-  );
+  const parsedResponse = v.safeParse(newSessionResponseSchema, responseBody);
   if (!parsedResponse.success) {
-    return err(
-      {
-        message: "Invalid SFU response schema",
-        endpoint,
-        kind: "invalid_response_schema",
-        responseBody: {
-          issues: parsedResponse.issues,
-          responseBody,
-        },
+    return err({
+      message: "Invalid SFU response schema",
+      endpoint,
+      kind: "invalid_response_schema",
+      responseBody: {
+        issues: parsedResponse.issues,
+        responseBody,
       },
-    );
+    });
   }
 
   return ok(parsedResponse.output);
 }
 
 /**
- * 配信者用：新しいトラックを作成（WHIP）
+ * Create ingest tracks from a WHIP offer.
+ *
+ * `autoDiscover` lets OBS offer its audio/video tracks without the Worker
+ * predeclaring individual track names.
  */
 async function createIngestTracks(
   env: SfuEnv,
@@ -410,24 +406,25 @@ async function createIngestTracks(
 
   const parsedResponse = v.safeParse(newTracksResponseSchema, responseBody);
   if (!parsedResponse.success) {
-    return err(
-      {
-        message: "Invalid SFU response schema",
-        endpoint,
-        kind: "invalid_response_schema",
-        responseBody: {
-          issues: parsedResponse.issues,
-          responseBody,
-        },
+    return err({
+      message: "Invalid SFU response schema",
+      endpoint,
+      kind: "invalid_response_schema",
+      responseBody: {
+        issues: parsedResponse.issues,
+        responseBody,
       },
-    );
+    });
   }
 
   return ok(parsedResponse.output);
 }
 
 /**
- * 視聴者用：既存のトラックに接続（WHEP）
+ * Attach a playback session to stored ingest track locators.
+ *
+ * Passing an SDP offer lets Calls answer directly. Calls may also return a
+ * counter-offer, which the WHEP route answers through `renegotiateSession`.
  */
 async function connectToTracks(
   env: SfuEnv,
@@ -467,19 +464,20 @@ async function connectToTracks(
   }
   const responseBody = responseBodyResult.value;
 
-  const parsedResponseResult = v.safeParse(newTracksResponseSchema, responseBody);
+  const parsedResponseResult = v.safeParse(
+    newTracksResponseSchema,
+    responseBody,
+  );
   if (!parsedResponseResult.success) {
-    return err(
-      {
-        message: "Invalid SFU response schema",
-        endpoint,
-        kind: "invalid_response_schema",
-        responseBody: {
-          issues: parsedResponseResult.issues,
-          responseBody,
-        },
+    return err({
+      message: "Invalid SFU response schema",
+      endpoint,
+      kind: "invalid_response_schema",
+      responseBody: {
+        issues: parsedResponseResult.issues,
+        responseBody,
       },
-    );
+    });
   }
   const parsedResponse = parsedResponseResult.output;
   const hasTrackNegotiationErrors =
@@ -487,20 +485,21 @@ async function connectToTracks(
     !!parsedResponse.errorDescription ||
     !!parsedResponse.tracks?.some((track) => !!track.errorCode);
   if (hasTrackNegotiationErrors) {
-    return err(
-      {
-        message: "SFU returned track negotiation errors",
-        endpoint,
-        kind: "track_negotiation_error",
-        responseBody,
-      },
-    );
+    return err({
+      message: "SFU returned track negotiation errors",
+      endpoint,
+      kind: "track_negotiation_error",
+      responseBody,
+    });
   }
   return ok(parsedResponse);
 }
 
 /**
- * セッション再交渉（ICE候補やセッション再交渉用）
+ * Submit the answer to a Calls counter-offer.
+ *
+ * This is not used for trickle ICE candidate PATCHes; the frontend gathers
+ * complete SDP before POST/PATCH.
  */
 export async function renegotiateSession(
   env: SfuEnv,
@@ -559,7 +558,10 @@ export async function renegotiateSession(
 }
 
 /**
- * セッションに紐づくトラックを閉じる
+ * Close tracks by mids that belong to one Calls session.
+ *
+ * Track mids are not stable across OBS reconnects or viewer sessions, so callers
+ * must pass the mids from the exact session they are closing.
  */
 export async function closeTracks(
   env: SfuEnv,
@@ -625,7 +627,10 @@ export async function closeTracks(
 }
 
 /**
- * セッションが継続しているか確認
+ * Probe one Calls session for targeted D1 reconciliation.
+ *
+ * Only 404/410 mean "inactive"; transient SFU failures should not be treated as
+ * proof that a live row is stale.
  */
 export async function isSessionActive(
   env: SfuEnv,
@@ -675,24 +680,26 @@ export async function isSessionActive(
     );
   }
 
-  return ok(true); // ステータスコード200ならセッションはアクティブ
+  return ok(true);
 }
 
 /**
- * 配信開始処理：SDP Offerを受け取り、Cloudflareセッションを作成してトラック情報を返す
+ * Start one ingest session and return the SDP answer plus durable track locators.
  */
 export async function startIngest(
   env: SfuEnv,
   _liveId: string,
   sdpOffer: string,
 ): Promise<
-  Result<{
-    sessionId: string;
-    sdpAnswer: string;
-    tracks: StoredTrack[];
-  }, SfuApiError>
+  Result<
+    {
+      sessionId: string;
+      sdpAnswer: string;
+      tracks: StoredTrack[];
+    },
+    SfuApiError
+  >
 > {
-  // 新しいセッションを作成
   const sessionResult = await createSession(env);
   if (sessionResult.isErr()) {
     const failure = sessionResult.error;
@@ -706,7 +713,6 @@ export async function startIngest(
     );
   }
 
-  // 配信者からのSDP Offerを使ってトラックを作成
   const tracksResult = await createIngestTracks(
     env,
     sessionResult.value.sessionId,
@@ -737,6 +743,7 @@ export async function startIngest(
     );
   }
   if (responseTracks.length > WHIP_MAX_TRACK_COUNT) {
+    // The supported OBS ingest shape is one audio track plus one video track.
     return err(
       new SfuApiError("WHIP does not allow more than two ingest tracks", {
         endpoint: ingestEndpoint,
@@ -776,7 +783,7 @@ export async function startIngest(
 }
 
 /**
- * 視聴開始処理：既存のトラックに接続して視聴セッションを作成
+ * Start one viewer playback session for the stored ingest tracks.
  */
 export async function startPlay(
   env: SfuEnv,
@@ -784,18 +791,20 @@ export async function startPlay(
   tracks: TrackLocator[],
   sdpOffer?: string,
 ): Promise<
-  Result<{
-    sessionId: string;
-    sdpAnswer: string;
-    sdpType: "answer" | "offer";
-    tracks: StoredTrack[];
-  }, SfuApiError | LiveNotFoundError>
+  Result<
+    {
+      sessionId: string;
+      sdpAnswer: string;
+      sdpType: "answer" | "offer";
+      tracks: StoredTrack[];
+    },
+    SfuApiError | LiveNotFoundError
+  >
 > {
   if (tracks.length === 0) {
     return err(new LiveNotFoundError(liveId));
   }
 
-  // 新しい視聴セッションを作成
   const sessionResult = await createSession(env);
   if (sessionResult.isErr()) {
     const failure = sessionResult.error;
@@ -809,7 +818,6 @@ export async function startPlay(
     );
   }
 
-  // 既存のトラックに接続
   const tracksResult = await connectToTracks(
     env,
     sessionResult.value.sessionId,

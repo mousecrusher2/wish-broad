@@ -129,7 +129,9 @@ function ErrorTokenState({
   );
 }
 
-function EmptyTokenState({ onCreateToken }: Readonly<{ onCreateToken: () => void }>) {
+function EmptyTokenState({
+  onCreateToken,
+}: Readonly<{ onCreateToken: () => void }>) {
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm font-medium text-amber-100">
