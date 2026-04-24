@@ -6,7 +6,15 @@ const WHEP_RECONNECT_MAX_DELAY_MS = 2_000;
 // Recovery is viewer-driven because the Worker does not continuously poll the
 // SFU. Keep retries bounded so a truly ended stream becomes visible quickly.
 export const WHEP_RECONNECT_WINDOW_MS = 30_000;
+
+// Receiver stats are the source of truth for media flow. Wait long enough for
+// all expected inbound RTP receivers to appear before declaring the WHEP session
+// incomplete and replacing it.
 export const WHEP_TRACK_DISCOVERY_GRACE_MS = 15_000;
+
+// Once a session was connected, let the browser report a stable disconnected or
+// failed state before replacing the WHEP session. Media stalls are handled by the
+// shorter bytesReceived monitor above this layer.
 export const WHEP_SESSION_RECOVERY_GRACE_MS = 3_000;
 
 type WHEPReconnectDisposition = "ended" | "error" | "retry";

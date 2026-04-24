@@ -545,6 +545,10 @@ export class WHEPPlaybackController {
         playbackMonitor.requiredReceiverIds === null &&
         playbackMonitor.discoveryTimeoutId === null
       ) {
+        // Receiver stats can lag behind SDP/track events. Until every expected
+        // inbound RTP receiver appears, bytesReceived monitoring cannot prove
+        // playback health. If the receivers never appear, the negotiated session
+        // is incomplete and must be replaced.
         playbackMonitor.discoveryTimeoutId = window.setTimeout(() => {
           playbackMonitor.discoveryTimeoutId = null;
 

@@ -17,6 +17,13 @@ DO migration could centralize live state and per-room notifications, but until
 then the client and normal HTTP requests are the practical triggers for
 reconciliation.
 
+## Schema Source
+
+Treat `schema.sql` as the authoritative current D1 schema. Migration files are
+the deployment history and should be updated alongside `schema.sql`, but code and
+local reasoning should use `schema.sql` as the source of truth for current table
+shape.
+
 ## Auth and Tokens
 
 Discord OAuth is an admission check, not the long-lived app session. The Worker
@@ -64,6 +71,11 @@ Playback DELETE requests close only the track mids embedded in the WHEP session
 URL returned by the Worker. The frontend must use that returned `Location`
 instead of reconstructing a session URL from D1 data.
 
+The frontend also waits for an in-flight WHEP registration to resolve during
+cleanup. A viewer can disconnect while `POST /play/:userId` is still in flight;
+if Calls creates the session before the abort is observed, the returned
+`Location` is still needed so the client can DELETE the playback session.
+
 ## WHEP Client Decisions
 
 The frontend WHEP client is not a generic WHEP client. It connects to this
@@ -101,8 +113,8 @@ Playback recovery is viewer-driven and bounded. The frontend reconnects when the
 specific session loses expected tracks, stalls, or disconnects, but it gives up
 within a fixed window so ended streams do not appear to load forever.
 
-The stall check uses inbound `bytesReceived` per receiver as a required
-end-of-stream detector, not as a defensive fallback. When a publisher ends a
+The stall check uses inbound `bytesReceived` per receiver as the required
+end-of-stream detector for the common publish-stop path. When a publisher ends a
 stream, the viewer commonly sees exactly this state: SFU session existence, ICE
 connection state, and negotiated track count can remain apparently healthy while
 RTP stops arriving. `bytesReceived` is the browser-side proof that media is still
@@ -110,6 +122,12 @@ flowing for each expected track, so this is the primary path that turns a stoppe
 stream into reconnect/end handling. The monitor runs only while the document is
 visible to avoid background throttling noise, and reconnects after a short stall
 because this app assumes a stable network suitable for higher-quality viewing.
+
+Track discovery has a separate timeout because `bytesReceived` can only be
+checked after every expected inbound RTP receiver appears in browser stats. If
+the Worker said the live has two stored tracks but the PeerConnection exposes
+only one receiver, the playback session is incomplete even if ICE is connected;
+the client must replace that session rather than accepting partial playback.
 
 ## Notifications
 

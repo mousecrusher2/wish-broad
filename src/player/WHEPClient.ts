@@ -693,6 +693,10 @@ export class WHEPSession {
   }
 
   private async cleanupServerSession(): Promise<void> {
+    // Dispose can run while POST /play is still in flight. If the Worker creates
+    // a session before the abort reaches it, wait for the registration result so
+    // the returned Location can still be DELETEd instead of leaking a Calls
+    // playback session.
     const registrationResult = this.registrationPromise
       ? await this.registrationPromise.catch(() => null)
       : null;

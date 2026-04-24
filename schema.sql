@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS lives (
 -- has one current token.
 CREATE TABLE IF NOT EXISTS live_tokens (
     user_id TEXT PRIMARY KEY,
-    token TEXT NOT NULL UNIQUE
+    token_hash TEXT NOT NULL UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS users (

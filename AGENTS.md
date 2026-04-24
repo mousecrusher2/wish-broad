@@ -6,7 +6,7 @@
 
 `worker/` contains the Cloudflare Worker and Hono routes. `worker/index.ts` is the entrypoint and route composition layer; keep data access in `worker/database.ts`, Cloudflare Calls/SFU integration in `worker/sfu.ts`, Discord OAuth helpers in `worker/discord.ts` and `worker/discord-login.ts`, live notifications in `worker/notifications.ts`, TURN credential generation in `worker/turn.ts`, and token hashing/authentication helpers in their existing modules.
 
-Static assets live in `public/`. D1 schema history lives in `migrations/`; keep `schema.sql` as the local schema snapshot when changing tables. `wrangler.jsonc` defines Worker bindings, secrets, assets, observability, and deployment settings. Generated Cloudflare binding types live in `worker-configuration.d.ts`, with app-facing aliases in `worker/types.ts`.
+Static assets live in `public/`. Treat `schema.sql` as the authoritative D1 schema for current development; migrations in `migrations/` record deployment history and must be kept aligned when table shape changes. `wrangler.jsonc` defines Worker bindings, secrets, assets, observability, and deployment settings. Generated Cloudflare binding types live in `worker-configuration.d.ts`, with app-facing aliases in `worker/types.ts`.
 
 Architecture and lifecycle decisions that are not obvious from code live in `docs/architecture.md`; update it when changing ingest/playback lifecycle, SFU reconciliation, notifications, or WHEP negotiation behavior.
 
