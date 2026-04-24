@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "check": "tsc -b && eslint && pnpm check:unused-exports",
     "check:unused-exports": "knip --exports --no-progress",
+    "schema:check": "node scripts/check-schema-from-migrations.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

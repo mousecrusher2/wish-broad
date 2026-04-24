@@ -121,6 +121,15 @@ export default [
     },
   },
   {
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: globals.node,
+    },
+    rules: {
+      "sonarjs/no-os-command-from-path": "off",
+    },
+  },
+  {
     files: ["**/*.test.{ts,tsx}"],
     plugins: {
       unicorn,

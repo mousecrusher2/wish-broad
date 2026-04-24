@@ -24,6 +24,12 @@ the deployment history and should be updated alongside `schema.sql`, but code an
 local reasoning should use `schema.sql` as the source of truth for current table
 shape.
 
+Use `pnpm schema:check` to replay migrations into a temporary SQLite database and
+compare the resulting schema shape with `schema.sql`. The script requires the
+`sqlite3` CLI on `PATH`. This is a drift mitigation for migration authoring only.
+It cannot prove that data-copying migrations move or transform existing rows
+correctly.
+
 ## Auth and Tokens
 
 Discord OAuth is an admission check, not the long-lived app session. The Worker
