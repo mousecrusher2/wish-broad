@@ -101,6 +101,16 @@ Playback recovery is viewer-driven and bounded. The frontend reconnects when the
 specific session loses expected tracks, stalls, or disconnects, but it gives up
 within a fixed window so ended streams do not appear to load forever.
 
+The stall check uses inbound `bytesReceived` per receiver as a required
+end-of-stream detector, not as a defensive fallback. When a publisher ends a
+stream, the viewer commonly sees exactly this state: SFU session existence, ICE
+connection state, and negotiated track count can remain apparently healthy while
+RTP stops arriving. `bytesReceived` is the browser-side proof that media is still
+flowing for each expected track, so this is the primary path that turns a stopped
+stream into reconnect/end handling. The monitor runs only while the document is
+visible to avoid background throttling noise, and reconnects after a short stall
+because this app assumes a stable network suitable for higher-quality viewing.
+
 ## Notifications
 
 Discord live-start notifications are best-effort. The Worker asks Discord to

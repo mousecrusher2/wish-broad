@@ -494,8 +494,11 @@ export class WHEPPlaybackController {
       cleanup: () => {},
     };
 
-    // The Worker cannot continuously poll Calls for all sessions. Let the active
-    // viewer detect missing tracks or stalled RTP and reconnect this one stream.
+    // This is the primary end-of-stream detection path. When an ingest ends,
+    // the SFU session/track metadata can still look valid long enough for the
+    // viewer to keep the PeerConnection open, but RTP bytes stop advancing.
+    // Watch per-receiver bytesReceived and reconnect this stream when expected
+    // media stops flowing.
     const stopInterval = () => {
       if (playbackMonitor.intervalId !== null) {
         window.clearInterval(playbackMonitor.intervalId);
