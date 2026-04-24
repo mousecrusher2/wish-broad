@@ -24,6 +24,7 @@ import { HTTPException } from "hono/http-exception";
 import { jwt } from "hono/jwt";
 import { deleteLiveStartedNotification, sendLiveStartedNotification } from "./notifications";
 import { hashTokenWithPepper } from "./token-hash";
+import { generateTurnIceServers } from "./turn";
 
 type AppEnv = {
   Bindings: Bindings;
@@ -588,6 +589,26 @@ app.get("/api/me", async (c) => {
   return c.json({
     userId: jwtPayload.userId,
     displayName: jwtPayload.displayName,
+  });
+});
+
+app.get("/api/turn-credentials", async (c) => {
+  const jwtPayload = c.get("jwtPayload");
+  const turnResult = await generateTurnIceServers(c.env, jwtPayload.userId);
+  if (turnResult.isErr()) {
+    console.error(
+      `Failed to generate TURN credentials for viewer ${jwtPayload.userId}:`,
+      turnResult.error,
+    );
+    return c.text(
+      "Failed to generate TURN credentials",
+      turnResult.error.kind === "request_timeout" ? 504 : 502,
+    );
+  }
+
+  c.header("Cache-Control", "no-store");
+  return c.json({
+    iceServers: turnResult.value,
   });
 });
 

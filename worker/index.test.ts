@@ -41,6 +41,10 @@ const notificationsMocks = vi.hoisted(() => ({
   sendLiveStartedNotification: vi.fn<() => Promise<unknown>>(),
 }));
 
+const turnMocks = vi.hoisted(() => ({
+  generateTurnIceServers: vi.fn<() => Promise<unknown>>(),
+}));
+
 const discordMocks = vi.hoisted(() => {
   class MockDiscordApiError extends Error {
     readonly endpoint: string;
@@ -149,6 +153,9 @@ vi.mock("./notifications", () => ({
   deleteLiveStartedNotification: notificationsMocks.deleteLiveStartedNotification,
   sendLiveStartedNotification: notificationsMocks.sendLiveStartedNotification,
 }));
+vi.mock("./turn", () => ({
+  generateTurnIceServers: turnMocks.generateTurnIceServers,
+}));
 
 import app from "./index";
 
@@ -246,6 +253,8 @@ function createBindings(): Bindings {
     LIVE_TOKEN_PEPPER: "test-live-token-pepper",
     NOTIFICATIONS_DISCORD_WEBHOOK_URL:
       "https://discord.com/api/webhooks/123/token",
+    TURN_KEY_API_TOKEN: "turn-key-api-token",
+    TURN_KEY_ID: "turn-key-id",
   };
 }
 
@@ -398,6 +407,14 @@ describe("worker app", () => {
     notificationsMocks.sendLiveStartedNotification.mockResolvedValue(
       ok({ messageId: 1n }),
     );
+    turnMocks.generateTurnIceServers.mockReset();
+    turnMocks.generateTurnIceServers.mockResolvedValue(
+      ok([
+        {
+          urls: ["stun:stun.cloudflare.com:3478"],
+        },
+      ]),
+    );
   });
 
   it("redirects to Discord when login starts", async () => {
@@ -543,6 +560,50 @@ describe("worker app", () => {
       "user-1",
       expectedTokenHash,
     );
+  });
+
+  it("returns authenticated TURN credentials with no-store caching", async () => {
+    const env = createBindings();
+    const request = new Request("http://localhost/api/turn-credentials", {
+      headers: {
+        Cookie: await createAuthCookie(env, { userId: "viewer-1" }),
+      },
+    });
+
+    const response = await app.fetch(request, env, createExecutionContext());
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(turnMocks.generateTurnIceServers).toHaveBeenCalledWith(
+      env,
+      "viewer-1",
+    );
+    await expect(response.json()).resolves.toEqual({
+      iceServers: [
+        {
+          urls: ["stun:stun.cloudflare.com:3478"],
+        },
+      ],
+    });
+  });
+
+  it("maps TURN credential timeouts to 504", async () => {
+    const env = createBindings();
+    turnMocks.generateTurnIceServers.mockResolvedValue(
+      err({
+        kind: "request_timeout",
+      }),
+    );
+    const request = new Request("http://localhost/api/turn-credentials", {
+      headers: {
+        Cookie: await createAuthCookie(env, { userId: "viewer-1" }),
+      },
+    });
+
+    const response = await app.fetch(request, env, createExecutionContext());
+
+    expect(response.status).toBe(504);
+    expect(await response.text()).toBe("Failed to generate TURN credentials");
   });
 
   it("rejects ingest when the bearer token does not match the stored hash", async () => {

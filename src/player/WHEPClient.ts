@@ -1,4 +1,5 @@
 import { err, ok, type Result } from "neverthrow";
+import { fetchTurnIceServers } from "./turn-credentials";
 
 export type WHEPConnectionStatus =
   | "disconnected"
@@ -719,6 +720,16 @@ export class WHEPSession {
         `/play/${encodeURIComponent(this.resourceUserId)}`,
         window.location.origin,
       );
+
+      const turnIceServers = await fetchTurnIceServers(
+        this.abortController.signal,
+      );
+      if (turnIceServers !== null) {
+        this.pc.setConfiguration({
+          ...this.pc.getConfiguration(),
+          iceServers: turnIceServers,
+        });
+      }
 
       const localOffer = await this.pc.createOffer();
       await this.pc.setLocalDescription(localOffer);
