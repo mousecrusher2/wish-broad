@@ -1,5 +1,7 @@
 /* eslint-disable sonarjs/cognitive-complexity */
-import { Context, Hono } from "hono";
+import type { Context } from "hono";
+import { HonoBase } from "hono/hono-base";
+import { LinearRouter } from "hono/router/linear-router";
 import { JWTPayload, Bindings } from "./types";
 import * as db from "./database";
 import {
@@ -36,7 +38,7 @@ type AppEnv = {
   };
 };
 
-const app = new Hono<AppEnv>();
+const app = new HonoBase<AppEnv>({ router: new LinearRouter() });
 
 function createPlaySessionLocation(
   requestUrl: string,
@@ -192,8 +194,18 @@ app.use(logger());
 
 // OBS ingest authenticates with the per-user live token, not the viewer JWT.
 app.use(
-  "/ingest/:userId/*",
-  hashedBearerAuth<AppEnv, "/ingest/:userId/*">({
+  "/ingest/:userId",
+  hashedBearerAuth<AppEnv, "/ingest/:userId">({
+    pepper: (c) => c.env.LIVE_TOKEN_PEPPER,
+    token: (c) => {
+      const { userId } = c.req.param();
+      return db.getLiveTokenHash(c.env.LIVE_DB, userId);
+    },
+  }),
+);
+app.use(
+  "/ingest/:userId/:sessionId",
+  hashedBearerAuth<AppEnv, "/ingest/:userId/:sessionId">({
     pepper: (c) => c.env.LIVE_TOKEN_PEPPER,
     token: (c) => {
       const { userId } = c.req.param();
