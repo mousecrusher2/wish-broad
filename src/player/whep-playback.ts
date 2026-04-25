@@ -1,20 +1,59 @@
 import type { WHEPConnectionStatus } from "./WHEPClient";
 
-export type WHEPPlaybackPhase =
-  | "idle"
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "ended"
-  | "error";
+type WHEPRecoveringConnectionStatus = Exclude<
+  WHEPConnectionStatus,
+  "connected"
+>;
 
-export type WHEPPlaybackState = {
-  connectionStatus: WHEPConnectionStatus;
-  hasStream: boolean;
-  phase: WHEPPlaybackPhase;
-  resourceUserId: string | null;
+type WHEPConnectingPlaybackState = {
+  connectionStatus: WHEPRecoveringConnectionStatus;
+  hasStream: false;
+  phase: "connecting";
+  resourceUserId: string;
   retryCount: number;
 };
+
+type WHEPReconnectingPlaybackState = {
+  connectionStatus: WHEPRecoveringConnectionStatus;
+  hasStream: false;
+  phase: "reconnecting";
+  resourceUserId: string;
+  retryCount: number;
+};
+
+export type WHEPPlaybackState =
+  | {
+      connectionStatus: "disconnected";
+      hasStream: false;
+      phase: "idle";
+      resourceUserId: null;
+      retryCount: 0;
+    }
+  | WHEPConnectingPlaybackState
+  | {
+      connectionStatus: "connected";
+      hasStream: boolean;
+      phase: "connected";
+      resourceUserId: string;
+      retryCount: 0;
+    }
+  | WHEPReconnectingPlaybackState
+  | {
+      connectionStatus: "disconnected";
+      hasStream: false;
+      phase: "ended";
+      resourceUserId: string;
+      retryCount: 0;
+    }
+  | {
+      connectionStatus: "failed";
+      hasStream: false;
+      phase: "error";
+      resourceUserId: string;
+      retryCount: 0;
+    };
+
+type WHEPPlaybackPhase = WHEPPlaybackState["phase"];
 
 export function createDefaultPlaybackState(): WHEPPlaybackState {
   return {
@@ -28,10 +67,20 @@ export function createDefaultPlaybackState(): WHEPPlaybackState {
 
 export function createPlaybackState(
   resourceUserId: string,
-  phase: WHEPPlaybackPhase,
-  connectionStatus: WHEPConnectionStatus,
+  phase: "connecting" | "reconnecting",
+  connectionStatus: WHEPRecoveringConnectionStatus,
   retryCount: number,
-): WHEPPlaybackState {
+): WHEPConnectingPlaybackState | WHEPReconnectingPlaybackState {
+  if (phase === "connecting") {
+    return {
+      connectionStatus,
+      hasStream: false,
+      phase,
+      resourceUserId,
+      retryCount,
+    };
+  }
+
   return {
     connectionStatus,
     hasStream: false,

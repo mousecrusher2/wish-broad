@@ -32,6 +32,18 @@ type WHEPSessionCallbacks = {
   onStreamChange?: (hasStream: boolean) => void;
 };
 
+type WHEPSessionRuntimeState =
+  | { hasStream: false; status: "disconnected" }
+  | { hasStream: false; status: "connecting" }
+  | { hasStream: boolean; status: "connected" }
+  | { hasStream: false; status: "failed" };
+
+type WHEPSessionLifecycle =
+  | { kind: "active" }
+  | { kind: "releasingLocalResources" }
+  | { cleanupPromise: Promise<void>; kind: "closingServerSession" }
+  | { kind: "disposed" };
+
 type WHEPSessionOptions = {
   callbacks?: WHEPSessionCallbacks;
   resourceUserId: string;
@@ -39,7 +51,8 @@ type WHEPSessionOptions = {
 };
 
 type ServerSessionState =
-  | { kind: "pending" }
+  | { kind: "idle" }
+  | { kind: "registering"; promise: Promise<WhepSessionResponse> }
   | { kind: "registered"; location: string };
 
 type WhepSessionResponse =
@@ -71,6 +84,28 @@ type WHEPSessionErrorOptions = {
   retryable?: boolean;
   stage: WHEPSessionRequestStage;
 };
+
+function createRuntimeState(
+  status: WHEPConnectionStatus,
+  previousState?: WHEPSessionRuntimeState,
+): WHEPSessionRuntimeState {
+  switch (status) {
+    case "disconnected":
+      return { hasStream: false, status };
+    case "connecting":
+      return { hasStream: false, status };
+    case "connected":
+      return {
+        hasStream:
+          previousState?.status === "connected"
+            ? previousState.hasStream
+            : false,
+        status,
+      };
+    case "failed":
+      return { hasStream: false, status };
+  }
+}
 
 export class WHEPSessionError extends Error {
   readonly kind: WHEPSessionErrorKind;
@@ -293,15 +328,12 @@ export class WHEPSession {
   >();
   private readonly resourceUserId: string;
   private readonly videoElement: HTMLVideoElement;
-  private cleanupPromise: Promise<void> | null = null;
-  private disposed = false;
   private expectedRemoteTrackCount = 0;
-  private hasStream = false;
-  private localResourcesReleased = false;
+  private lifecycle: WHEPSessionLifecycle = { kind: "active" };
   private maxRemoteTrackCount = 0;
-  private registrationPromise: Promise<WhepSessionResponse> | null = null;
-  private serverSession: ServerSessionState = { kind: "pending" };
-  private status: WHEPConnectionStatus = "disconnected";
+  private runtimeState: WHEPSessionRuntimeState =
+    createRuntimeState("disconnected");
+  private serverSession: ServerSessionState = { kind: "idle" };
 
   constructor({
     callbacks = {},
@@ -325,21 +357,39 @@ export class WHEPSession {
     this.pc.addTransceiver("audio", { direction: "recvonly" });
   }
 
+  private isActive(): boolean {
+    return this.lifecycle.kind === "active";
+  }
+
   private setStatus(nextStatus: WHEPConnectionStatus): void {
-    if (this.status === nextStatus) {
+    const previousState = this.runtimeState;
+    const nextState = createRuntimeState(nextStatus, previousState);
+    if (
+      previousState.status === nextState.status &&
+      previousState.hasStream === nextState.hasStream
+    ) {
       return;
     }
 
-    this.status = nextStatus;
-    this.callbacks.onStatusChange?.(nextStatus);
+    this.runtimeState = nextState;
+    if (previousState.status !== nextState.status) {
+      this.callbacks.onStatusChange?.(nextStatus);
+    }
+    if (previousState.hasStream !== nextState.hasStream) {
+      this.callbacks.onStreamChange?.(nextState.hasStream);
+    }
   }
 
   private setStreamState(hasStream: boolean): void {
-    if (this.hasStream === hasStream) {
+    const previousState = this.runtimeState;
+    if (
+      previousState.status !== "connected" ||
+      previousState.hasStream === hasStream
+    ) {
       return;
     }
 
-    this.hasStream = hasStream;
+    this.runtimeState = { hasStream, status: "connected" };
     this.callbacks.onStreamChange?.(hasStream);
   }
 
@@ -359,13 +409,13 @@ export class WHEPSession {
         this.maxRemoteTrackCount,
         remoteTracks.length,
       ),
-      hasStream: this.hasStream,
+      hasStream: this.runtimeState.hasStream,
       iceConnectionState: this.pc.iceConnectionState,
       liveTrackCount,
       mutedTrackCount,
       remoteTrackCount: remoteTracks.length,
       signalingState: this.pc.signalingState,
-      status: this.status,
+      status: this.runtimeState.status,
     };
   }
 
@@ -467,7 +517,7 @@ export class WHEPSession {
   }
 
   private refreshConnectionStatus(): void {
-    if (this.disposed) {
+    if (!this.isActive()) {
       return;
     }
 
@@ -483,8 +533,7 @@ export class WHEPSession {
   }
 
   private refreshStreamState(): void {
-    if (this.disposed) {
-      this.setStreamState(false);
+    if (!this.isActive()) {
       return;
     }
 
@@ -555,7 +604,7 @@ export class WHEPSession {
     this.addPeerConnectionListener("icecandidate", refreshStatus);
     this.addPeerConnectionListener("negotiationneeded", refreshStatus);
     this.addPeerConnectionListener("icecandidateerror", (event) => {
-      if (this.disposed) {
+      if (!this.isActive()) {
         return;
       }
 
@@ -570,7 +619,7 @@ export class WHEPSession {
 
   private attachTrackListener(): void {
     this.addPeerConnectionListener("track", (event) => {
-      if (this.disposed) {
+      if (!this.isActive()) {
         return;
       }
 
@@ -590,7 +639,7 @@ export class WHEPSession {
 
   private attachMediaStreamListeners(): void {
     this.addMediaStreamListener("addtrack", (event) => {
-      if (this.disposed) {
+      if (!this.isActive()) {
         return;
       }
 
@@ -599,7 +648,7 @@ export class WHEPSession {
     });
 
     this.addMediaStreamListener("removetrack", (event) => {
-      if (this.disposed) {
+      if (!this.isActive()) {
         return;
       }
 
@@ -648,11 +697,6 @@ export class WHEPSession {
   }
 
   private releaseLocalResources(): void {
-    if (this.localResourcesReleased) {
-      return;
-    }
-
-    this.localResourcesReleased = true;
     this.cleanupEventListeners();
     this.pc.close();
 
@@ -697,26 +741,28 @@ export class WHEPSession {
     // a session before the abort reaches it, wait for the registration result so
     // the returned Location can still be DELETEd instead of leaking a Calls
     // playback session.
-    const registrationResult = this.registrationPromise
-      ? await this.registrationPromise.catch(() => null)
-      : null;
+    if (this.serverSession.kind === "registering") {
+      const registrationResult = await this.serverSession.promise.catch(
+        () => null,
+      );
 
-    if (
-      this.serverSession.kind !== "registered" &&
-      registrationResult !== null
-    ) {
-      this.serverSession = {
-        kind: "registered",
-        location: registrationResult.sessionUrl.toString(),
-      };
+      if (registrationResult !== null) {
+        this.serverSession = {
+          kind: "registered",
+          location: registrationResult.sessionUrl.toString(),
+        };
+      }
     }
 
     await this.deleteRegisteredSession();
   }
 
   async start(): Promise<Result<void, Error>> {
+    if (!this.isActive()) {
+      return ok(undefined);
+    }
+
     this.setStatus("connecting");
-    this.setStreamState(false);
 
     const runStart = async (): Promise<Result<void, Error>> => {
       const resourceUrl = new URL(
@@ -745,7 +791,7 @@ export class WHEPSession {
         throw new Error("Failed to create local SDP offer");
       }
 
-      this.registrationPromise = fetch(resourceUrl, {
+      const registrationPromise = fetch(resourceUrl, {
         method: "POST",
         headers: {
           Accept: "application/sdp",
@@ -766,7 +812,11 @@ export class WHEPSession {
             resourceUrl,
           );
         });
-      const sessionResponse = await this.registrationPromise;
+      this.serverSession = {
+        kind: "registering",
+        promise: registrationPromise,
+      };
+      const sessionResponse = await registrationPromise;
       if (sessionResponse.expectedRemoteTrackCount !== null) {
         // Custom Worker header: expected ingest track count. It lets the
         // controller reject degraded playback that negotiates only a subset.
@@ -778,7 +828,7 @@ export class WHEPSession {
         location: sessionResponse.sessionUrl.toString(),
       };
 
-      if (this.disposed) {
+      if (!this.isActive()) {
         return ok(undefined);
       }
 
@@ -837,7 +887,7 @@ export class WHEPSession {
     };
 
     return runStart().catch(async (error: Error) => {
-      if (this.abortController.signal.aborted || this.disposed) {
+      if (this.abortController.signal.aborted || !this.isActive()) {
         return ok(undefined);
       }
 
@@ -850,17 +900,30 @@ export class WHEPSession {
   async dispose(options?: { notifyServer?: boolean }): Promise<void> {
     const notifyServer = options?.notifyServer ?? true;
 
-    if (this.cleanupPromise) {
-      await this.cleanupPromise;
+    if (this.lifecycle.kind === "closingServerSession") {
+      await this.lifecycle.cleanupPromise;
+      return;
+    }
+    if (
+      this.lifecycle.kind === "disposed" ||
+      this.lifecycle.kind === "releasingLocalResources"
+    ) {
       return;
     }
 
-    this.disposed = true;
+    this.lifecycle = { kind: "releasingLocalResources" };
     this.abortController.abort();
     this.releaseLocalResources();
-    this.cleanupPromise = notifyServer
+
+    const cleanupPromise = notifyServer
       ? this.cleanupServerSession()
       : Promise.resolve();
-    await this.cleanupPromise;
+    this.lifecycle = { cleanupPromise, kind: "closingServerSession" };
+
+    try {
+      await cleanupPromise;
+    } finally {
+      this.lifecycle = { kind: "disposed" };
+    }
   }
 }

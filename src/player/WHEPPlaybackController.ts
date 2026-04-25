@@ -76,8 +76,18 @@ function createTerminalPlaybackState(
   phase: "ended" | "error",
   resourceUserId: string,
 ): WHEPPlaybackState {
+  if (phase === "ended") {
+    return {
+      connectionStatus: "disconnected",
+      hasStream: false,
+      phase,
+      resourceUserId,
+      retryCount: 0,
+    };
+  }
+
   return {
-    connectionStatus: phase === "ended" ? "disconnected" : "failed",
+    connectionStatus: "failed",
     hasStream: false,
     phase,
     resourceUserId,
