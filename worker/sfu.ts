@@ -196,46 +196,130 @@ export class LiveNotFoundError extends Error {
   }
 }
 
-const sessionDescriptionSchema = v.object({
-  sdp: v.string(),
-  type: v.string(),
-});
+function createSessionDescriptionSchema() {
+  return v.object({
+    sdp: v.string(),
+    type: v.string(),
+  });
+}
 
-const newTrackResponseSchema = v.object({
-  trackName: v.string(),
-  mid: v.optional(v.string()),
-  sessionId: v.optional(v.string()),
-  errorCode: v.optional(v.string()),
-  errorDescription: v.optional(v.string()),
-});
+let sessionDescriptionSchema:
+  | ReturnType<typeof createSessionDescriptionSchema>
+  | undefined;
 
-const newSessionResponseSchema = v.object({
-  sessionId: v.string(),
-});
+function getSessionDescriptionSchema() {
+  if (sessionDescriptionSchema === undefined) {
+    sessionDescriptionSchema = createSessionDescriptionSchema();
+  }
 
-const newTracksResponseSchema = v.object({
-  errorCode: v.optional(v.string()),
-  errorDescription: v.optional(v.string()),
-  requiresImmediateRenegotiation: v.optional(v.boolean()),
-  tracks: v.optional(v.array(newTrackResponseSchema)),
-  sessionDescription: v.optional(sessionDescriptionSchema),
-});
+  return sessionDescriptionSchema;
+}
 
-const closeTrackResultSchema = v.object({
-  mid: v.string(),
-  errorCode: v.optional(v.string()),
-  errorDescription: v.optional(v.string()),
-  sessionId: v.optional(v.string()),
-  trackName: v.optional(v.string()),
-});
+function createNewTrackResponseSchema() {
+  return v.object({
+    trackName: v.string(),
+    mid: v.optional(v.string()),
+    sessionId: v.optional(v.string()),
+    errorCode: v.optional(v.string()),
+    errorDescription: v.optional(v.string()),
+  });
+}
 
-const closeTracksResponseSchema = v.object({
-  errorCode: v.optional(v.string()),
-  errorDescription: v.optional(v.string()),
-  requiresImmediateRenegotiation: v.optional(v.boolean()),
-  sessionDescription: v.optional(sessionDescriptionSchema),
-  tracks: v.optional(v.array(closeTrackResultSchema)),
-});
+let newTrackResponseSchema:
+  | ReturnType<typeof createNewTrackResponseSchema>
+  | undefined;
+
+function getNewTrackResponseSchema() {
+  if (newTrackResponseSchema === undefined) {
+    newTrackResponseSchema = createNewTrackResponseSchema();
+  }
+
+  return newTrackResponseSchema;
+}
+
+function createNewSessionResponseSchema() {
+  return v.object({
+    sessionId: v.string(),
+  });
+}
+
+let newSessionResponseSchema:
+  | ReturnType<typeof createNewSessionResponseSchema>
+  | undefined;
+
+function getNewSessionResponseSchema() {
+  if (newSessionResponseSchema === undefined) {
+    newSessionResponseSchema = createNewSessionResponseSchema();
+  }
+
+  return newSessionResponseSchema;
+}
+
+function createNewTracksResponseSchema() {
+  return v.object({
+    errorCode: v.optional(v.string()),
+    errorDescription: v.optional(v.string()),
+    requiresImmediateRenegotiation: v.optional(v.boolean()),
+    tracks: v.optional(v.array(getNewTrackResponseSchema())),
+    sessionDescription: v.optional(getSessionDescriptionSchema()),
+  });
+}
+
+let newTracksResponseSchema:
+  | ReturnType<typeof createNewTracksResponseSchema>
+  | undefined;
+
+function getNewTracksResponseSchema() {
+  if (newTracksResponseSchema === undefined) {
+    newTracksResponseSchema = createNewTracksResponseSchema();
+  }
+
+  return newTracksResponseSchema;
+}
+
+function createCloseTrackResultSchema() {
+  return v.object({
+    mid: v.string(),
+    errorCode: v.optional(v.string()),
+    errorDescription: v.optional(v.string()),
+    sessionId: v.optional(v.string()),
+    trackName: v.optional(v.string()),
+  });
+}
+
+let closeTrackResultSchema:
+  | ReturnType<typeof createCloseTrackResultSchema>
+  | undefined;
+
+function getCloseTrackResultSchema() {
+  if (closeTrackResultSchema === undefined) {
+    closeTrackResultSchema = createCloseTrackResultSchema();
+  }
+
+  return closeTrackResultSchema;
+}
+
+function createCloseTracksResponseSchema() {
+  return v.object({
+    errorCode: v.optional(v.string()),
+    errorDescription: v.optional(v.string()),
+    requiresImmediateRenegotiation: v.optional(v.boolean()),
+    sessionDescription: v.optional(getSessionDescriptionSchema()),
+    tracks: v.optional(v.array(getCloseTrackResultSchema())),
+  });
+}
+
+let closeTracksResponseSchema:
+  | ReturnType<typeof createCloseTracksResponseSchema>
+  | undefined;
+
+function getCloseTracksResponseSchema() {
+  if (closeTracksResponseSchema === undefined) {
+    closeTracksResponseSchema = createCloseTracksResponseSchema();
+  }
+
+  return closeTracksResponseSchema;
+}
 
 type SfuEnv = Pick<Bindings, "CALLS_APP_ID" | "CALLS_APP_SECRET">;
 type TrackLocatorRequest = Pick<
@@ -351,7 +435,10 @@ async function createSession(
   }
   const responseBody = responseBodyResult.value;
 
-  const parsedResponse = v.safeParse(newSessionResponseSchema, responseBody);
+  const parsedResponse = v.safeParse(
+    getNewSessionResponseSchema(),
+    responseBody,
+  );
   if (!parsedResponse.success) {
     return err({
       message: "Invalid SFU response schema",
@@ -404,7 +491,10 @@ async function createIngestTracks(
   }
   const responseBody = responseBodyResult.value;
 
-  const parsedResponse = v.safeParse(newTracksResponseSchema, responseBody);
+  const parsedResponse = v.safeParse(
+    getNewTracksResponseSchema(),
+    responseBody,
+  );
   if (!parsedResponse.success) {
     return err({
       message: "Invalid SFU response schema",
@@ -465,7 +555,7 @@ async function connectToTracks(
   const responseBody = responseBodyResult.value;
 
   const parsedResponseResult = v.safeParse(
-    newTracksResponseSchema,
+    getNewTracksResponseSchema(),
     responseBody,
   );
   if (!parsedResponseResult.success) {
@@ -609,7 +699,10 @@ export async function closeTracks(
   }
   const responseBody = responseBodyResult.value;
 
-  const parsedResponse = v.safeParse(closeTracksResponseSchema, responseBody);
+  const parsedResponse = v.safeParse(
+    getCloseTracksResponseSchema(),
+    responseBody,
+  );
   if (!parsedResponse.success) {
     return err(
       new SfuApiError("Invalid SFU response schema", {

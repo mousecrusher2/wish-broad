@@ -55,15 +55,41 @@ export class TurnApiError extends Error {
 const TURN_CREDENTIAL_TTL_SECONDS = 86_400;
 const TURN_FETCH_TIMEOUT_MS = 5_000;
 
-const rawIceServerSchema = v.object({
-  urls: v.union([v.string(), v.array(v.string())]),
-  username: v.optional(v.string()),
-  credential: v.optional(v.string()),
-});
+function createRawIceServerSchema() {
+  return v.object({
+    urls: v.union([v.string(), v.array(v.string())]),
+    username: v.optional(v.string()),
+    credential: v.optional(v.string()),
+  });
+}
 
-const turnCredentialsResponseSchema = v.object({
-  iceServers: v.array(rawIceServerSchema),
-});
+let rawIceServerSchema: ReturnType<typeof createRawIceServerSchema> | undefined;
+
+function getRawIceServerSchema() {
+  if (rawIceServerSchema === undefined) {
+    rawIceServerSchema = createRawIceServerSchema();
+  }
+
+  return rawIceServerSchema;
+}
+
+function createTurnCredentialsResponseSchema() {
+  return v.object({
+    iceServers: v.array(getRawIceServerSchema()),
+  });
+}
+
+let turnCredentialsResponseSchema:
+  | ReturnType<typeof createTurnCredentialsResponseSchema>
+  | undefined;
+
+function getTurnCredentialsResponseSchema() {
+  if (turnCredentialsResponseSchema === undefined) {
+    turnCredentialsResponseSchema = createTurnCredentialsResponseSchema();
+  }
+
+  return turnCredentialsResponseSchema;
+}
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
@@ -205,7 +231,7 @@ async function parseTurnCredentialsResponse(
   }
 
   const parsedResponse = v.safeParse(
-    turnCredentialsResponseSchema,
+    getTurnCredentialsResponseSchema(),
     responseBody.value,
   );
   if (!parsedResponse.success) {

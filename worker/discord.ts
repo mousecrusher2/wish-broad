@@ -264,6 +264,66 @@ async function fetchDiscord(
   return fetchDiscordWithTimeout(endpoint, init);
 }
 
+function createDiscordOAuthTokenResponseSchema() {
+  return v.object({
+    access_token: v.string(),
+    token_type: v.string(),
+    expires_in: v.number(),
+    refresh_token: v.optional(v.string()),
+    scope: v.string(),
+  });
+}
+
+let discordOAuthTokenResponseSchema:
+  | ReturnType<typeof createDiscordOAuthTokenResponseSchema>
+  | undefined;
+
+function getDiscordOAuthTokenResponseSchema() {
+  if (discordOAuthTokenResponseSchema === undefined) {
+    discordOAuthTokenResponseSchema = createDiscordOAuthTokenResponseSchema();
+  }
+
+  return discordOAuthTokenResponseSchema;
+}
+
+function createDiscordUserSchema() {
+  return v.object({
+    id: v.string(),
+    username: v.string(),
+    discriminator: v.optional(v.nullish(v.string())),
+    global_name: v.optional(v.nullish(v.string())),
+  });
+}
+
+let discordUserSchema: ReturnType<typeof createDiscordUserSchema> | undefined;
+
+function getDiscordUserSchema() {
+  if (discordUserSchema === undefined) {
+    discordUserSchema = createDiscordUserSchema();
+  }
+
+  return discordUserSchema;
+}
+
+function createDiscordGuildMemberSchema() {
+  return v.object({
+    user: getDiscordUserSchema(),
+    nick: v.optional(v.nullish(v.string())),
+  });
+}
+
+let discordGuildMemberSchema:
+  | ReturnType<typeof createDiscordGuildMemberSchema>
+  | undefined;
+
+function getDiscordGuildMemberSchema() {
+  if (discordGuildMemberSchema === undefined) {
+    discordGuildMemberSchema = createDiscordGuildMemberSchema();
+  }
+
+  return discordGuildMemberSchema;
+}
+
 export function createOAuthState(): string {
   const randomBytes = new Uint8Array(32);
   crypto.getRandomValues(randomBytes);
@@ -291,13 +351,6 @@ export async function exchangeCodeForToken(
   code: string,
   redirectUri: string,
 ): Promise<Result<DiscordOAuthToken, DiscordApiError>> {
-  const discordOAuthTokenResponseSchema = v.object({
-    access_token: v.string(),
-    token_type: v.string(),
-    expires_in: v.number(),
-    refresh_token: v.optional(v.string()),
-    scope: v.string(),
-  });
   const tokenEndpoint = `${DISCORD_API_BASE_URL}/oauth2/token`;
 
   return fetchDiscordJson(
@@ -315,7 +368,7 @@ export async function exchangeCodeForToken(
         redirect_uri: redirectUri,
       }),
     },
-    discordOAuthTokenResponseSchema,
+    getDiscordOAuthTokenResponseSchema(),
     (parsedToken) => ({
       accessToken: parsedToken.access_token,
       expiresIn: parsedToken.expires_in,
@@ -330,17 +383,6 @@ export async function getGuildMember(
   accessToken: string,
   guildId: string,
 ): Promise<Result<DiscordGuildMember, DiscordApiError>> {
-  const discordUserSchema = v.object({
-    id: v.string(),
-    username: v.string(),
-    discriminator: v.optional(v.nullish(v.string())),
-    global_name: v.optional(v.nullish(v.string())),
-  });
-  const discordGuildMemberSchema = v.object({
-    user: discordUserSchema,
-    nick: v.optional(v.nullish(v.string())),
-  });
-
   return fetchDiscordJson(
     `${DISCORD_API_BASE_URL}/users/@me/guilds/${encodeURIComponent(guildId)}/member`,
     {
@@ -349,7 +391,7 @@ export async function getGuildMember(
         Authorization: `Bearer ${accessToken}`,
       },
     },
-    discordGuildMemberSchema,
+    getDiscordGuildMemberSchema(),
     (parsedMember) => parsedMember,
   );
 }

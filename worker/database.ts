@@ -17,6 +17,93 @@ type LiveTrackRecord = {
   tracks: StoredTrack[];
 };
 
+function createLiveTrackRowSchema() {
+  return v.object({
+    notification_message_id: v.optional(
+      v.nullish(v.union([v.number(), v.bigint()])),
+    ),
+    user_id: v.string(),
+    session_id: v.string(),
+    tracks_json: v.string(),
+  });
+}
+
+let liveTrackRowSchema: ReturnType<typeof createLiveTrackRowSchema> | undefined;
+
+function getLiveTrackRowSchema() {
+  if (liveTrackRowSchema === undefined) {
+    liveTrackRowSchema = createLiveTrackRowSchema();
+  }
+
+  return liveTrackRowSchema;
+}
+
+function createStoredTrackSchema() {
+  return v.object({
+    location: v.literal("remote"),
+    sessionId: v.string(),
+    trackName: v.string(),
+    mid: v.string(),
+  });
+}
+
+let storedTrackSchema: ReturnType<typeof createStoredTrackSchema> | undefined;
+
+function getStoredTrackSchema() {
+  if (storedTrackSchema === undefined) {
+    storedTrackSchema = createStoredTrackSchema();
+  }
+
+  return storedTrackSchema;
+}
+
+function createStoredTracksSchema() {
+  return v.array(getStoredTrackSchema());
+}
+
+let storedTracksSchema: ReturnType<typeof createStoredTracksSchema> | undefined;
+
+function getStoredTracksSchema() {
+  if (storedTracksSchema === undefined) {
+    storedTracksSchema = createStoredTracksSchema();
+  }
+
+  return storedTracksSchema;
+}
+
+function createLiveTokenRowSchema() {
+  return v.object({
+    token_hash: v.string(),
+  });
+}
+
+let liveTokenRowSchema: ReturnType<typeof createLiveTokenRowSchema> | undefined;
+
+function getLiveTokenRowSchema() {
+  if (liveTokenRowSchema === undefined) {
+    liveTokenRowSchema = createLiveTokenRowSchema();
+  }
+
+  return liveTokenRowSchema;
+}
+
+function createLiveListRowSchema() {
+  return v.object({
+    user_id: v.string(),
+    display_name: v.string(),
+  });
+}
+
+let liveListRowSchema: ReturnType<typeof createLiveListRowSchema> | undefined;
+
+function getLiveListRowSchema() {
+  if (liveListRowSchema === undefined) {
+    liveListRowSchema = createLiveListRowSchema();
+  }
+
+  return liveListRowSchema;
+}
+
 export async function insertLive(
   database: D1Database,
   userId: string,
@@ -39,22 +126,6 @@ export async function getLive(
   database: D1Database,
   userId: string,
 ): Promise<LiveTrackRecord | null> {
-  const liveTrackRowSchema = v.object({
-    notification_message_id: v.optional(
-      v.nullish(v.union([v.number(), v.bigint()])),
-    ),
-    user_id: v.string(),
-    session_id: v.string(),
-    tracks_json: v.string(),
-  });
-  const storedTrackSchema = v.object({
-    location: v.literal("remote"),
-    sessionId: v.string(),
-    trackName: v.string(),
-    mid: v.string(),
-  });
-  const storedTracksSchema = v.array(storedTrackSchema);
-
   const result = await database
     .prepare(
       "SELECT user_id, session_id, tracks_json, notification_message_id FROM lives WHERE user_id = ?",
@@ -66,14 +137,14 @@ export async function getLive(
     return null;
   }
 
-  const rowResult = v.safeParse(liveTrackRowSchema, result);
+  const rowResult = v.safeParse(getLiveTrackRowSchema(), result);
   if (!rowResult.success) {
     throw new Error("Invalid D1 lives row");
   }
   const row = rowResult.output;
 
   const parsedTracksInput: unknown = JSON.parse(row.tracks_json);
-  const tracksResult = v.safeParse(storedTracksSchema, parsedTracksInput);
+  const tracksResult = v.safeParse(getStoredTracksSchema(), parsedTracksInput);
   if (!tracksResult.success) {
     throw new Error("Invalid D1 lives.tracks_json");
   }
@@ -136,10 +207,6 @@ export async function getLiveTokenHash(
   database: D1Database,
   userId: string,
 ): Promise<string | null> {
-  const liveTokenRowSchema = v.object({
-    token_hash: v.string(),
-  });
-
   const result = await database
     .prepare("SELECT token_hash FROM live_tokens WHERE user_id = ?")
     .bind(userId)
@@ -149,7 +216,7 @@ export async function getLiveTokenHash(
     return null;
   }
 
-  const rowResult = v.safeParse(liveTokenRowSchema, result);
+  const rowResult = v.safeParse(getLiveTokenRowSchema(), result);
   if (!rowResult.success) {
     throw new Error("Invalid D1 live_tokens row");
   }
@@ -179,11 +246,6 @@ export async function setUser(database: D1Database, user: User): Promise<void> {
 }
 
 export async function getAllLives(database: D1Database): Promise<Live[]> {
-  const liveListRowSchema = v.object({
-    user_id: v.string(),
-    display_name: v.string(),
-  });
-
   // This intentionally does not verify every Calls session. Listing must stay
   // cheap; stale rows are reconciled on user-specific ingest/play requests.
   const results = await database
@@ -193,7 +255,7 @@ export async function getAllLives(database: D1Database): Promise<Live[]> {
     .all();
 
   return results.results.map((row) => {
-    const rowResult = v.safeParse(liveListRowSchema, row);
+    const rowResult = v.safeParse(getLiveListRowSchema(), row);
     if (!rowResult.success) {
       throw new Error("Invalid D1 live list row");
     }
