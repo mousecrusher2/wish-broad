@@ -1,5 +1,6 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { verifyTokenHash } from "./token-hash";
+import { createErrorLogFields, logError } from "./logger";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -84,7 +85,9 @@ export function hashedBearerAuth<
       .catch((error: Error): TokenCheckResult => ({ kind: "error", error }));
 
     if (tokenCheck.kind === "error") {
-      console.error("Failed to verify bearer token hash:", tokenCheck.error);
+      logError(c.env, "bearer_token.verify_failed", {
+        ...createErrorLogFields(tokenCheck.error),
+      });
       return createUnauthorizedResponse(options.realm);
     }
 

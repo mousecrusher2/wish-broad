@@ -17,6 +17,19 @@ DO migration could centralize live state and per-room notifications, but until
 then the client and normal HTTP requests are the practical triggers for
 reconciliation.
 
+## Logging
+
+Cloudflare Workers invocation logs already provide request-level metadata such
+as method, URL, status, and duration. The application logger therefore emits
+structured event logs instead of duplicating access logs. Authenticated
+`/api/*`, `/play/*`, and `/ingest/*` requests log one `info` event with the
+available user/session identifiers; request correlation is left to Workers Logs.
+
+`LOG_LEVEL` controls application log verbosity (`debug`, `info`, `warn`,
+`error`, or `silent`). Production defaults to `info` when the variable is absent.
+Warnings and errors include normalized error metadata, but raw bearer tokens,
+JWTs, authorization codes, cookies, and secrets must never be logged.
+
 ## Schema Source
 
 Treat `schema.sql` as the authoritative current D1 schema. Migration files are

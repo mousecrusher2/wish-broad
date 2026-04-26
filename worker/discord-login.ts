@@ -16,6 +16,7 @@ import {
 } from "./discord";
 import { calcJwtTimestamps, JWT_DURATION_SECONDS } from "./jwt-utils";
 import { Bindings, JWTPayload } from "./types";
+import { createErrorLogFields, logError, logWarn } from "./logger";
 
 type ContextWithBindings = { Bindings: Bindings };
 
@@ -153,7 +154,9 @@ export async function completeDiscordLogin<E extends ContextWithBindings>(
     if (accessToken) {
       const revokeResult = await revokeAccessToken(c.env, accessToken);
       if (revokeResult.isErr()) {
-        console.warn("Failed to revoke OAuth token:", revokeResult.error);
+        logWarn(c.env, "discord.oauth_revoke_failed", {
+          ...createErrorLogFields(revokeResult.error),
+        });
       }
     }
   };
@@ -164,7 +167,9 @@ export async function completeDiscordLogin<E extends ContextWithBindings>(
     getDiscordRedirectUri(c),
   );
   if (oauthTokenResult.isErr()) {
-    console.error("Discord login failed:", oauthTokenResult.error);
+    logError(c.env, "discord.login_token_exchange_failed", {
+      ...createErrorLogFields(oauthTokenResult.error),
+    });
     return c.text(
       `Discord login failed: ${getDiscordErrorMessage(oauthTokenResult.error)}`,
       502,
@@ -178,7 +183,10 @@ export async function completeDiscordLogin<E extends ContextWithBindings>(
     c.env.AUTHORIZED_GUILD_ID,
   );
   if (memberResult.isErr()) {
-    console.error("Discord login failed:", memberResult.error);
+    logError(c.env, "discord.login_member_check_failed", {
+      ...createErrorLogFields(memberResult.error),
+      guildId: c.env.AUTHORIZED_GUILD_ID,
+    });
     await revokeAccessTokenIfNeeded();
 
     if (

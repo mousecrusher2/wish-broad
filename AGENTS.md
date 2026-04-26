@@ -38,4 +38,6 @@ Recent history uses Conventional Commit-style prefixes such as `fix:` and `feat:
 
 Keep secrets in `.dev.vars`, which is gitignored, and keep binding names aligned across `wrangler.jsonc`, `.dev.vars`, and `worker/types.ts`. Required production secrets include Discord OAuth/guild values, Cloudflare Calls credentials, JWT and live-token pepper values, notification webhook URL, and TURN key credentials.
 
+`LOG_LEVEL` is a non-secret Worker variable for structured application logs; use `debug`, `info`, `warn`, `error`, or `silent`.
+
 Live ingest tokens are only displayed on creation, stored as HMAC hashes, and verified through bearer auth on `/ingest/:userId/*`; do not log raw tokens. After changing Worker bindings or environment types, run `pnpm cf-typegen` to refresh generated Cloudflare types.

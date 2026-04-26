@@ -250,6 +250,7 @@ function createBindings(): Bindings {
     JWT_SECRET: "test-jwt-secret",
     LIVE_DB: createUnusedD1Database(),
     LIVE_TOKEN_PEPPER: "test-live-token-pepper",
+    LOG_LEVEL: "info",
     NOTIFICATIONS_DISCORD_WEBHOOK_URL:
       "https://discord.com/api/webhooks/123/token",
     TURN_KEY_API_TOKEN: "turn-key-api-token",
@@ -313,7 +314,9 @@ async function expectPlayNotFoundAndCleanup(
 describe("worker app", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
@@ -769,8 +772,14 @@ describe("worker app", () => {
     await Promise.all(execution.waitUntilPromises);
 
     expect(consoleWarnSpy).toHaveBeenCalledWith(
-      "Failed to send live start notification for user user-1 session new-session:",
-      expect.any(Error),
+      expect.objectContaining({
+        errorMessage: "webhook failed",
+        errorName: "Error",
+        event: "live_notification.send_failed",
+        level: "warn",
+        sessionId: "new-session",
+        userId: "user-1",
+      }),
     );
     expect(dbMocks.setLiveNotificationMessageId).not.toHaveBeenCalled();
   });
@@ -1091,10 +1100,15 @@ describe("worker app", () => {
     await Promise.all(execution.waitUntilPromises);
 
     expect(consoleWarnSpy).toHaveBeenCalledWith(
-      "SFU reported track close errors for user user-1:",
-      {
-        tracks: [{ errorCode: "failed_to_close", mid: "0" }],
-      },
+      expect.objectContaining({
+        event: "track_close.sfu_errors",
+        level: "warn",
+        message: "SFU reported track close errors for user user-1:",
+        response: {
+          tracks: [{ errorCode: "failed_to_close", mid: "0" }],
+        },
+        sessionId: "session-1",
+      }),
     );
     expect(
       notificationsMocks.deleteLiveStartedNotification,
@@ -1644,10 +1658,16 @@ describe("worker app", () => {
     await Promise.all(execution.waitUntilPromises);
 
     expect(consoleWarnSpy).toHaveBeenCalledWith(
-      "SFU reported WHEP session close errors for session viewer-session:",
-      {
-        tracks: [{ errorCode: "failed_to_close", mid: "0" }],
-      },
+      expect.objectContaining({
+        event: "track_close.sfu_errors",
+        level: "warn",
+        message:
+          "SFU reported WHEP session close errors for session viewer-session:",
+        response: {
+          tracks: [{ errorCode: "failed_to_close", mid: "0" }],
+        },
+        sessionId: "viewer-session",
+      }),
     );
   });
 

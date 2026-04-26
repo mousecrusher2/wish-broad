@@ -28,6 +28,7 @@
   // },
   "vars": {
     "ENVIRONMENT": "production",
+    "LOG_LEVEL": "info",
   },
   "d1_databases": [
     {

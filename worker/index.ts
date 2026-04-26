@@ -21,7 +21,6 @@ import {
 } from "./sfu";
 import { createLiveToken } from "./live-token";
 import { hashedBearerAuth } from "./hashed-bearer-auth";
-import { logger } from "hono/logger";
 import { HTTPException } from "hono/http-exception";
 import { jwt } from "hono/jwt";
 import {
@@ -30,6 +29,7 @@ import {
 } from "./notifications";
 import { hashTokenWithPepper } from "./token-hash";
 import { generateTurnIceServers } from "./turn";
+import { createErrorLogFields, logError, logInfo, logWarn } from "./logger";
 
 type AppEnv = {
   Bindings: Bindings;
@@ -96,7 +96,11 @@ function scheduleTrackClose(
           closeResult.error.kind !== "session_not_found" &&
           closeResult.error.kind !== "session_gone"
         ) {
-          console.warn(failureLabel, closeResult.error);
+          logWarn(c.env, "track_close.failed", {
+            ...createErrorLogFields(closeResult.error),
+            message: failureLabel,
+            sessionId,
+          });
         }
         return;
       }
@@ -105,7 +109,11 @@ function scheduleTrackClose(
         closeResult.value.errorCode ||
         closeResult.value.tracks?.some((track) => track.errorCode)
       ) {
-        console.warn(errorLabel, closeResult.value);
+        logWarn(c.env, "track_close.sfu_errors", {
+          message: errorLabel,
+          response: closeResult.value,
+          sessionId,
+        });
       }
     }),
   );
@@ -123,10 +131,11 @@ async function sendLiveStartNotification(
     siteUrl,
   );
   if (notificationResult.isErr()) {
-    console.warn(
-      `Failed to send live start notification for user ${userId} session ${sessionId}:`,
-      notificationResult.error,
-    );
+    logWarn(c.env, "live_notification.send_failed", {
+      ...createErrorLogFields(notificationResult.error),
+      sessionId,
+      userId,
+    });
     return;
   }
 
@@ -143,10 +152,12 @@ async function sendLiveStartNotification(
     .catch((error: Error): PersistNotificationResult => ({ ok: false, error }));
 
   if (!persistResult.ok) {
-    console.warn(
-      `Failed to persist live start notification id for user ${userId} session ${sessionId}:`,
-      persistResult.error,
-    );
+    logWarn(c.env, "live_notification.persist_failed", {
+      ...createErrorLogFields(persistResult.error),
+      messageId,
+      sessionId,
+      userId,
+    });
   }
 
   if (persistResult.ok && persistResult.saved) {
@@ -155,10 +166,12 @@ async function sendLiveStartNotification(
 
   const deleteResult = await deleteLiveStartedNotification(c.env, messageId);
   if (deleteResult.isErr()) {
-    console.warn(
-      `Failed to delete orphaned live start notification for user ${userId} session ${sessionId}:`,
-      deleteResult.error,
-    );
+    logWarn(c.env, "live_notification.orphan_delete_failed", {
+      ...createErrorLogFields(deleteResult.error),
+      messageId,
+      sessionId,
+      userId,
+    });
   }
 }
 
@@ -168,10 +181,6 @@ function isSdpContentType(contentType: string | undefined): boolean {
   }
 
   return contentType.split(";")[0]?.trim().toLowerCase() === "application/sdp";
-}
-
-function logUnexpectedError(error: Error): void {
-  console.error("Unhandled error:", error, error.stack);
 }
 
 function toErrorResponse(err: unknown, c: Context<AppEnv>): Response {
@@ -184,13 +193,11 @@ function toErrorResponse(err: unknown, c: Context<AppEnv>): Response {
 
 app.onError((err, c) => {
   if (!(err instanceof HTTPException)) {
-    logUnexpectedError(err);
+    logError(c.env, "worker.unhandled_error", createErrorLogFields(err));
   }
 
   return toErrorResponse(err, c);
 });
-
-app.use(logger());
 
 // OBS ingest authenticates with the per-user live token, not the viewer JWT.
 app.use(
@@ -213,6 +220,16 @@ app.use(
     },
   }),
 );
+app.use("/ingest/:userId", async (c, next) => {
+  const { userId } = c.req.param();
+  logInfo(c.env, "ingest.request", { userId });
+  await next();
+});
+app.use("/ingest/:userId/:sessionId", async (c, next) => {
+  const { sessionId, userId } = c.req.param();
+  logInfo(c.env, "ingest.request", { sessionId, userId });
+  await next();
+});
 
 app.get("/ingest/:userId", async (c) => {
   return c.body(null, 204);
@@ -238,10 +255,11 @@ app.post("/ingest/:userId", async (c) => {
     // the underlying session.
     const isActiveResult = await isSessionActive(c.env, existingLive.sessionId);
     if (isActiveResult.isErr()) {
-      console.error(
-        `Failed to verify ingest session activity for user ${userId}:`,
-        isActiveResult.error,
-      );
+      logError(c.env, "ingest.session_activity_check_failed", {
+        ...createErrorLogFields(isActiveResult.error),
+        sessionId: existingLive.sessionId,
+        userId,
+      });
       return c.text("Failed to verify ingest session status", 502);
     }
 
@@ -264,10 +282,12 @@ app.post("/ingest/:userId", async (c) => {
           deleteLiveStartedNotification(c.env, notificationMessageId).then(
             (deleteResult) => {
               if (deleteResult.isErr()) {
-                console.warn(
-                  `Failed to delete live start notification for user ${userId} session ${existingLive.sessionId}:`,
-                  deleteResult.error,
-                );
+                logWarn(c.env, "live_notification.delete_failed", {
+                  ...createErrorLogFields(deleteResult.error),
+                  messageId: notificationMessageId,
+                  sessionId: existingLive.sessionId,
+                  userId,
+                });
               }
             },
           ),
@@ -285,10 +305,10 @@ app.post("/ingest/:userId", async (c) => {
       return c.text(negotiationError.text, negotiationError.status);
     }
 
-    console.error(
-      `Failed to negotiate ingest session for user ${userId}:`,
-      ingestResult.error,
-    );
+    logError(c.env, "ingest.negotiation_failed", {
+      ...createErrorLogFields(ingestResult.error),
+      userId,
+    });
     return c.text("Internal Server Error", 500);
   }
 
@@ -367,10 +387,12 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
         existingLive.notificationMessageId,
       ).then((deleteResult) => {
         if (deleteResult.isErr()) {
-          console.warn(
-            `Failed to delete live start notification for user ${userId} session ${sessionId}:`,
-            deleteResult.error,
-          );
+          logWarn(c.env, "live_notification.delete_failed", {
+            ...createErrorLogFields(deleteResult.error),
+            messageId: existingLive.notificationMessageId,
+            sessionId,
+            userId,
+          });
         }
       }),
     );
@@ -402,6 +424,11 @@ app.use("/play/*", async (c, next) => {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
   return middleware(c, next);
 });
+app.use("/play/*", async (c, next) => {
+  const jwtPayload = c.get("jwtPayload");
+  logInfo(c.env, "play.request", { userId: jwtPayload.userId });
+  await next();
+});
 
 // WHEP playback start. This is intentionally app-specific and cookie-protected,
 // not a public generic WHEP endpoint.
@@ -413,9 +440,6 @@ app.post("/play/:userId", async (c) => {
   const { userId } = c.req.param();
 
   const jwtPayload = c.get("jwtPayload");
-  console.log(
-    `User ${jwtPayload.displayName} (${jwtPayload.userId}) is trying to play user: ${userId}`,
-  );
 
   const liveTrackRecord = await db.getLive(c.env.LIVE_DB, userId);
   const tracks = liveTrackRecord?.tracks ?? [];
@@ -428,10 +452,11 @@ app.post("/play/:userId", async (c) => {
       liveTrackRecord.sessionId,
     );
     if (isActiveResult.isErr()) {
-      console.error(
-        `Failed to verify playback session activity for user ${userId}:`,
-        isActiveResult.error,
-      );
+      logError(c.env, "play.session_activity_check_failed", {
+        ...createErrorLogFields(isActiveResult.error),
+        sessionId: liveTrackRecord.sessionId,
+        userId,
+      });
       return c.text("Failed to verify live stream status", 502);
     }
     hasActiveSession = isActiveResult.value;
@@ -453,10 +478,12 @@ app.post("/play/:userId", async (c) => {
           deleteLiveStartedNotification(c.env, notificationMessageId).then(
             (deleteResult) => {
               if (deleteResult.isErr()) {
-                console.warn(
-                  `Failed to delete live start notification for user ${userId} session ${liveTrackRecord.sessionId}:`,
-                  deleteResult.error,
-                );
+                logWarn(c.env, "live_notification.delete_failed", {
+                  ...createErrorLogFields(deleteResult.error),
+                  messageId: notificationMessageId,
+                  sessionId: liveTrackRecord.sessionId,
+                  userId,
+                });
               }
             },
           ),
@@ -498,10 +525,12 @@ app.post("/play/:userId", async (c) => {
               deleteLiveStartedNotification(c.env, notificationMessageId).then(
                 (deleteResult) => {
                   if (deleteResult.isErr()) {
-                    console.warn(
-                      `Failed to delete live start notification for user ${userId} session ${liveTrackRecord.sessionId}:`,
-                      deleteResult.error,
-                    );
+                    logWarn(c.env, "live_notification.delete_failed", {
+                      ...createErrorLogFields(deleteResult.error),
+                      messageId: notificationMessageId,
+                      sessionId: liveTrackRecord.sessionId,
+                      userId,
+                    });
                   }
                 },
               ),
@@ -511,10 +540,11 @@ app.post("/play/:userId", async (c) => {
       }
       return c.text(`Live stream not found: ${userId}`, 404);
     }
-    console.error(
-      `Failed to start play for user ${userId} by user ${jwtPayload.userId}:`,
-      error,
-    );
+    logError(c.env, "play.negotiation_failed", {
+      ...createErrorLogFields(error),
+      userId,
+      viewerUserId: jwtPayload.userId,
+    });
     if (error instanceof SfuApiError) {
       const negotiationError = error.toNegotiationClientError(
         "Failed to negotiate playback session",
@@ -596,10 +626,10 @@ app
         return c.text(negotiationError.text, negotiationError.status);
       }
 
-      console.error(
-        `Failed to submit WHEP answer for session ${sessionId}:`,
-        renegotiationResult.error,
-      );
+      logError(c.env, "play.answer_submission_failed", {
+        ...createErrorLogFields(renegotiationResult.error),
+        sessionId,
+      });
       return c.text("Failed to submit WHEP answer", 502);
     }
 
@@ -615,6 +645,11 @@ app.use("/api/*", async (c, next) => {
   });
   // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
   return middleware(c, next);
+});
+app.use("/api/*", async (c, next) => {
+  const jwtPayload = c.get("jwtPayload");
+  logInfo(c.env, "api.request", { userId: jwtPayload.userId });
+  await next();
 });
 
 app.get("/api/me", async (c) => {
@@ -632,10 +667,10 @@ app.get("/api/turn-credentials", async (c) => {
   // client is not intended to be a generic unauthenticated WHEP endpoint client.
   const turnResult = await generateTurnIceServers(c.env, jwtPayload.userId);
   if (turnResult.isErr()) {
-    console.error(
-      `Failed to generate TURN credentials for viewer ${jwtPayload.userId}:`,
-      turnResult.error,
-    );
+    logError(c.env, "turn_credentials.generate_failed", {
+      ...createErrorLogFields(turnResult.error),
+      userId: jwtPayload.userId,
+    });
     return c.text(
       "Failed to generate TURN credentials",
       turnResult.error.kind === "request_timeout" ? 504 : 502,
@@ -662,7 +697,10 @@ app.post("/api/me/livetoken", async (c) => {
     .then((): SaveTokenResult => ({ ok: true }))
     .catch((error: Error): SaveTokenResult => ({ ok: false, error }));
   if (!saveResult.ok) {
-    console.error("Failed to save live token:", saveResult.error);
+    logError(c.env, "live_token.save_failed", {
+      ...createErrorLogFields(saveResult.error),
+      userId,
+    });
     return c.text("Failed to save live token", 500);
   }
 
@@ -684,10 +722,10 @@ app.get("/api/me/livetoken", async (c) => {
     .then((hasToken): HasTokenResult => ({ ok: true, hasToken }))
     .catch((error: Error): HasTokenResult => ({ ok: false, error }));
   if (!hasTokenResult.ok) {
-    console.error(
-      `Failed to check live token for user ${userId}:`,
-      hasTokenResult.error,
-    );
+    logError(c.env, "live_token.status_check_failed", {
+      ...createErrorLogFields(hasTokenResult.error),
+      userId,
+    });
     return c.text("Failed to check live token", 500);
   }
 
