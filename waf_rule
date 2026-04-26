@@ -1,0 +1,20 @@
+(
+  http.host eq "broad.takehomo.com" and (
+    (
+      http.request.uri.path contains "/." or
+      ends_with(http.request.uri.path, ".php")
+    ) or (
+      http.request.uri.path ne "/" and
+      http.request.uri.path ne "/logout" and
+      http.request.uri.path ne "/site.webmanifest" and
+      not starts_with(http.request.uri.path, "/assets/") and
+      not starts_with(http.request.uri.path, "/favicon") and
+      not starts_with(http.request.uri.path, "/apple-touch-icon") and
+      not starts_with(http.request.uri.path, "/android-chrome-") and
+      not starts_with(http.request.uri.path, "/ingest/") and
+      not starts_with(http.request.uri.path, "/login") and
+      not starts_with(http.request.uri.path, "/play/") and
+      not starts_with(http.request.uri.path, "/api/")
+    )
+  )
+)
