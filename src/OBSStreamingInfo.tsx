@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { useLiveToken } from "./useLiveToken";
-import type { User } from "./types";
+import { useCurrentUser, useLiveToken } from "./api";
 
 type LiveTokenState = ReturnType<typeof useLiveToken>["state"];
 type CopyStatus = "none" | "url" | "token";
@@ -70,17 +69,27 @@ function resolvePopoverLayout() {
 }
 
 function StreamingUrlSection({
-  streamingUrl,
   copyStatus,
   copyToClipboard,
 }: Readonly<{
-  streamingUrl: string;
   copyStatus: CopyStatus;
   copyToClipboard: (
     text: string,
     type: Exclude<CopyStatus, "none">,
   ) => Promise<void>;
 }>) {
+  const currentUserState = useCurrentUser();
+  const streamingUrl =
+    currentUserState.status === "ready"
+      ? `${window.location.origin}/ingest/${currentUserState.user.userId}`
+      : null;
+  let placeholder = "取得できません";
+  if (currentUserState.status === "loading") {
+    placeholder = "読み込み中...";
+  } else if (currentUserState.status === "error") {
+    placeholder = currentUserState.error;
+  }
+
   return (
     <div className="space-y-2">
       <label htmlFor="streaming-url" className={fieldLabelClasses}>
@@ -90,15 +99,19 @@ function StreamingUrlSection({
         <input
           id="streaming-url"
           type="text"
-          value={streamingUrl}
+          value={streamingUrl ?? ""}
+          placeholder={placeholder}
           readOnly
           className={fieldInputClasses}
         />
         <button
           onClick={() => {
-            void copyToClipboard(streamingUrl, "url");
+            if (streamingUrl) {
+              void copyToClipboard(streamingUrl, "url");
+            }
           }}
-          className={copyButtonClasses}
+          className={`${copyButtonClasses} disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400`}
+          disabled={!streamingUrl}
           type="button"
         >
           {copyStatus === "url" ? "✅ コピー済み" : "📋 コピー"}
@@ -355,10 +368,8 @@ function OBSInstructions() {
 
 export function OBSStreamingInfo({
   popoverId,
-  user,
 }: Readonly<{
   popoverId: string;
-  user: User;
 }>) {
   const { state, error, fetchTokenStatus, createToken } = useLiveToken();
   const [showToken, setShowToken] = useState(false);
@@ -377,8 +388,6 @@ export function OBSStreamingInfo({
 
     return resolvePopoverLayout().shouldFullscreen;
   });
-
-  const streamingUrl = `${window.location.origin}/ingest/${user.userId}`;
 
   useEffect(() => {
     const updatePopoverSize = () => {
@@ -451,7 +460,6 @@ export function OBSStreamingInfo({
           </button>
         </div>
         <StreamingUrlSection
-          streamingUrl={streamingUrl}
           copyStatus={copyStatus}
           copyToClipboard={copyToClipboard}
         />

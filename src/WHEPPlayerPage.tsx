@@ -1,5 +1,4 @@
-import { useCallback, useState } from "react";
-import type { User } from "./types";
+import { Suspense, useCallback, useState } from "react";
 import { OBSStreamingInfo } from "./OBSStreamingInfo";
 import { StreamSelection } from "./components/StreamSelection";
 import { WHEPPlayer } from "./WHEPPlayer";
@@ -7,11 +6,83 @@ import {
   createDefaultSnapshot,
   type WHEPPlaybackControllerSnapshot,
 } from "./player/WHEPPlaybackController";
-import { useLiveStreams } from "./useLiveStreams";
+import {
+  revalidateLiveStreams,
+  useLiveStreams,
+  useSuspenseCurrentUser,
+} from "./api";
 
 const OBS_SETTINGS_POPOVER_ID = "obs-settings-popover";
 
-function WHEPPlayerPageContent({ user }: Readonly<{ user: User }>) {
+function CurrentUserGreeting() {
+  const currentUserResult = useSuspenseCurrentUser();
+
+  if (currentUserResult.isErr()) {
+    return (
+      <p className="text-sm text-amber-100">ユーザー情報を取得できません</p>
+    );
+  }
+
+  return (
+    <p className="text-sm text-cyan-50/90">
+      ようこそ、
+      <span className="font-semibold">
+        {currentUserResult.value.displayName}
+      </span>{" "}
+      さん
+    </p>
+  );
+}
+
+function CurrentUserGreetingFallback() {
+  return <p className="text-sm text-cyan-50/75">ユーザー情報を確認中...</p>;
+}
+
+function StreamSelectionPanel({
+  isLoading,
+  onLoadClick,
+  onResourceChange,
+  playbackState,
+  resource,
+}: Readonly<{
+  isLoading: boolean;
+  onLoadClick: () => void;
+  onResourceChange: (resource: string) => void;
+  playbackState: WHEPPlaybackControllerSnapshot["playbackState"];
+  resource: string;
+}>) {
+  const { refresh, ...liveStreamsState } = useLiveStreams();
+  const streams =
+    liveStreamsState.status === "ready" ||
+    liveStreamsState.status === "refreshing"
+      ? liveStreamsState.streams
+      : [];
+  const streamsLoading =
+    liveStreamsState.status === "loading" ||
+    liveStreamsState.status === "refreshing" ||
+    liveStreamsState.status === "retrying";
+  const streamsError =
+    liveStreamsState.status === "error" ||
+    liveStreamsState.status === "retrying"
+      ? liveStreamsState.error
+      : null;
+
+  return (
+    <StreamSelection
+      resource={resource}
+      onResourceChange={onResourceChange}
+      streams={streams}
+      isLoading={isLoading}
+      error={streamsError}
+      onRefresh={refresh}
+      onLoadClick={onLoadClick}
+      streamsLoading={streamsLoading}
+      playbackState={playbackState}
+    />
+  );
+}
+
+function WHEPPlayerPageContent() {
   const [resource, setResource] = useState("");
   const [activeResource, setActiveResource] = useState<string | null>(null);
   // Loading the same stream again should still create a fresh controller and
@@ -19,13 +90,6 @@ function WHEPPlayerPageContent({ user }: Readonly<{ user: User }>) {
   const [loadSequence, setLoadSequence] = useState(0);
   const [playerSnapshot, setPlayerSnapshot] =
     useState<WHEPPlaybackControllerSnapshot>(createDefaultSnapshot);
-
-  const {
-    streams,
-    isLoading: streamsLoading,
-    error: streamsError,
-    refresh,
-  } = useLiveStreams();
 
   const handleResourceChange = useCallback(
     (nextResource: string) => {
@@ -52,12 +116,12 @@ function WHEPPlayerPageContent({ user }: Readonly<{ user: User }>) {
       ) {
         // The player is one of the targeted reconciliation points. Refresh the
         // cheap list after playback proves the selected live ended.
-        refresh();
+        void revalidateLiveStreams();
       }
 
       setPlayerSnapshot(nextSnapshot);
     },
-    [playerSnapshot.playbackState.phase, refresh],
+    [playerSnapshot.playbackState.phase],
   );
 
   const { isLoading, playbackState } = playerSnapshot;
@@ -72,10 +136,9 @@ function WHEPPlayerPageContent({ user }: Readonly<{ user: User }>) {
             </h1>
           </div>
           <nav className="flex flex-wrap items-center gap-3">
-            <p className="text-sm text-cyan-50/90">
-              ようこそ、
-              <span className="font-semibold">{user.displayName}</span> さん
-            </p>
+            <Suspense fallback={<CurrentUserGreetingFallback />}>
+              <CurrentUserGreeting />
+            </Suspense>
             <button
               type="button"
               popoverTarget={OBS_SETTINGS_POPOVER_ID}
@@ -97,19 +160,15 @@ function WHEPPlayerPageContent({ user }: Readonly<{ user: User }>) {
       </header>
 
       <div className="flex flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
-        <OBSStreamingInfo user={user} popoverId={OBS_SETTINGS_POPOVER_ID} />
+        <OBSStreamingInfo popoverId={OBS_SETTINGS_POPOVER_ID} />
 
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
           <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur lg:w-[20rem] lg:flex-none">
-            <StreamSelection
+            <StreamSelectionPanel
               resource={resource}
               onResourceChange={handleResourceChange}
-              streams={streams}
               isLoading={isLoading}
-              error={streamsError}
-              onRefresh={refresh}
               onLoadClick={handleLoadClick}
-              streamsLoading={streamsLoading}
               playbackState={playbackState}
             />
           </section>
@@ -128,6 +187,6 @@ function WHEPPlayerPageContent({ user }: Readonly<{ user: User }>) {
   );
 }
 
-export function WHEPPlayerPage({ user }: Readonly<{ user: User }>) {
-  return <WHEPPlayerPageContent user={user} />;
+export function WHEPPlayerPage() {
+  return <WHEPPlayerPageContent />;
 }

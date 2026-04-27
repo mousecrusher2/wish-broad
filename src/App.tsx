@@ -1,5 +1,4 @@
-import { Suspense } from "react";
-import { useAuth } from "./useAuth";
+import { useBootstrapAuthState } from "./api";
 import { LoginPrompt } from "./LoginPrompt";
 import { WHEPPlayerPage } from "./WHEPPlayerPage";
 
@@ -13,37 +12,52 @@ const bodyClasses = "mt-3 text-sm leading-7 text-slate-300 sm:text-base";
 const actionButtonClasses =
   "mt-6 inline-flex items-center justify-center rounded-full bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300/60";
 
-function AppContent() {
-  const authResult = useAuth();
-
-  if (authResult.isErr()) {
-    return (
-      <div className={screenShellClasses}>
-        <div className={panelClasses}>
-          <h1 className={titleClasses}>ANGOU BROADCAST</h1>
-          <p className={bodyClasses}>
-            認証状態の確認中にエラーが発生しました。
-          </p>
-          <p className="mt-2 text-sm leading-7 text-slate-400 sm:text-base">
-            ページを再読み込みしてもう一度お試しください。
-          </p>
-          <button
-            onClick={() => {
-              window.location.reload();
-            }}
-            className={actionButtonClasses}
-          >
-            再読み込み
-          </button>
-        </div>
+function AuthLoadingScreen() {
+  return (
+    <div className={screenShellClasses}>
+      <div className={panelClasses}>
+        <h1 className={titleClasses}>ANGOU BROADCAST</h1>
+        <p className={bodyClasses}>認証状態を確認中...</p>
       </div>
-    );
+    </div>
+  );
+}
+
+function AuthErrorScreen({ message }: Readonly<{ message: string }>) {
+  return (
+    <div className={screenShellClasses}>
+      <div className={panelClasses}>
+        <h1 className={titleClasses}>ANGOU BROADCAST</h1>
+        <p className={bodyClasses}>認証状態の確認中にエラーが発生しました。</p>
+        <p className="mt-2 text-sm leading-7 text-slate-400 sm:text-base">
+          {message}
+        </p>
+        <button
+          onClick={() => {
+            window.location.reload();
+          }}
+          className={actionButtonClasses}
+        >
+          再読み込み
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AppBootstrap() {
+  const authState = useBootstrapAuthState();
+
+  if (authState.status === "loading") {
+    return <AuthLoadingScreen />;
   }
 
-  const auth = authResult.value;
+  if (authState.status === "authenticated") {
+    return <WHEPPlayerPage />;
+  }
 
-  if (auth.status === "authenticated") {
-    return <WHEPPlayerPage user={auth.user} />;
+  if (authState.status === "error") {
+    return <AuthErrorScreen message={authState.error} />;
   }
 
   return <LoginPrompt />;
@@ -52,18 +66,7 @@ function AppContent() {
 function App() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.16),transparent_30%),linear-gradient(180deg,#020617_0%,#0f172a_55%,#020617_100%)] text-slate-100">
-      <Suspense
-        fallback={
-          <div className={screenShellClasses}>
-            <div className={panelClasses}>
-              <h1 className={titleClasses}>ANGOU BROADCAST</h1>
-              <p className={bodyClasses}>認証状態を確認中...</p>
-            </div>
-          </div>
-        }
-      >
-        <AppContent />
-      </Suspense>
+      <AppBootstrap />
     </div>
   );
 }

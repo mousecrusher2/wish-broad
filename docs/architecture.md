@@ -49,6 +49,16 @@ Discord OAuth is an admission check, not the long-lived app session. The Worker
 uses the Discord access token only to verify membership in the configured guild,
 then revokes it and issues its own `authtoken` JWT cookie.
 
+The frontend does not gate initial rendering on a dedicated authentication
+check. The API module starts one-shot SWR preloads for the current user, live
+list, and live-token status, and the app bootstrap component subscribes to those
+same three SWR keys. Any successful data result moves the app out of the initial
+loading screen, while any 401 response is stored as an `UnauthorizedError`
+result on its data key and moves it to the login screen. Individual data panels
+read the same keys and keep their own loading/error states, so the normal app
+shell can appear before every preload has finished without issuing duplicate
+requests.
+
 Publish credentials are separate from viewer auth. OBS uses a bearer live token,
 while viewers use the JWT cookie. Live tokens are shown only when created; D1
 stores an HMAC of the token with `LIVE_TOKEN_PEPPER`, not the raw bearer token.

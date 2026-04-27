@@ -5,10 +5,6 @@ export type User = {
   displayName: string;
 };
 
-export type AuthState =
-  | { status: "unauthenticated" }
-  | { status: "authenticated"; user: User };
-
 export type Live = {
   owner: User;
 };
