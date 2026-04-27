@@ -24,7 +24,7 @@ function CurrentUserGreeting() {
   }
 
   return (
-    <p className="text-sm text-cyan-50/90">
+    <p className="truncate text-sm text-cyan-50/90">
       ようこそ、
       <span className="font-semibold">
         {currentUserResult.value.displayName}
@@ -35,7 +35,9 @@ function CurrentUserGreeting() {
 }
 
 function CurrentUserGreetingFallback() {
-  return <p className="text-sm text-cyan-50/75">ユーザー情報を確認中...</p>;
+  return (
+    <p className="truncate text-sm text-cyan-50/75">ユーザー情報を確認中...</p>
+  );
 }
 
 function StreamSelectionPanel({
@@ -136,9 +138,11 @@ function WHEPPlayerPageContent() {
             </h1>
           </div>
           <nav className="flex flex-wrap items-center gap-3">
-            <Suspense fallback={<CurrentUserGreetingFallback />}>
-              <CurrentUserGreeting />
-            </Suspense>
+            <div className="min-h-5 w-full min-w-0 md:w-auto md:max-w-64">
+              <Suspense fallback={<CurrentUserGreetingFallback />}>
+                <CurrentUserGreeting />
+              </Suspense>
+            </div>
             <button
               type="button"
               popoverTarget={OBS_SETTINGS_POPOVER_ID}
