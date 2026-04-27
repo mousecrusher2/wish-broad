@@ -27,7 +27,7 @@ type NewTracksResponse = {
   sessionDescription?: SessionDescription | undefined;
 };
 
-export type TrackLocator = {
+type TrackLocator = {
   location: string;
   sessionId: string;
   trackName: string;

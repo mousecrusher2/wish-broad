@@ -7,7 +7,7 @@ type DiscordEnv = Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">;
 const DISCORD_AUTHORIZE_URL = "https://discord.com/oauth2/authorize";
 const DISCORD_API_BASE_URL = "https://discord.com/api/v10";
 
-export type DiscordUser = {
+type DiscordUser = {
   id: string;
   username: string;
   discriminator?: string | null | undefined;

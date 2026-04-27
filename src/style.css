@@ -1,1 +1,6 @@
 @import "tailwindcss";
+
+html:has(.obs-settings-popover:popover-open),
+body:has(.obs-settings-popover:popover-open) {
+  overflow: hidden;
+}
