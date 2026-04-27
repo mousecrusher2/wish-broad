@@ -48,7 +48,7 @@ export function StreamSelection({
       </div>
 
       {error && (
-        <div className="flex flex-col gap-3 rounded-2xl border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-200 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 rounded-2xl border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-200">
           <span>エラー: {error}</span>
           <button
             onClick={onRefresh}

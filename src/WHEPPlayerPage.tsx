@@ -129,9 +129,9 @@ function WHEPPlayerPageContent() {
   return (
     <div className="min-h-screen">
       <header className="border-b border-cyan-200/20 bg-cyan-950/92 shadow-[0_10px_20px_-16px_rgba(8,145,178,0.38)] backdrop-blur-sm">
-        <div className="flex flex-col gap-2 px-4 py-3 sm:px-6 md:flex-row md:items-center md:justify-between lg:px-8">
+        <div className="flex flex-col gap-2 px-4 py-3 md:flex-row md:items-center md:justify-between md:px-6 xl:px-8">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+            <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">
               ANGOU BROADCAST
             </h1>
           </div>
@@ -159,7 +159,7 @@ function WHEPPlayerPageContent() {
         </div>
       </header>
 
-      <div className="flex flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+      <div className="flex flex-col gap-6 px-4 py-6 md:px-6 xl:px-8">
         <OBSStreamingInfo popoverId={OBS_SETTINGS_POPOVER_ID} />
 
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
