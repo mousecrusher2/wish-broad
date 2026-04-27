@@ -355,10 +355,10 @@ export function OBSStreamingInfo({
     <section
       id={popoverId}
       popover="auto"
-      className="obs-settings-popover fixed top-1/2 right-auto left-1/2 z-50 m-0 max-h-[calc(100vh-1.5rem)] w-[780px] max-w-[calc(100vw-1.5rem)] -translate-x-1/2 -translate-y-1/2 overflow-visible rounded-[1.75rem] border-0 bg-transparent p-0 text-inherit shadow-2xl shadow-black/45 backdrop:bg-slate-50/30 backdrop:backdrop-blur-[20px] backdrop:backdrop-saturate-145 max-[827.98px]:inset-0 max-[827.98px]:max-h-screen max-[827.98px]:w-screen max-[827.98px]:max-w-screen max-[827.98px]:translate-none max-[827.98px]:rounded-none [&:popover-open]:block [@media(max-height:819.98px)]:inset-0 [@media(max-height:819.98px)]:max-h-screen [@media(max-height:819.98px)]:w-screen [@media(max-height:819.98px)]:max-w-screen [@media(max-height:819.98px)]:translate-none [@media(max-height:819.98px)]:rounded-none"
+      className="obs-settings-popover fixed top-1/2 right-auto left-1/2 z-50 m-0 max-h-[calc(100vh-1.5rem)] w-195 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 -translate-y-1/2 overflow-visible rounded-[1.75rem] border-0 bg-transparent p-0 text-inherit shadow-2xl shadow-black/45 backdrop:bg-slate-50/30 backdrop:backdrop-blur-[20px] backdrop:backdrop-saturate-145 max-[827.98px]:inset-0 max-[827.98px]:max-h-screen max-[827.98px]:w-screen max-[827.98px]:max-w-screen max-[827.98px]:translate-none max-[827.98px]:rounded-none [&:popover-open]:block [@media(max-height:819.98px)]:inset-0 [@media(max-height:819.98px)]:max-h-screen [@media(max-height:819.98px)]:w-screen [@media(max-height:819.98px)]:max-w-screen [@media(max-height:819.98px)]:translate-none [@media(max-height:819.98px)]:rounded-none"
     >
       <div className="max-h-[calc(100vh-1.5rem)] overflow-auto rounded-[1.75rem] border border-white/15 bg-[rgb(30_41_59/0.86)] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] [backdrop-filter:blur(34px)_saturate(140%)] max-[827.98px]:max-h-screen max-[827.98px]:min-h-screen max-[827.98px]:rounded-none [@media(max-height:819.98px)]:max-h-screen [@media(max-height:819.98px)]:min-h-screen [@media(max-height:819.98px)]:rounded-none">
-        <div className="space-y-6 [@media(max-height:819.98px)]:mx-auto [@media(max-height:819.98px)]:max-w-[780px]">
+        <div className="space-y-6 [@media(max-height:819.98px)]:mx-auto [@media(max-height:819.98px)]:max-w-195">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-sm font-medium tracking-[0.3em] text-cyan-300/80 uppercase">
