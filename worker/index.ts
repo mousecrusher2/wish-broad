@@ -23,6 +23,7 @@ import { createLiveToken } from "./live-token";
 import { hashedBearerAuth } from "./hashed-bearer-auth";
 import { HTTPException } from "hono/http-exception";
 import { jwt } from "hono/jwt";
+import { csrf } from "hono/csrf";
 import {
   deleteLiveStartedNotification,
   sendLiveStartedNotification,
@@ -412,12 +413,13 @@ app.get("/login/callback", async (c) => {
   return completeDiscordLogin(c);
 });
 
-app.post("/logout", async (c) => {
+app.post("/logout", csrf(), async (c) => {
   clearAuthCookie(c);
   return c.redirect("/");
 });
 
 // Viewing is restricted to authenticated app users.
+app.use("/play/*", csrf());
 app.use("/play/*", async (c, next) => {
   const middleware = jwt({
     secret: c.env.JWT_SECRET,
@@ -640,6 +642,7 @@ app
   });
 
 // All /api routes are browser APIs that require the app JWT cookie.
+app.use("/api/*", csrf());
 app.use("/api/*", async (c, next) => {
   const middleware = jwt({
     secret: c.env.JWT_SECRET,
@@ -745,3 +748,4 @@ app.get("/api/lives", async (c) => {
 });
 
 export default app;
+

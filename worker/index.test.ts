@@ -538,6 +538,7 @@ describe("worker app", () => {
     const request = new Request("http://localhost/api/me/livetoken", {
       headers: {
         Cookie: await createAuthCookie(env, { userId: "user-1" }),
+        Origin: "http://localhost",
       },
       method: "POST",
     });
@@ -1417,6 +1418,7 @@ describe("worker app", () => {
         headers: {
           Cookie: await createAuthCookie(env),
           "Content-Type": "text/plain",
+          Origin: "http://localhost",
         },
         method: "POST",
       }),
@@ -1585,6 +1587,7 @@ describe("worker app", () => {
       new Request("http://localhost/play/streamer-1/viewer-session?mid=0", {
         headers: {
           Cookie: await createAuthCookie(env),
+          Origin: "http://localhost",
         },
         method: "DELETE",
       }),
@@ -1616,6 +1619,7 @@ describe("worker app", () => {
       new Request("http://localhost/play/streamer-1/viewer-session", {
         headers: {
           Cookie: await createAuthCookie(env),
+          Origin: "http://localhost",
         },
         method: "DELETE",
       }),
@@ -1646,6 +1650,7 @@ describe("worker app", () => {
       new Request("http://localhost/play/streamer-1/viewer-session?mid=0", {
         headers: {
           Cookie: await createAuthCookie(env),
+          Origin: "http://localhost",
         },
         method: "DELETE",
       }),
@@ -1701,6 +1706,7 @@ describe("worker app", () => {
         headers: {
           Cookie: await createAuthCookie(env),
           "Content-Type": "text/plain",
+          Origin: "http://localhost",
         },
         method: "PATCH",
       }),
