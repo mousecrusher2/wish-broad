@@ -318,14 +318,17 @@ app.post("/ingest/:userId", async (c) => {
   // reused across ingests.
   await db.insertLive(c.env.LIVE_DB, userId, result.sessionId, result.tracks);
 
-  c.executionCtx.waitUntil(
-    sendLiveStartNotification(
-      c,
-      userId,
-      result.sessionId,
-      createSiteRootLocation(c.req.url),
-    ),
-  );
+  const notifyParam = c.req.query("notify");
+  if (notifyParam !== "false" && notifyParam !== "0") {
+    c.executionCtx.waitUntil(
+      sendLiveStartNotification(
+        c,
+        userId,
+        result.sessionId,
+        createSiteRootLocation(c.req.url),
+      ),
+    );
+  }
 
   return c.body(result.sdpAnswer, 201, {
     "content-type": "application/sdp",
