@@ -31,7 +31,7 @@ The application is optimized for authenticated live viewing at higher quality th
 - Worker HTTP routing is centralized in `worker/index.ts`:
   - `/login`, `/login/callback`, `/logout` for Discord OAuth.
   - `/ingest/:userId*` for WHIP ingest (publisher side).
-  - `/play/:userId*` for WHEP playback (viewer side).
+  - `/play/:userId*` for the app-specific, WHEP-inspired playback flow (viewer side).
   - `/api/*` for authenticated app APIs (`/api/me`, `/api/lives`, `/api/me/livetoken`).
   - Keep frontend API calls relative (`/api/...`, `/play/...`, `/ingest/...`) so Worker + assets work in the same origin setup.
 
@@ -50,24 +50,28 @@ The application is optimized for authenticated live viewing at higher quality th
 ### Authentication
 - Discord auth spans `worker/discord-login.ts` + `worker/discord.ts`: OAuth state cookie handshake, code exchange, guild-membership verification, user upsert, JWT cookie (`authtoken`) issuance.
 - **Viewer Auth Flow:** 
-  - Frontend boot (`src/App.tsx`) gates on `useAuth()` (`/api/me`) to resolve `authenticated` / `unauthenticated` / `error`.
+  - Frontend boot (`src/App.tsx`) uses `useBootstrapAuthState()` from `src/api.ts`.
+  - `src/api.ts` starts module-level SWR preloads for `/api/me`, `/api/lives`, and `/api/me/livetoken`. Any successful data response moves the app to the authenticated shell; any `UnauthorizedError` result moves it to the login screen.
   - `/login` starts Discord OAuth; `/login/callback` verifies guild membership, upserts user, sets `authtoken` cookie.
   - `/api/*` and `/play/*` are protected by cookie JWT middleware (`jwt({ secret: c.env.JWT_SECRET, cookie: "authtoken", alg: "HS256" })` using `JWTPayload` from `worker/types.ts`).
+  - Browser-mutating routes under `/api/*`, `/play/*`, and `POST /logout` also use Hono origin-based CSRF protection. Worker route tests for these requests must include a same-origin `Origin` header.
 - **Publish Auth:** OBS uses a bearer live token. Ingest auth is hash-based validation (`hashed-bearer-auth.ts` + `token-hash.ts`). Live tokens are shown only when created and stored in D1 as an HMAC hash using `LIVE_TOKEN_PEPPER`. Do not store or compare raw live tokens server-side.
 
 ### Publish Path (WHIP)
 - OBS posts SDP offer to `/ingest/:userId` with bearer token.
 - Worker checks for existing stream state in D1, validates/stale-cleans session, then calls `startIngest`.
-- Returned track metadata is persisted to `live_tracks`; response is SDP answer plus `location` and `etag` headers. Preserve SDP body/content-type handling and these headers.
+- Returned track metadata is stored in `lives.tracks_json`; response is SDP answer plus `location` and `etag` headers. Preserve SDP body/content-type handling and these headers.
+- Add `?notify=false` or `?notify=0` to suppress the best-effort Discord live-start notification for that ingest start.
 - **Cleanup:** `DELETE /ingest/:userId/:sessionId` closes tracks via SFU and then removes D1 rows.
 
 ### Playback Path (WHEP)
-- `WHEPPlayer` composes UI state and delegates playback lifecycle to `WHEPVideoPlayer` + `WHEPSession` (`src/player/WHEPVideoPlayer.tsx`, `src/player/WHEPClient.ts`).
+- The playback code is app-specific and inspired by WHEP, not a public generic WHEP endpoint/client.
+- `WHEPPlayer` composes UI state and delegates playback lifecycle to `WHEPPlaybackController` + `WHEPSession` (`src/player/WHEPPlaybackController.ts`, `src/player/WHEPClient.ts`).
 - Client sends local SDP offer to `POST /play/:userId`; server replies with SDP and `location`.
   - `201` means SDP answer (apply directly).
   - `406` means counter-offer (set remote offer, create local answer, `PATCH` to session URL).
 - The WHEP client is custom and expects local ICE gathering to complete before POSTing the SDP offer. It fetches TURN credentials from `/api/turn-credentials` (filtering out ICE URLs on port 53).
-- **Reconnect:** Reconnect behavior is centralized in `WHEPVideoPlayer` + `whep-reconnect.ts` (bounded retry window + backoff + resume triggers on visibility/pageshow/focus/online). WebRTC/reconnect changes must update setup + teardown + retry paths together to avoid stale sessions or leaked timers.
+- **Reconnect:** Reconnect behavior is centralized in `WHEPPlaybackController.ts`, `WHEPClient.ts`, and `whep-reconnect.ts` (bounded retry window + backoff + resume triggers on visibility/pageshow/focus/online). WebRTC/reconnect changes must update setup + teardown + retry paths together to avoid stale sessions or leaked timers.
 - **Cleanup:** Viewer startup removes stale D1 records when SFU reports a dead publish session. `WHEPSession.dispose()` tears down local WebRTC resources and sends `DELETE` to the server session URL.
 
 ### API Contracts
