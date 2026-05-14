@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
 
     steps:
       - name: Checkout
@@ -29,11 +29,6 @@ jobs:
 
       - name: Enable Corepack
         run: corepack enable
-
-      - name: Install sqlite3
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes sqlite3
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
