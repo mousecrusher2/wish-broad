@@ -22,7 +22,7 @@
     "format:check": "prettier --check ."
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.36.3",
+    "@cloudflare/vite-plugin": "^1.36.4",
     "@cloudflare/workers-types": "^4.20260511.1",
     "@eslint/js": "^10.0.1",
     "@playwright/cli": "^0.1.13",
@@ -39,16 +39,16 @@
     "eslint-plugin-tailwindcss": "4.0.0-beta.0",
     "eslint-plugin-unicorn": "^64.0.0",
     "globals": "^17.6.0",
-    "knip": "^6.12.2",
+    "knip": "^6.13.1",
     "prettier": "^3.8.3",
     "prettier-plugin-tailwindcss": "^0.8.0",
     "rollup-plugin-visualizer": "^7.0.1",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.59.2",
-    "vite": "^8.0.11",
-    "vitest": "^4.1.5",
-    "wrangler": "^4.90.0"
+    "typescript-eslint": "^8.59.3",
+    "vite": "^8.0.12",
+    "vitest": "^4.1.6",
+    "wrangler": "^4.90.1"
   },
   "dependencies": {
     "hono": "^4.12.18",
