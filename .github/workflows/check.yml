@@ -16,24 +16,27 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 26
+          node-version-file: package.json
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Enable Corepack
         run: corepack enable
 
-      - name: Install sqlite3
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes sqlite3
+      - name: Ensure sqlite3 is available
+        run: command -v sqlite3 || (sudo apt-get update && sudo apt-get install -y sqlite3)
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
