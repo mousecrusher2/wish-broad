@@ -32,6 +32,18 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      - name: Cache TypeScript and Vite build metadata
+        uses: actions/cache@v5
+        with:
+          path: |
+            tsconfig.app.tsbuildinfo
+            tsconfig.node.tsbuildinfo
+            node_modules/.tmp/tsconfig.worker.tsbuildinfo
+            node_modules/.vite
+          key: ${{ runner.os }}-build-metadata-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json') }}
+          restore-keys: |
+            ${{ runner.os }}-build-metadata-
+
       - name: Enable Corepack
         run: corepack enable
 
