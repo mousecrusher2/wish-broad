@@ -50,11 +50,11 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.4",
     "vite": "^8.0.13",
-    "vitest": "^4.1.6",
+    "vitest": "^4.1.7",
     "wrangler": "^4.93.0"
   },
   "dependencies": {
-    "hono": "^4.12.19",
+    "hono": "^4.12.21",
     "neverthrow": "^8.2.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
