@@ -26,7 +26,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.37.2",
-    "@cloudflare/workers-types": "^4.20260517.1",
+    "@cloudflare/workers-types": "^4.20260521.1",
     "@eslint/js": "^10.0.1",
     "@playwright/cli": "^0.1.13",
     "@rolldown/plugin-babel": "^0.2.3",
