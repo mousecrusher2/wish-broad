@@ -54,7 +54,7 @@
     "wrangler": "^4.93.0"
   },
   "dependencies": {
-    "hono": "^4.12.19",
+    "hono": "^4.12.21",
     "neverthrow": "^8.2.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
