@@ -12,8 +12,6 @@ import {
   useSuspenseCurrentUser,
 } from "./api";
 
-const OBS_SETTINGS_POPOVER_ID = "obs-settings-popover";
-
 function CurrentUserGreeting() {
   const currentUserResult = useSuspenseCurrentUser();
 
@@ -87,6 +85,7 @@ function StreamSelectionPanel({
 function WHEPPlayerPageContent() {
   const [resource, setResource] = useState("");
   const [activeResource, setActiveResource] = useState<string | null>(null);
+  const [isObsSettingsOpen, setIsObsSettingsOpen] = useState(false);
   // Loading the same stream again should still create a fresh controller and
   // WHEP session, so explicit loads advance this remount key.
   const [loadSequence, setLoadSequence] = useState(0);
@@ -145,8 +144,11 @@ function WHEPPlayerPageContent() {
             </div>
             <button
               type="button"
-              popoverTarget={OBS_SETTINGS_POPOVER_ID}
-              popoverTargetAction="toggle"
+              aria-expanded={isObsSettingsOpen}
+              aria-haspopup="dialog"
+              onClick={() => {
+                setIsObsSettingsOpen(true);
+              }}
               className="inline-flex items-center justify-center rounded-full bg-cyan-300 px-4 py-2 text-sm font-semibold whitespace-nowrap text-slate-950 shadow-[0_14px_26px_-18px_rgba(34,211,238,0.95)] transition hover:bg-cyan-200"
             >
               📺 OBS配信設定
@@ -164,7 +166,12 @@ function WHEPPlayerPageContent() {
       </header>
 
       <div className="flex flex-col gap-6 px-4 py-6 md:px-6 xl:px-8">
-        <OBSStreamingInfo popoverId={OBS_SETTINGS_POPOVER_ID} />
+        <OBSStreamingInfo
+          isOpen={isObsSettingsOpen}
+          onClose={() => {
+            setIsObsSettingsOpen(false);
+          }}
+        />
 
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
           <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur lg:w-[20rem] lg:flex-none">

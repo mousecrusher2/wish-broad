@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useCurrentUser, useLiveToken } from "./api";
 
 type LiveTokenState = ReturnType<typeof useLiveToken>["state"];
@@ -321,13 +321,33 @@ function OBSInstructions() {
 }
 
 export function OBSStreamingInfo({
-  popoverId,
+  isOpen,
+  onClose,
 }: Readonly<{
-  popoverId: string;
+  isOpen: boolean;
+  onClose: () => void;
 }>) {
   const { state, error, fetchTokenStatus, createToken } = useLiveToken();
+  const titleId = useId();
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const [showToken, setShowToken] = useState(false);
   const [copyStatus, setCopyStatus] = useState<CopyStatus>("none");
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) {
+      return;
+    }
+
+    if (isOpen && !dialog.open) {
+      dialog.showModal();
+      return;
+    }
+
+    if (!isOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [isOpen]);
 
   const copyToClipboard = async (text: string, type: "url" | "token") => {
     await navigator.clipboard
@@ -352,29 +372,46 @@ export function OBSStreamingInfo({
   };
 
   return (
-    <section
-      id={popoverId}
-      popover="auto"
-      className="obs-settings-popover fixed top-1/2 right-auto left-1/2 z-50 m-0 max-h-[calc(100vh-1.5rem)] w-195 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 -translate-y-1/2 overflow-visible rounded-[1.75rem] border-0 bg-transparent p-0 text-inherit shadow-2xl shadow-black/45 backdrop:bg-slate-50/30 backdrop:backdrop-blur-[20px] backdrop:backdrop-saturate-145 max-[827.98px]:inset-0 max-[827.98px]:max-h-screen max-[827.98px]:w-screen max-[827.98px]:max-w-screen max-[827.98px]:translate-none max-[827.98px]:rounded-none [&:popover-open]:block [@media(max-height:819.98px)]:inset-0 [@media(max-height:819.98px)]:max-h-screen [@media(max-height:819.98px)]:w-screen [@media(max-height:819.98px)]:max-w-screen [@media(max-height:819.98px)]:translate-none [@media(max-height:819.98px)]:rounded-none"
+    <dialog
+      ref={dialogRef}
+      aria-labelledby={titleId}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+      onClose={onClose}
+      className="fixed top-1/2 right-auto left-1/2 z-50 m-0 max-h-[calc(100vh-1.5rem)] w-195 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 -translate-y-1/2 overflow-visible rounded-[1.75rem] border-0 bg-transparent p-0 text-inherit shadow-2xl shadow-black/45 backdrop:bg-slate-50/30 backdrop:backdrop-blur-[20px] backdrop:backdrop-saturate-145"
     >
-      <div className="max-h-[calc(100vh-1.5rem)] overflow-auto rounded-[1.75rem] border border-white/15 bg-[rgb(30_41_59/0.86)] p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.16)] [backdrop-filter:blur(34px)_saturate(140%)] max-[827.98px]:max-h-screen max-[827.98px]:min-h-screen max-[827.98px]:rounded-none [@media(max-height:819.98px)]:max-h-screen [@media(max-height:819.98px)]:min-h-screen [@media(max-height:819.98px)]:rounded-none">
-        <div className="space-y-6 [@media(max-height:819.98px)]:mx-auto [@media(max-height:819.98px)]:max-w-195">
+      <div className="max-h-[calc(100vh-1.5rem)] overflow-auto rounded-[1.75rem] border border-white/15 bg-[rgb(30_41_59/0.86)] p-6 shadow-[0_28px_80px_-24px_rgba(0,0,0,0.75),inset_0_1px_0_rgba(255,255,255,0.16)] [backdrop-filter:blur(34px)_saturate(140%)]">
+        <div className="space-y-6">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-sm font-medium tracking-[0.3em] text-cyan-300/80 uppercase">
                 Broadcast Setup
               </p>
-              <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white">
+              <h2
+                id={titleId}
+                className="mt-2 text-2xl font-semibold tracking-tight text-white"
+              >
                 OBS配信設定
               </h2>
             </div>
             <button
               type="button"
-              popoverTarget={popoverId}
-              popoverTargetAction="hide"
-              className="inline-flex shrink-0 items-center justify-center rounded-full border border-cyan-300/30 bg-cyan-400/20 px-4 py-2 text-sm font-semibold whitespace-nowrap text-cyan-50 transition hover:bg-cyan-400/30"
+              aria-label="OBS配信設定を閉じる"
+              onClick={onClose}
+              className="inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-slate-400/50 bg-slate-900 text-slate-50 shadow-sm shadow-black/20 transition hover:border-slate-200/65 hover:bg-slate-800 hover:text-white"
             >
-              📺 OBS配信設定を閉じる
+              <svg aria-hidden="true" className="size-4" viewBox="0 0 16 16">
+                <path
+                  d="M4 4l8 8M12 4l-8 8"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeWidth="2"
+                />
+              </svg>
             </button>
           </div>
           <StreamingUrlSection
@@ -404,6 +441,6 @@ export function OBSStreamingInfo({
           <OBSInstructions />
         </div>
       </div>
-    </section>
+    </dialog>
   );
 }
