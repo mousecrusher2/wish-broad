@@ -26,7 +26,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.38.0",
-    "@cloudflare/workers-types": "^4.20260523.1",
+    "@cloudflare/workers-types": "^4.20260525.1",
     "@eslint/js": "^10.0.1",
     "@playwright/cli": "^0.1.13",
     "@rolldown/plugin-babel": "^0.2.3",
@@ -42,7 +42,7 @@
     "eslint-plugin-tailwindcss": "4.0.0-beta.0",
     "eslint-plugin-unicorn": "^64.0.0",
     "globals": "^17.6.0",
-    "knip": "^6.14.1",
+    "knip": "^6.14.2",
     "prettier": "^3.8.3",
     "prettier-plugin-tailwindcss": "^0.8.0",
     "rollup-plugin-visualizer": "^7.0.1",
@@ -54,11 +54,11 @@
     "wrangler": "^4.94.0"
   },
   "dependencies": {
-    "hono": "^4.12.21",
+    "hono": "^4.12.23",
     "neverthrow": "^8.2.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "swr": "^2.4.1",
-    "valibot": "^1.4.0"
+    "valibot": "^1.4.1"
   }
 }
