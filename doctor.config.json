@@ -1,5 +1,5 @@
 {
-  "blocking": "none",
+  "blocking": "warning",
   "noScore": true,
   "share": false
 }
