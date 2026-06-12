@@ -24,8 +24,16 @@ export function WHEPPlayer({
   resourceUserId: string | null;
   snapshot: WHEPPlayerSnapshot;
 }>) {
-  const [controller] = useState(() => new WHEPPlaybackController());
+  const [{ controller, initialResourceUserId }] = useState(() => ({
+    controller: new WHEPPlaybackController(),
+    initialResourceUserId: resourceUserId,
+  }));
   const disposeTokenRef = useRef(0);
+
+  if (initialResourceUserId !== resourceUserId) {
+    throw new Error("WHEPPlayer resource changed without remounting");
+  }
+
   const handleSnapshotChange = useEffectEvent(
     (nextSnapshot: WHEPPlaybackControllerSnapshot) => {
       onSnapshotChange(nextSnapshot);

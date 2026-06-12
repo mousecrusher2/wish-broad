@@ -12,6 +12,14 @@ import {
   useSuspenseCurrentUser,
 } from "./api";
 
+type PlayerSelection =
+  | { kind: "idle" }
+  | {
+      kind: "selected";
+      resourceUserId: string;
+      loadSequence: number;
+    };
+
 function CurrentUserGreeting() {
   const currentUserResult = useSuspenseCurrentUser();
 
@@ -84,11 +92,10 @@ function StreamSelectionPanel({
 
 function WHEPPlayerPageContent() {
   const [resource, setResource] = useState("");
-  const [activeResource, setActiveResource] = useState<string | null>(null);
+  const [playerSelection, setPlayerSelection] = useState<PlayerSelection>({
+    kind: "idle",
+  });
   const [isObsSettingsOpen, setIsObsSettingsOpen] = useState(false);
-  // Loading the same stream again should still create a fresh controller and
-  // WHEP session, so explicit loads advance this remount key.
-  const [loadSequence, setLoadSequence] = useState(0);
   const [playerSnapshot, setPlayerSnapshot] =
     useState<WHEPPlaybackControllerSnapshot>(createDefaultSnapshot);
 
@@ -102,8 +109,15 @@ function WHEPPlayerPageContent() {
       return;
     }
 
-    setActiveResource(trimmedResource);
-    setLoadSequence((currentValue) => currentValue + 1);
+    setPlayerSelection((currentSelection) => ({
+      kind: "selected",
+      resourceUserId: trimmedResource,
+      // Loading the same stream again creates a fresh controller and session.
+      loadSequence:
+        currentSelection.kind === "selected"
+          ? currentSelection.loadSequence + 1
+          : 1,
+    }));
   };
 
   const handlePlayerSnapshotChange = (
@@ -122,6 +136,9 @@ function WHEPPlayerPageContent() {
   };
 
   const { isLoading, playbackState } = playerSnapshot;
+  const activePlayer =
+    playerSelection.kind === "selected" ? playerSelection : null;
+  const playerMountId = activePlayer?.loadSequence ?? 0;
 
   return (
     <div className="min-h-screen">
@@ -183,9 +200,9 @@ function WHEPPlayerPageContent() {
           <div className="min-w-0 flex-1">
             <WHEPPlayer
               onSnapshotChange={handlePlayerSnapshotChange}
-              resourceUserId={activeResource}
+              resourceUserId={activePlayer?.resourceUserId ?? null}
               snapshot={playerSnapshot}
-              key={loadSequence}
+              key={playerMountId}
             />
           </div>
         </div>
