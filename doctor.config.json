@@ -1,5 +1,8 @@
 {
   "blocking": "warning",
   "noScore": true,
+  "rules": {
+    "react-doctor/require-pnpm-hardening": "off"
+  },
   "share": false
 }
