@@ -780,7 +780,6 @@ export class WHEPSession {
         });
       }
 
-      // react-doctor-disable-next-line react-doctor/async-parallel
       const localOffer = await this.pc.createOffer();
       await this.pc.setLocalDescription(localOffer);
       // The current Calls-backed Worker path is effectively non-trickle. Send a
