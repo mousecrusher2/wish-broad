@@ -133,6 +133,7 @@ function VisibleTokenField({
     <div className="flex flex-col gap-3">
       <div className={inlineFieldClasses}>
         <input
+          aria-label="Bearerトークン"
           type="text"
           value={token}
           readOnly
@@ -284,9 +285,7 @@ function TokenSection({
   return (
     <div className="space-y-2">
       <div className={subtleCardClasses}>
-        <label className={fieldLabelClasses}>
-          Bearerトークン (Stream Key):
-        </label>
+        <p className={fieldLabelClasses}>Bearerトークン (Stream Key):</p>
         {error ? (
           <ErrorTokenState message={error} onRetry={onRetry} />
         ) : (

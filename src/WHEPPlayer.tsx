@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useEffectEvent,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import {
   WHEPPlaybackController,
   type WHEPPlaybackControllerSnapshot,
@@ -79,17 +73,15 @@ export function WHEPPlayer({
     controller.load(trimmedResourceUserId);
   }, [controller, resourceUserId]);
 
-  const videoRef = useCallback(
-    (videoElement: HTMLVideoElement | null) => {
-      controller.attachVideoElement(videoElement);
-    },
-    [controller],
-  );
+  const videoRef = (videoElement: HTMLVideoElement | null) => {
+    controller.attachVideoElement(videoElement);
+  };
 
   return (
     <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/70 shadow-2xl shadow-black/30">
       <video
         ref={videoRef}
+        aria-label="ライブ配信プレイヤー"
         className={`aspect-video w-full bg-black object-contain ${snapshot.playbackState.hasStream ? "opacity-100" : "opacity-0"}`}
         controls={snapshot.playbackState.hasStream}
         autoPlay

@@ -187,24 +187,21 @@ export async function completeDiscordLogin<E extends ContextWithBindings>(
       ...createErrorLogFields(memberResult.error),
       guildId: c.env.AUTHORIZED_GUILD_ID,
     });
+    const response = isGuildMembershipLookupFailure(
+      memberResult.error,
+      c.env.AUTHORIZED_GUILD_ID,
+    )
+      ? c.text(
+          "Unauthorized: You are not a member of the authorized Discord server",
+          401,
+        )
+      : c.text(
+          `Discord login failed: ${getDiscordErrorMessage(memberResult.error)}`,
+          502,
+        );
+
     await revokeAccessTokenIfNeeded();
-
-    if (
-      isGuildMembershipLookupFailure(
-        memberResult.error,
-        c.env.AUTHORIZED_GUILD_ID,
-      )
-    ) {
-      return c.text(
-        "Unauthorized: You are not a member of the authorized Discord server",
-        401,
-      );
-    }
-
-    return c.text(
-      `Discord login failed: ${getDiscordErrorMessage(memberResult.error)}`,
-      502,
-    );
+    return response;
   }
 
   try {

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import useSWR, { mutate as mutateGlobal, preload } from "swr";
 import { err, ok, type Result } from "neverthrow";
 import * as v from "valibot";
@@ -306,7 +306,7 @@ export function useLiveStreams(): UseLiveStreamsState {
   );
   const refreshInFlightRef = useRef(false);
 
-  const refresh = useCallback(() => {
+  const refresh = () => {
     if (refreshInFlightRef.current) {
       return;
     }
@@ -315,7 +315,7 @@ export function useLiveStreams(): UseLiveStreamsState {
     void mutate().finally(() => {
       refreshInFlightRef.current = false;
     });
-  }, [mutate]);
+  };
 
   if (data?.isOk()) {
     if (isValidating) {

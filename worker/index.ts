@@ -66,7 +66,11 @@ function createSiteRootLocation(requestUrl: string): string {
 
 function getRequestedTrackMids(requestUrl: string): string[] {
   const mids = new URL(requestUrl).searchParams.getAll("mid");
-  return [...new Set(mids.map((mid) => mid.trim()).filter(Boolean))];
+  const normalizedMids = mids.flatMap((mid) => {
+    const trimmedMid = mid.trim();
+    return trimmedMid ? [trimmedMid] : [];
+  });
+  return [...new Set(normalizedMids)];
 }
 
 function createWhepCloseTracks(

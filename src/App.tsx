@@ -33,6 +33,7 @@ function AuthErrorScreen({ message }: Readonly<{ message: string }>) {
           {message}
         </p>
         <button
+          type="button"
           onClick={() => {
             window.location.reload();
           }}

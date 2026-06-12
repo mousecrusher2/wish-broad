@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useState } from "react";
+import { Suspense, useState } from "react";
 import { OBSStreamingInfo } from "./OBSStreamingInfo";
 import { StreamSelection } from "./components/StreamSelection";
 import { WHEPPlayer } from "./WHEPPlayer";
@@ -92,14 +92,11 @@ function WHEPPlayerPageContent() {
   const [playerSnapshot, setPlayerSnapshot] =
     useState<WHEPPlaybackControllerSnapshot>(createDefaultSnapshot);
 
-  const handleResourceChange = useCallback(
-    (nextResource: string) => {
-      setResource(nextResource);
-    },
-    [setResource],
-  );
+  const handleResourceChange = (nextResource: string) => {
+    setResource(nextResource);
+  };
 
-  const handleLoadClick = useCallback(() => {
+  const handleLoadClick = () => {
     const trimmedResource = resource.trim();
     if (trimmedResource.length === 0) {
       return;
@@ -107,23 +104,22 @@ function WHEPPlayerPageContent() {
 
     setActiveResource(trimmedResource);
     setLoadSequence((currentValue) => currentValue + 1);
-  }, [resource]);
+  };
 
-  const handlePlayerSnapshotChange = useCallback(
-    (nextSnapshot: WHEPPlaybackControllerSnapshot) => {
-      if (
-        playerSnapshot.playbackState.phase !== "ended" &&
-        nextSnapshot.playbackState.phase === "ended"
-      ) {
-        // The player is one of the targeted reconciliation points. Refresh the
-        // cheap list after playback proves the selected live ended.
-        void revalidateLiveStreams();
-      }
+  const handlePlayerSnapshotChange = (
+    nextSnapshot: WHEPPlaybackControllerSnapshot,
+  ) => {
+    if (
+      playerSnapshot.playbackState.phase !== "ended" &&
+      nextSnapshot.playbackState.phase === "ended"
+    ) {
+      // The player is one of the targeted reconciliation points. Refresh the
+      // cheap list after playback proves the selected live ended.
+      void revalidateLiveStreams();
+    }
 
-      setPlayerSnapshot(nextSnapshot);
-    },
-    [playerSnapshot.playbackState.phase],
-  );
+    setPlayerSnapshot(nextSnapshot);
+  };
 
   const { isLoading, playbackState } = playerSnapshot;
 
