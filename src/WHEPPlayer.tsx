@@ -60,6 +60,7 @@ export function WHEPPlayer({
   }, [controller]);
 
   useEffect(() => {
+    // react-doctor-disable-next-line react-doctor/no-event-handler
     if (resourceUserId === null) {
       controller.disconnect();
       return;
