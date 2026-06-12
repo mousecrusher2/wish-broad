@@ -23,6 +23,7 @@ import {
 type AttemptMode = WHEPReconnectAttemptMode;
 
 type PendingAttempt = {
+  abortController: AbortController;
   attemptId: number;
   mode: AttemptMode;
 };
@@ -96,6 +97,7 @@ function createTerminalPlaybackState(
 }
 
 export class WHEPPlaybackController {
+  private attemptAbortController: AbortController | null = null;
   private attemptId = 0;
   private disposed = false;
   private loadingAttemptId: number | null = null;
@@ -137,8 +139,8 @@ export class WHEPPlaybackController {
     this.resetRuntime(false);
     this.targetResourceUserId = trimmedResourceUserId;
 
-    const attemptId = this.bumpAttemptId();
-    this.loadingAttemptId = attemptId;
+    const attempt = this.createAttempt("initial");
+    this.loadingAttemptId = attempt.attemptId;
     this.updateSnapshot({
       isLoading: true,
       playbackState: createPlaybackState(
@@ -149,7 +151,7 @@ export class WHEPPlaybackController {
       ),
     });
 
-    void this.startAttempt({ attemptId, mode: "initial" });
+    void this.startAttempt(attempt);
   }
 
   disconnect(): void {
@@ -182,6 +184,19 @@ export class WHEPPlaybackController {
   private bumpAttemptId(): number {
     this.attemptId += 1;
     return this.attemptId;
+  }
+
+  private createAttempt(mode: AttemptMode): PendingAttempt {
+    this.pendingAttempt = null;
+    this.disposeSession();
+
+    const abortController = new AbortController();
+    this.attemptAbortController = abortController;
+    return {
+      abortController,
+      attemptId: this.bumpAttemptId(),
+      mode,
+    };
   }
 
   private isActiveAttempt(attemptId: number): boolean {
@@ -238,6 +253,9 @@ export class WHEPPlaybackController {
   }
 
   private disposeSession(): void {
+    this.attemptAbortController?.abort();
+    this.attemptAbortController = null;
+
     const session = this.session;
     this.session = null;
     if (session) {
@@ -429,10 +447,7 @@ export class WHEPPlaybackController {
       }
 
       this.retryCount += 1;
-      void this.startAttempt({
-        attemptId: this.bumpAttemptId(),
-        mode: "retry",
-      });
+      void this.startAttempt(this.createAttempt("retry"));
     }, delayMs);
   }
 
@@ -700,10 +715,13 @@ export class WHEPPlaybackController {
   }
 
   private async startAttempt({
+    abortController,
     attemptId,
     mode,
   }: PendingAttempt): Promise<void> {
     if (
+      abortController.signal.aborted ||
+      this.attemptAbortController !== abortController ||
       !this.isActiveAttempt(attemptId) ||
       this.targetResourceUserId === null
     ) {
@@ -711,7 +729,7 @@ export class WHEPPlaybackController {
     }
 
     if (this.videoElement === null) {
-      this.pendingAttempt = { attemptId, mode };
+      this.pendingAttempt = { abortController, attemptId, mode };
       return;
     }
 
@@ -723,7 +741,6 @@ export class WHEPPlaybackController {
     this.clearPlaybackMonitor();
     this.clearRecoveryTimer();
     this.clearReconnectTimer();
-    this.disposeSession();
 
     const session = new WHEPSession({
       callbacks: {
@@ -777,17 +794,11 @@ export class WHEPPlaybackController {
     );
 
     try {
-      const startResult = await session.start();
-
-      if (!this.isActiveSession(attemptId, session)) {
-        return;
-      }
+      const startResult = await session.start(abortController.signal);
+      abortController.signal.throwIfAborted();
 
       if (startResult.isErr()) {
-        if (this.session === session) {
-          this.session = null;
-        }
-
+        this.session = null;
         this.handleAttemptFailure(startResult.error, mode, resourceUserId);
         return;
       }
@@ -796,7 +807,14 @@ export class WHEPPlaybackController {
         sessionWasConnected = true;
         this.handleConnected(resourceUserId, session);
       }
+    } catch (error: unknown) {
+      if (!(error instanceof Error && error.name === "AbortError")) {
+        throw error;
+      }
     } finally {
+      if (this.attemptAbortController === abortController) {
+        this.attemptAbortController = null;
+      }
       if (mode === "initial" && this.loadingAttemptId === attemptId) {
         this.loadingAttemptId = null;
         this.updateSnapshot({ isLoading: false });

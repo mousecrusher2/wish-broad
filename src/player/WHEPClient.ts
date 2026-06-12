@@ -757,8 +757,12 @@ export class WHEPSession {
     await this.deleteRegisteredSession();
   }
 
-  async start(): Promise<Result<void, Error>> {
-    if (!this.isActive()) {
+  async start(attemptSignal: AbortSignal): Promise<Result<void, Error>> {
+    const signal = AbortSignal.any([
+      attemptSignal,
+      this.abortController.signal,
+    ]);
+    if (!this.isActive() || signal.aborted) {
       return ok(undefined);
     }
 
@@ -770,9 +774,7 @@ export class WHEPSession {
         window.location.origin,
       );
 
-      const turnIceServers = await fetchTurnIceServers(
-        this.abortController.signal,
-      );
+      const turnIceServers = await fetchTurnIceServers(signal);
       if (turnIceServers !== null) {
         this.pc.setConfiguration({
           ...this.pc.getConfiguration(),
@@ -784,7 +786,7 @@ export class WHEPSession {
       await this.pc.setLocalDescription(localOffer);
       // The current Calls-backed Worker path is effectively non-trickle. Send a
       // complete local offer instead of relying on later trickle ICE PATCHes.
-      await waitForIceGatheringComplete(this.pc, this.abortController.signal);
+      await waitForIceGatheringComplete(this.pc, signal);
 
       const localOfferSdp = this.pc.localDescription?.sdp;
       if (!localOfferSdp) {
@@ -798,7 +800,7 @@ export class WHEPSession {
           "Content-Type": "application/sdp",
         },
         body: localOfferSdp,
-        signal: this.abortController.signal,
+        signal,
       })
         .then((offerResponse) => ok(offerResponse))
         .catch((error: Error) => err(error))
@@ -852,7 +854,7 @@ export class WHEPSession {
         await this.pc.setLocalDescription(localAnswer);
         // This PATCH answers a WHEP 406 counter-offer. It is not a trickle ICE
         // candidate PATCH, so gather the full answer before sending.
-        await waitForIceGatheringComplete(this.pc, this.abortController.signal);
+        await waitForIceGatheringComplete(this.pc, signal);
 
         const localAnswerSdp = this.pc.localDescription.sdp;
         if (!localAnswerSdp) {
@@ -866,7 +868,7 @@ export class WHEPSession {
             "Content-Type": "application/sdp",
           },
           body: localAnswerSdp,
-          signal: this.abortController.signal,
+          signal,
         })
           .then((response) => ok(response))
           .catch((error: Error) => err(error));
@@ -887,7 +889,7 @@ export class WHEPSession {
     };
 
     return runStart().catch(async (error: Error) => {
-      if (this.abortController.signal.aborted || !this.isActive()) {
+      if (signal.aborted || !this.isActive()) {
         return ok(undefined);
       }
 
