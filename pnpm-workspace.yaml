@@ -1,4 +1,10 @@
 allowBuilds:
   esbuild: true
+  msgpackr-extract: true
   sharp: true
   workerd: true
+minimumReleaseAgeExclude:
+  - "@cloudflare/vite-plugin@1.40.2"
+  - "@cloudflare/workers-types@4.20260612.1"
+  - miniflare@4.20260611.0
+  - wrangler@4.100.0

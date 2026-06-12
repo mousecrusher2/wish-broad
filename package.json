@@ -2,7 +2,7 @@
   "name": "wish-broad",
   "private": true,
   "version": "0.0.0",
-  "packageManager": "pnpm@11.1.2",
+  "packageManager": "pnpm@11.6.0",
   "engines": {
     "node": "26"
   },
@@ -22,7 +22,8 @@
     "check:unused-exports": "knip --exports --no-progress",
     "schema:check": "node scripts/check-schema-from-migrations.mjs",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "check:react": "react-doctor --yes --json --no-telemetry"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.40.2",
@@ -45,6 +46,7 @@
     "knip": "^6.16.1",
     "prettier": "^3.8.4",
     "prettier-plugin-tailwindcss": "^0.8.0",
+    "react-doctor": "^0.5.1",
     "rollup-plugin-visualizer": "^7.0.1",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3",
