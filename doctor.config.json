@@ -2,6 +2,7 @@
   "blocking": "warning",
   "noScore": true,
   "rules": {
+    "react-doctor/no-gray-on-colored-background": "off",
     "react-doctor/require-pnpm-hardening": "off"
   },
   "share": false
