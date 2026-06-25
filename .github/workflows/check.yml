@@ -33,7 +33,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Cache TypeScript and Vite build metadata
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             tsconfig.app.tsbuildinfo
