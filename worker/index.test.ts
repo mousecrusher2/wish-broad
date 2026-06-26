@@ -212,6 +212,28 @@ function createUnusedD1Database(): D1Database {
   };
 }
 
+class UnusedTracingSpan {
+  get isTraced(): boolean {
+    return false;
+  }
+
+  setAttribute(): void {}
+
+  end(): void {}
+}
+
+function createUnusedTracing(): Tracing {
+  const fail = (): never => {
+    throw new Error("Unexpected tracing access in tests");
+  };
+
+  return {
+    enterSpan: fail,
+    startActiveSpan: fail,
+    Span: UnusedTracingSpan,
+  };
+}
+
 function createExecutionContext(): ExecutionContext {
   return {
     passThroughOnException() {},
@@ -219,6 +241,7 @@ function createExecutionContext(): ExecutionContext {
       void promise;
     },
     props: undefined,
+    tracing: createUnusedTracing(),
   };
 }
 
@@ -234,6 +257,7 @@ function createObservedExecutionContext(): {
         waitUntilPromises.push(promise);
       },
       props: undefined,
+      tracing: createUnusedTracing(),
     },
     waitUntilPromises,
   };

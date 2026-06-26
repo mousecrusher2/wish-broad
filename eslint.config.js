@@ -8,12 +8,10 @@ import unicorn from "eslint-plugin-unicorn";
 import tseslint from "typescript-eslint";
 
 const reactHooksConfig = reactHooks.configs.flat["recommended-latest"];
-const tailwindcssConfigs = tailwindcss.configs["flat/recommended"].map(
-  (config) => ({
-    ...config,
-    files: ["src/**/*.{ts,tsx}"],
-  }),
-);
+const tailwindcssConfig = {
+  ...tailwindcss.configs.recommended,
+  files: ["src/**/*.{ts,tsx}"],
+};
 const tsTypeCheckedConfigs = tseslint.configs.recommendedTypeChecked.map(
   (config) => ({
     ...config,
@@ -74,7 +72,7 @@ export default [
       ],
     },
   },
-  ...tailwindcssConfigs,
+  tailwindcssConfig,
   {
     files: ["src/**/*.{ts,tsx}"],
     settings: {

@@ -187,7 +187,7 @@ function WHEPPlayerPageContent() {
         />
 
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-          <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur lg:w-[20rem] lg:flex-none">
+          <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur lg:w-xs lg:flex-none">
             <StreamSelectionPanel
               resource={resource}
               onResourceChange={handleResourceChange}
