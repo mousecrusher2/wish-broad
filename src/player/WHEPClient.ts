@@ -2,10 +2,7 @@ import { err, ok, type Result } from "neverthrow";
 import { fetchTurnIceServers } from "./turn-credentials";
 
 export type WHEPConnectionStatus =
-  | "disconnected"
-  | "connecting"
-  | "connected"
-  | "failed";
+  "disconnected" | "connecting" | "connected" | "failed";
 
 type WHEPSessionRequestStage = "post" | "patch" | "delete" | "local";
 

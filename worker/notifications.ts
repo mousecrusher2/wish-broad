@@ -6,9 +6,7 @@ type NotificationsEnv = Pick<Bindings, "NOTIFICATIONS_DISCORD_WEBHOOK_URL">;
 const DISCORD_WEBHOOK_TIMEOUT_MS = 5_000;
 
 type DiscordWebhookErrorKind =
-  | "request_failed"
-  | "request_timeout"
-  | "http_error";
+  "request_failed" | "request_timeout" | "http_error";
 
 export class DiscordWebhookError extends Error {
   readonly endpoint: string;

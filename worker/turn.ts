@@ -80,8 +80,7 @@ function createTurnCredentialsResponseSchema() {
 }
 
 let turnCredentialsResponseSchema:
-  | ReturnType<typeof createTurnCredentialsResponseSchema>
-  | undefined;
+  ReturnType<typeof createTurnCredentialsResponseSchema> | undefined;
 
 function getTurnCredentialsResponseSchema() {
   if (turnCredentialsResponseSchema === undefined) {

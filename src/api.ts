@@ -36,8 +36,7 @@ const swrSuspenseOptions = {
 };
 
 type StableLiveTokenState =
-  | { status: "none" }
-  | { status: "available"; token: string | null };
+  { status: "none" } | { status: "available"; token: string | null };
 
 type LiveTokenState = { status: "loading" } | StableLiveTokenState;
 

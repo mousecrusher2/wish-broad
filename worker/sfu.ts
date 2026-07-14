@@ -204,8 +204,7 @@ function createSessionDescriptionSchema() {
 }
 
 let sessionDescriptionSchema:
-  | ReturnType<typeof createSessionDescriptionSchema>
-  | undefined;
+  ReturnType<typeof createSessionDescriptionSchema> | undefined;
 
 function getSessionDescriptionSchema() {
   if (sessionDescriptionSchema === undefined) {
@@ -226,8 +225,7 @@ function createNewTrackResponseSchema() {
 }
 
 let newTrackResponseSchema:
-  | ReturnType<typeof createNewTrackResponseSchema>
-  | undefined;
+  ReturnType<typeof createNewTrackResponseSchema> | undefined;
 
 function getNewTrackResponseSchema() {
   if (newTrackResponseSchema === undefined) {
@@ -244,8 +242,7 @@ function createNewSessionResponseSchema() {
 }
 
 let newSessionResponseSchema:
-  | ReturnType<typeof createNewSessionResponseSchema>
-  | undefined;
+  ReturnType<typeof createNewSessionResponseSchema> | undefined;
 
 function getNewSessionResponseSchema() {
   if (newSessionResponseSchema === undefined) {
@@ -266,8 +263,7 @@ function createNewTracksResponseSchema() {
 }
 
 let newTracksResponseSchema:
-  | ReturnType<typeof createNewTracksResponseSchema>
-  | undefined;
+  ReturnType<typeof createNewTracksResponseSchema> | undefined;
 
 function getNewTracksResponseSchema() {
   if (newTracksResponseSchema === undefined) {
@@ -288,8 +284,7 @@ function createCloseTrackResultSchema() {
 }
 
 let closeTrackResultSchema:
-  | ReturnType<typeof createCloseTrackResultSchema>
-  | undefined;
+  ReturnType<typeof createCloseTrackResultSchema> | undefined;
 
 function getCloseTrackResultSchema() {
   if (closeTrackResultSchema === undefined) {
@@ -310,8 +305,7 @@ function createCloseTracksResponseSchema() {
 }
 
 let closeTracksResponseSchema:
-  | ReturnType<typeof createCloseTracksResponseSchema>
-  | undefined;
+  ReturnType<typeof createCloseTracksResponseSchema> | undefined;
 
 function getCloseTracksResponseSchema() {
   if (closeTracksResponseSchema === undefined) {

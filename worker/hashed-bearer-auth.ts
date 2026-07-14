@@ -20,8 +20,7 @@ type HashedBearerAuthOptions<
 };
 
 type TokenCheckResult =
-  | { kind: "ok"; isValidToken: boolean }
-  | { kind: "error"; error: Error };
+  { kind: "ok"; isValidToken: boolean } | { kind: "error"; error: Error };
 
 function getBearerToken(
   authorizationHeader: string | undefined,

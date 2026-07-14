@@ -2,7 +2,7 @@
   "name": "wish-broad",
   "private": true,
   "version": "0.0.0",
-  "packageManager": "pnpm@11.9.0",
+  "packageManager": "pnpm@11.13.0",
   "engines": {
     "node": "26"
   },
@@ -44,7 +44,7 @@
     "eslint-plugin-unicorn": "^69.0.0",
     "globals": "^17.7.0",
     "knip": "^6.20.0",
-    "prettier": "^3.8.4",
+    "prettier": "^3.9.5",
     "prettier-plugin-tailwindcss": "^0.8.0",
     "react-doctor": "^0.5.8",
     "rollup-plugin-visualizer": "^7.0.1",

@@ -149,8 +149,7 @@ async function sendLiveStartNotification(
   // Notifications are tied to the exact live session. If that row has already
   // disappeared, delete the Discord message instead of leaving an orphan.
   type PersistNotificationResult =
-    | { ok: true; saved: boolean }
-    | { ok: false; error: Error };
+    { ok: true; saved: boolean } | { ok: false; error: Error };
   const persistResult: PersistNotificationResult = await db
     .setLiveNotificationMessageId(c.env.LIVE_DB, userId, sessionId, messageId)
     .then((saved): PersistNotificationResult => ({ ok: true, saved }))
@@ -725,8 +724,7 @@ app.get("/api/me/livetoken", async (c) => {
   const jwtPayload = c.get("jwtPayload");
   const userId = jwtPayload.userId;
   type HasTokenResult =
-    | { ok: true; hasToken: boolean }
-    | { ok: false; error: Error };
+    { ok: true; hasToken: boolean } | { ok: false; error: Error };
   const hasTokenResult: HasTokenResult = await db
     .hasLiveToken(c.env.LIVE_DB, userId)
     .then((hasToken): HasTokenResult => ({ ok: true, hasToken }))

@@ -275,8 +275,7 @@ function createDiscordOAuthTokenResponseSchema() {
 }
 
 let discordOAuthTokenResponseSchema:
-  | ReturnType<typeof createDiscordOAuthTokenResponseSchema>
-  | undefined;
+  ReturnType<typeof createDiscordOAuthTokenResponseSchema> | undefined;
 
 function getDiscordOAuthTokenResponseSchema() {
   if (discordOAuthTokenResponseSchema === undefined) {
@@ -313,8 +312,7 @@ function createDiscordGuildMemberSchema() {
 }
 
 let discordGuildMemberSchema:
-  | ReturnType<typeof createDiscordGuildMemberSchema>
-  | undefined;
+  ReturnType<typeof createDiscordGuildMemberSchema> | undefined;
 
 function getDiscordGuildMemberSchema() {
   if (discordGuildMemberSchema === undefined) {

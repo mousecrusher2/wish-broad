@@ -5,9 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { visualizer } from "rollup-plugin-visualizer";
 
-const ReactCompilerConfig = {
-  /* ... */
-};
+const ReactCompilerConfig = {/* ... */};
 
 export default defineConfig(({ mode }) => {
   const isAnalyzeMode = mode === "analyze";
