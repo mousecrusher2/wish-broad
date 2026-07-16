@@ -100,6 +100,8 @@ function WHEPPlayerPageContent() {
     useState<WHEPPlaybackControllerSnapshot>(createDefaultSnapshot);
 
   const handleResourceChange = (nextResource: string) => {
+    // React Doctor 0.7.7 mistakes this value argument for an updater callback.
+    // react-doctor-disable-next-line react-doctor/no-impure-state-updater
     setResource(nextResource);
   };
 
@@ -132,6 +134,8 @@ function WHEPPlayerPageContent() {
       void revalidateLiveStreams();
     }
 
+    // React Doctor 0.7.7 mistakes this value argument for an updater callback.
+    // react-doctor-disable-next-line react-doctor/no-impure-state-updater
     setPlayerSnapshot(nextSnapshot);
   };
 
