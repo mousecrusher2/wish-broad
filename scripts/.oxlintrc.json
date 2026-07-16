@@ -1,0 +1,16 @@
+{
+  "$schema": "../node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "pedantic": "warn",
+    "perf": "warn"
+  },
+  "plugins": ["import", "node", "oxc", "promise", "unicorn"],
+  "env": {
+    "node": true
+  },
+  "rules": {
+    "max-lines-per-function": "off"
+  }
+}

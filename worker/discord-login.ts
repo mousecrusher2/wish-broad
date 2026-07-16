@@ -67,7 +67,7 @@ async function issueDiscordLoginJwt<E extends ContextWithBindings>(
   member: DiscordGuildMember,
 ): Promise<Response> {
   const displayName =
-    member.nick || member.user.global_name || member.user.username;
+    member.nick ?? member.user.global_name ?? member.user.username;
 
   await db.setUser(c.env.LIVE_DB, {
     userId: member.user.id,

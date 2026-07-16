@@ -31,9 +31,7 @@ function createLiveTrackRowSchema() {
 let liveTrackRowSchema: ReturnType<typeof createLiveTrackRowSchema> | undefined;
 
 function getLiveTrackRowSchema() {
-  if (liveTrackRowSchema === undefined) {
-    liveTrackRowSchema = createLiveTrackRowSchema();
-  }
+  liveTrackRowSchema ??= createLiveTrackRowSchema();
 
   return liveTrackRowSchema;
 }
@@ -50,9 +48,7 @@ function createStoredTrackSchema() {
 let storedTrackSchema: ReturnType<typeof createStoredTrackSchema> | undefined;
 
 function getStoredTrackSchema() {
-  if (storedTrackSchema === undefined) {
-    storedTrackSchema = createStoredTrackSchema();
-  }
+  storedTrackSchema ??= createStoredTrackSchema();
 
   return storedTrackSchema;
 }
@@ -64,9 +60,7 @@ function createStoredTracksSchema() {
 let storedTracksSchema: ReturnType<typeof createStoredTracksSchema> | undefined;
 
 function getStoredTracksSchema() {
-  if (storedTracksSchema === undefined) {
-    storedTracksSchema = createStoredTracksSchema();
-  }
+  storedTracksSchema ??= createStoredTracksSchema();
 
   return storedTracksSchema;
 }
@@ -80,9 +74,7 @@ function createLiveTokenRowSchema() {
 let liveTokenRowSchema: ReturnType<typeof createLiveTokenRowSchema> | undefined;
 
 function getLiveTokenRowSchema() {
-  if (liveTokenRowSchema === undefined) {
-    liveTokenRowSchema = createLiveTokenRowSchema();
-  }
+  liveTokenRowSchema ??= createLiveTokenRowSchema();
 
   return liveTokenRowSchema;
 }
@@ -97,9 +89,7 @@ function createLiveListRowSchema() {
 let liveListRowSchema: ReturnType<typeof createLiveListRowSchema> | undefined;
 
 function getLiveListRowSchema() {
-  if (liveListRowSchema === undefined) {
-    liveListRowSchema = createLiveListRowSchema();
-  }
+  liveListRowSchema ??= createLiveListRowSchema();
 
   return liveListRowSchema;
 }

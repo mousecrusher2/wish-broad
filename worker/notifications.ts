@@ -49,7 +49,7 @@ function trimResponseBody(text: string | undefined): string | undefined {
     return undefined;
   }
 
-  const normalized = text.replace(/\s+/gu, " ").trim();
+  const normalized = text.replaceAll(/\s+/gu, " ").trim();
   if (normalized.length === 0) {
     return undefined;
   }

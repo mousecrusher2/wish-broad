@@ -358,8 +358,8 @@ export function OBSStreamingInfo({
           setCopyStatus("none");
         }, 2000);
       })
-      .catch((error: Error) => {
-        console.error("Failed to copy to clipboard:", error);
+      .catch((clipboardError: Error) => {
+        console.error("Failed to copy to clipboard:", clipboardError);
         alert("クリップボードへのコピーに失敗しました");
       });
   };

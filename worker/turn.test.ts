@@ -69,7 +69,7 @@ describe("worker turn credentials", () => {
     });
     expect(typeof init?.body).toBe("string");
     if (typeof init?.body !== "string") {
-      throw new Error("Expected TURN credential request body to be JSON");
+      throw new TypeError("Expected TURN credential request body to be JSON");
     }
     expect(JSON.parse(init.body)).toEqual({
       customIdentifier: "viewer-1",

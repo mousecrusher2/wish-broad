@@ -101,6 +101,7 @@ export function StreamSelection({
                   return (
                     <label
                       key={stream.owner.userId}
+                      aria-label={`${stream.owner.displayName}の配信を選択`}
                       className={`flex cursor-pointer items-center gap-2 rounded-md border p-1 transition ${
                         isSelected
                           ? "border-cyan-400/60 bg-cyan-400/10 shadow-lg shadow-cyan-950/30"

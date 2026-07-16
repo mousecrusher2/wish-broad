@@ -1,4 +1,3 @@
-/* eslint-disable sonarjs/cognitive-complexity */
 import type { Context } from "hono";
 import { HonoBase } from "hono/hono-base";
 import { LinearRouter } from "hono/router/linear-router";
@@ -429,7 +428,7 @@ app.use("/play/*", async (c, next) => {
     cookie: "authtoken",
     alg: "HS256",
   });
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+  // oxlint-disable-next-line typescript/no-unsafe-argument -- Hono's jwt middleware erases the concrete app context type.
   return middleware(c, next);
 });
 app.use("/play/*", async (c, next) => {
@@ -652,7 +651,7 @@ app.use("/api/*", async (c, next) => {
     cookie: "authtoken",
     alg: "HS256",
   });
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+  // oxlint-disable-next-line typescript/no-unsafe-argument -- Hono's jwt middleware erases the concrete app context type.
   return middleware(c, next);
 });
 app.use("/api/*", async (c, next) => {

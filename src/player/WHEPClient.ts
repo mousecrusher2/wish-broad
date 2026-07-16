@@ -217,19 +217,18 @@ async function parseWhepSessionResponse(
     expectedRemoteTrackCountHeader === null
       ? null
       : Number.parseInt(expectedRemoteTrackCountHeader, 10);
-  if (expectedRemoteTrackCountHeader !== null) {
-    if (
-      !Number.isInteger(parsedExpectedRemoteTrackCount) ||
+  if (
+    expectedRemoteTrackCountHeader !== null &&
+    (!Number.isInteger(parsedExpectedRemoteTrackCount) ||
       parsedExpectedRemoteTrackCount === null ||
-      parsedExpectedRemoteTrackCount < 1
-    ) {
-      throw new WHEPSessionError("Invalid Wish-Live-Track-Count header", {
-        kind: "unexpected_response",
-        responseText: expectedRemoteTrackCountHeader,
-        retryable: false,
-        stage: "post",
-      });
-    }
+      parsedExpectedRemoteTrackCount < 1)
+  ) {
+    throw new WHEPSessionError("Invalid Wish-Live-Track-Count header", {
+      kind: "unexpected_response",
+      responseText: expectedRemoteTrackCountHeader,
+      retryable: false,
+      stage: "post",
+    });
   }
   const expectedRemoteTrackCount: number | null =
     expectedRemoteTrackCountHeader === null

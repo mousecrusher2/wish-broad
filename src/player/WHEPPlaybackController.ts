@@ -346,13 +346,13 @@ export class WHEPPlaybackController {
     switch (resolveReconnectDisposition(error)) {
       case "ended":
         this.finalizePlayback("ended", resourceUserId);
-        return;
+        break;
       case "error":
         this.finalizePlayback("error", resourceUserId, error);
-        return;
+        break;
       case "retry":
         this.queueReconnect();
-        return;
+        break;
     }
   }
 

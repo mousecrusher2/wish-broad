@@ -207,9 +207,7 @@ let sessionDescriptionSchema:
   ReturnType<typeof createSessionDescriptionSchema> | undefined;
 
 function getSessionDescriptionSchema() {
-  if (sessionDescriptionSchema === undefined) {
-    sessionDescriptionSchema = createSessionDescriptionSchema();
-  }
+  sessionDescriptionSchema ??= createSessionDescriptionSchema();
 
   return sessionDescriptionSchema;
 }
@@ -228,9 +226,7 @@ let newTrackResponseSchema:
   ReturnType<typeof createNewTrackResponseSchema> | undefined;
 
 function getNewTrackResponseSchema() {
-  if (newTrackResponseSchema === undefined) {
-    newTrackResponseSchema = createNewTrackResponseSchema();
-  }
+  newTrackResponseSchema ??= createNewTrackResponseSchema();
 
   return newTrackResponseSchema;
 }
@@ -245,9 +241,7 @@ let newSessionResponseSchema:
   ReturnType<typeof createNewSessionResponseSchema> | undefined;
 
 function getNewSessionResponseSchema() {
-  if (newSessionResponseSchema === undefined) {
-    newSessionResponseSchema = createNewSessionResponseSchema();
-  }
+  newSessionResponseSchema ??= createNewSessionResponseSchema();
 
   return newSessionResponseSchema;
 }
@@ -266,9 +260,7 @@ let newTracksResponseSchema:
   ReturnType<typeof createNewTracksResponseSchema> | undefined;
 
 function getNewTracksResponseSchema() {
-  if (newTracksResponseSchema === undefined) {
-    newTracksResponseSchema = createNewTracksResponseSchema();
-  }
+  newTracksResponseSchema ??= createNewTracksResponseSchema();
 
   return newTracksResponseSchema;
 }
@@ -287,9 +279,7 @@ let closeTrackResultSchema:
   ReturnType<typeof createCloseTrackResultSchema> | undefined;
 
 function getCloseTrackResultSchema() {
-  if (closeTrackResultSchema === undefined) {
-    closeTrackResultSchema = createCloseTrackResultSchema();
-  }
+  closeTrackResultSchema ??= createCloseTrackResultSchema();
 
   return closeTrackResultSchema;
 }
@@ -308,9 +298,7 @@ let closeTracksResponseSchema:
   ReturnType<typeof createCloseTracksResponseSchema> | undefined;
 
 function getCloseTracksResponseSchema() {
-  if (closeTracksResponseSchema === undefined) {
-    closeTracksResponseSchema = createCloseTracksResponseSchema();
-  }
+  closeTracksResponseSchema ??= createCloseTracksResponseSchema();
 
   return closeTracksResponseSchema;
 }
@@ -516,7 +504,7 @@ async function connectToTracks(
   tracks: TrackLocator[],
   sdpOffer?: string,
 ): Promise<Result<NewTracksResponse, SfuFailure>> {
-  const normalizedTracks = tracks.map(normalizeTrackLocator);
+  const normalizedTracks = tracks.map((track) => normalizeTrackLocator(track));
   const body =
     sdpOffer && sdpOffer.trim().length > 0
       ? {

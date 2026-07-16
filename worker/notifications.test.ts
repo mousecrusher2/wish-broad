@@ -40,7 +40,7 @@ describe("worker live start notifications", () => {
     });
     expect(typeof init?.body).toBe("string");
     if (typeof init?.body !== "string") {
-      throw new Error("Expected webhook body to be a JSON string");
+      throw new TypeError("Expected webhook body to be a JSON string");
     }
     expect(JSON.parse(init.body)).toEqual({
       allowed_mentions: {

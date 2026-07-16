@@ -66,9 +66,7 @@ function createRawIceServerSchema() {
 let rawIceServerSchema: ReturnType<typeof createRawIceServerSchema> | undefined;
 
 function getRawIceServerSchema() {
-  if (rawIceServerSchema === undefined) {
-    rawIceServerSchema = createRawIceServerSchema();
-  }
+  rawIceServerSchema ??= createRawIceServerSchema();
 
   return rawIceServerSchema;
 }
@@ -83,9 +81,7 @@ let turnCredentialsResponseSchema:
   ReturnType<typeof createTurnCredentialsResponseSchema> | undefined;
 
 function getTurnCredentialsResponseSchema() {
-  if (turnCredentialsResponseSchema === undefined) {
-    turnCredentialsResponseSchema = createTurnCredentialsResponseSchema();
-  }
+  turnCredentialsResponseSchema ??= createTurnCredentialsResponseSchema();
 
   return turnCredentialsResponseSchema;
 }

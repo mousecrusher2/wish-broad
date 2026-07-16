@@ -1,10 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = resolve(import.meta.dirname, "..");
 const schemaPath = join(repoRoot, "schema.sql");
 const migrationsDir = join(repoRoot, "migrations");
 
@@ -78,7 +77,7 @@ function inspectIndexes(databasePath, tableName) {
         `PRAGMA index_xinfo(${quoteSqlString(index.name)});`,
       )
         .filter((column) => column.key === 1)
-        .sort((a, b) => a.seqno - b.seqno)
+        .toSorted((a, b) => a.seqno - b.seqno)
         .map((column) => ({
           coll: column.coll ?? null,
           desc: Number(column.desc),
@@ -95,7 +94,7 @@ function inspectIndexes(databasePath, tableName) {
         unique: Number(index.unique),
       };
     })
-    .sort((a, b) => {
+    .toSorted((a, b) => {
       return JSON.stringify(a).localeCompare(JSON.stringify(b));
     });
 }
@@ -220,7 +219,7 @@ function main() {
 
     const migrationFiles = readdirSync(migrationsDir)
       .filter((fileName) => fileName.endsWith(".sql"))
-      .sort();
+      .toSorted();
 
     for (const migrationFile of migrationFiles) {
       applySql(

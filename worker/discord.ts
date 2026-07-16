@@ -139,7 +139,7 @@ function trimResponseBody(text: string | undefined): string | undefined {
     return undefined;
   }
 
-  const normalized = text.replace(/\s+/gu, " ").trim();
+  const normalized = text.replaceAll(/\s+/gu, " ").trim();
   if (normalized.length === 0) {
     return undefined;
   }
@@ -278,9 +278,7 @@ let discordOAuthTokenResponseSchema:
   ReturnType<typeof createDiscordOAuthTokenResponseSchema> | undefined;
 
 function getDiscordOAuthTokenResponseSchema() {
-  if (discordOAuthTokenResponseSchema === undefined) {
-    discordOAuthTokenResponseSchema = createDiscordOAuthTokenResponseSchema();
-  }
+  discordOAuthTokenResponseSchema ??= createDiscordOAuthTokenResponseSchema();
 
   return discordOAuthTokenResponseSchema;
 }
@@ -297,9 +295,7 @@ function createDiscordUserSchema() {
 let discordUserSchema: ReturnType<typeof createDiscordUserSchema> | undefined;
 
 function getDiscordUserSchema() {
-  if (discordUserSchema === undefined) {
-    discordUserSchema = createDiscordUserSchema();
-  }
+  discordUserSchema ??= createDiscordUserSchema();
 
   return discordUserSchema;
 }
@@ -315,9 +311,7 @@ let discordGuildMemberSchema:
   ReturnType<typeof createDiscordGuildMemberSchema> | undefined;
 
 function getDiscordGuildMemberSchema() {
-  if (discordGuildMemberSchema === undefined) {
-    discordGuildMemberSchema = createDiscordGuildMemberSchema();
-  }
+  discordGuildMemberSchema ??= createDiscordGuildMemberSchema();
 
   return discordGuildMemberSchema;
 }

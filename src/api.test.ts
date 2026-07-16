@@ -4,19 +4,18 @@ vi.mock("swr", async (importOriginal) => {
   const original = await importOriginal<typeof import("swr")>();
   return {
     ...original,
-    preload: vi.fn(),
+    preload: vi.fn<() => void>(),
   };
 });
 
 import { fetchCurrentUser, fetchLiveStreams, UnauthorizedError } from "./api";
 
 function createJsonResponse(data: unknown, init?: ResponseInit): Response {
+  const headers = new Headers(init?.headers);
+  headers.set("content-type", "application/json");
   return new Response(JSON.stringify(data), {
     ...init,
-    headers: {
-      "content-type": "application/json",
-      ...init?.headers,
-    },
+    headers,
   });
 }
 
@@ -57,9 +56,10 @@ describe("api data layer", () => {
     const result = await fetchLiveStreams();
 
     expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error).not.toBeInstanceOf(UnauthorizedError);
+    if (result.isOk()) {
+      throw new TypeError("Expected fetchLiveStreams to fail");
     }
+    expect(result.error).not.toBeInstanceOf(UnauthorizedError);
   });
 
   it("returns unauthorized when an API response is 401", async () => {
@@ -73,8 +73,9 @@ describe("api data layer", () => {
     const result = await fetchCurrentUser();
 
     expect(result.isErr()).toBe(true);
-    if (result.isErr()) {
-      expect(result.error).toBeInstanceOf(UnauthorizedError);
+    if (result.isOk()) {
+      throw new TypeError("Expected fetchCurrentUser to fail");
     }
+    expect(result.error).toBeInstanceOf(UnauthorizedError);
   });
 });

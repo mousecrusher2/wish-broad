@@ -1,0 +1,117 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "pedantic": "warn",
+    "perf": "warn"
+  },
+  "plugins": [
+    "import",
+    "jsx-a11y",
+    "node",
+    "oxc",
+    "promise",
+    "react",
+    "typescript",
+    "unicorn",
+    "vitest"
+  ],
+  "ignorePatterns": ["debug", "dist", "worker-configuration.d.ts"],
+  "options": {
+    "typeAware": true
+  },
+  "settings": {
+    "better-tailwindcss": {
+      "entryPoint": "src/style.css"
+    }
+  },
+  "rules": {
+    "complexity": ["error", { "max": 25 }],
+    "import/max-dependencies": "off",
+    "max-depth": ["error", { "max": 5 }],
+    "max-classes-per-file": "off",
+    "max-lines": "off",
+    "max-lines-per-function": "off",
+    "import/no-unassigned-import": "off",
+    "no-inline-comments": "off",
+    "oxc/branches-sharing-code": "warn",
+    "promise/always-return": "off",
+    "react/react-in-jsx-scope": "off",
+    "require-await": "off",
+    "typescript/consistent-return": "off",
+    "typescript/require-await": "off",
+    "typescript/no-confusing-void-expression": "error",
+    "typescript/no-deprecated": "error",
+    "typescript/consistent-type-assertions": [
+      "error",
+      { "assertionStyle": "never" }
+    ],
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/no-unnecessary-condition": "error",
+    "typescript/no-unnecessary-type-arguments": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/prefer-readonly-parameter-types": "off",
+    "typescript/restrict-template-expressions": [
+      "error",
+      {
+        "allowAny": false,
+        "allowBoolean": false,
+        "allowNullish": false,
+        "allowNumber": false,
+        "allowRegExp": false
+      }
+    ],
+    "typescript/strict-boolean-expressions": "off",
+    "typescript/switch-exhaustiveness-check": "error",
+    "unicorn/no-useless-undefined": "off",
+    "unicorn/prefer-number-coercion": "off",
+    "unicorn/prefer-query-selector": "off",
+    "vitest/no-conditional-in-test": "off"
+  },
+  "overrides": [
+    {
+      "files": ["src/**/*.{ts,tsx}"],
+      "env": {
+        "browser": true
+      },
+      "jsPlugins": ["eslint-plugin-better-tailwindcss"],
+      "rules": {
+        "better-tailwindcss/no-conflicting-classes": "error",
+        "better-tailwindcss/no-deprecated-classes": "warn",
+        "better-tailwindcss/no-duplicate-classes": "warn",
+        "better-tailwindcss/no-unknown-classes": "error",
+        "react/exhaustive-deps": "error",
+        "react/only-export-components": [
+          "warn",
+          { "allowConstantExport": true }
+        ],
+        "react/rules-of-hooks": "error"
+      }
+    },
+    {
+      "files": ["worker/**/*.ts"],
+      "env": {
+        "serviceworker": true,
+        "worker": true
+      }
+    },
+    {
+      "files": ["vite.config.ts", "vitest.config.ts"],
+      "env": {
+        "node": true
+      }
+    },
+    {
+      "files": ["**/*.test.{ts,tsx}"],
+      "env": {
+        "vitest": true
+      },
+      "rules": {
+        "no-underscore-dangle": "off"
+      }
+    }
+  ]
+}

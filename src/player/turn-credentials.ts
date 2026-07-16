@@ -72,10 +72,15 @@ export async function fetchTurnIceServers(
   }
 
   return parsedResponse.output.iceServers.map((iceServer) => {
-    return {
-      ...(iceServer.credential ? { credential: iceServer.credential } : {}),
-      ...(iceServer.username ? { username: iceServer.username } : {}),
+    const normalizedIceServer: RTCIceServer = {
       urls: iceServer.urls,
     };
+    if (iceServer.credential) {
+      normalizedIceServer.credential = iceServer.credential;
+    }
+    if (iceServer.username) {
+      normalizedIceServer.username = iceServer.username;
+    }
+    return normalizedIceServer;
   });
 }

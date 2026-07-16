@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
   ];
 
   if (isAnalyzeMode) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    // oxlint-disable-next-line typescript/no-unsafe-assignment -- Rollup visualizer and Rolldown expose incompatible plugin types.
     const analyzePlugin = visualizer({
       brotliSize: true,
       emitFile: true,
@@ -27,7 +27,7 @@ export default defineConfig(({ mode }) => {
       sourcemap: true,
       template: "treemap",
     });
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
+    // oxlint-disable-next-line typescript/no-unsafe-argument -- Vite accepts this Rollup-compatible plugin at runtime.
     plugins.push(analyzePlugin);
   }
 

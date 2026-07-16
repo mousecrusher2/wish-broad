@@ -56,16 +56,16 @@ function writeConsole(
   switch (level) {
     case "debug":
       console.debug(record);
-      return;
+      break;
     case "info":
       console.info(record);
-      return;
+      break;
     case "warn":
       console.warn(record);
-      return;
+      break;
     case "error":
       console.error(record);
-      return;
+      break;
   }
 }
 

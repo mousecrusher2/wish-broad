@@ -88,6 +88,8 @@ export function WHEPPlayer({
 
   return (
     <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/70 shadow-2xl shadow-black/30">
+      {/* Live streams do not provide a separate captions track. */}
+      {/* oxlint-disable-next-line jsx-a11y/media-has-caption */}
       <video
         ref={videoRef}
         aria-label="ライブ配信プレイヤー"

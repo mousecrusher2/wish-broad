@@ -206,6 +206,7 @@ function createUnusedD1Database(): D1Database {
     withSession() {
       return createUnusedD1DatabaseSession();
     },
+    // oxlint-disable-next-line typescript/no-deprecated -- The deprecated method remains required by the D1Database test double type.
     ["dump"]() {
       throw new Error("Unexpected D1 access in tests");
     },
@@ -222,20 +223,23 @@ class UnusedTracingSpan {
   end(): void {}
 }
 
-function createUnusedTracing(): Tracing {
-  const fail = (): never => {
-    throw new Error("Unexpected tracing access in tests");
-  };
+function failUnusedTracingAccess(): never {
+  throw new Error("Unexpected tracing access in tests");
+}
 
+function createUnusedTracing(): Tracing {
   return {
-    enterSpan: fail,
-    startActiveSpan: fail,
+    enterSpan: failUnusedTracingAccess,
+    startActiveSpan: failUnusedTracingAccess,
     Span: UnusedTracingSpan,
   };
 }
 
 function createExecutionContext(): ExecutionContext {
   return {
+    get exports(): never {
+      throw new Error("Unexpected execution context exports access in tests");
+    },
     passThroughOnException() {},
     waitUntil(promise: Promise<unknown>) {
       void promise;
@@ -252,6 +256,9 @@ function createObservedExecutionContext(): {
   const waitUntilPromises: Promise<unknown>[] = [];
   return {
     context: {
+      get exports(): never {
+        throw new Error("Unexpected execution context exports access in tests");
+      },
       passThroughOnException() {},
       waitUntil(promise: Promise<unknown>) {
         waitUntilPromises.push(promise);
