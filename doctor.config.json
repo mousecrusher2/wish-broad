@@ -1,5 +1,8 @@
 {
   "blocking": "warning",
+  "ignore": {
+    "files": ["scripts/**"]
+  },
   "noScore": true,
   "rules": {
     "react-doctor/async-parallel": "off",

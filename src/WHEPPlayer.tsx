@@ -88,8 +88,9 @@ export function WHEPPlayer({
 
   return (
     <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/70 shadow-2xl shadow-black/30">
-      {/* Live streams do not provide a separate captions track. */}
-      {/* oxlint-disable-next-line jsx-a11y/media-has-caption */}
+      {/* Live streams have no separate captions track. Unmuted autoplay is intentional; WHEPClient handles rejection. */}
+      {/* oxlint-disable jsx-a11y/media-has-caption */}
+      {/* react-doctor-disable-next-line react-doctor/no-autoplay-without-muted */}
       <video
         ref={videoRef}
         aria-label="ライブ配信プレイヤー"
@@ -98,6 +99,7 @@ export function WHEPPlayer({
         autoPlay
         playsInline
       />
+      {/* oxlint-enable jsx-a11y/media-has-caption */}
       {!snapshot.playbackState.hasStream && (
         <VideoPlaceholder
           message={getPlaybackPlaceholderText(snapshot.playbackState)}
