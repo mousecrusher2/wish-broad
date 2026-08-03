@@ -28,14 +28,14 @@
     "check:react": "react-doctor --yes --json --no-telemetry"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.47.0",
-    "@cloudflare/workers-types": "^5.20260728.1",
+    "@cloudflare/vite-plugin": "^1.49.0",
+    "@cloudflare/workers-types": "^5.20260731.1",
     "@playwright/cli": "^0.1.17",
     "@rolldown/plugin-babel": "^0.2.3",
     "@tailwindcss/vite": "^4.3.3",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.4",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
     "babel-plugin-react-compiler": "^1.0.0",
     "eslint-plugin-better-tailwindcss": "^4.7.0",
     "knip": "^6.29.0",
@@ -47,9 +47,9 @@
     "rollup-plugin-visualizer": "^7.0.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vite": "^8.1.5",
+    "vite": "^8.2.0",
     "vitest": "^4.1.10",
-    "wrangler": "^4.114.0"
+    "wrangler": "^4.116.0"
   },
   "dependencies": {
     "hono": "^4.12.32",
