@@ -218,7 +218,18 @@ class UnusedTracingSpan {
     return false;
   }
 
-  setAttribute(): void {}
+  setAttribute(
+    _key: string,
+    _value: boolean | number | string,
+  ): UnusedTracingSpan {
+    return this;
+  }
+
+  setAttributes(
+    _attributes: Record<string, boolean | number | string | undefined>,
+  ): UnusedTracingSpan {
+    return this;
+  }
 
   end(): void {}
 }
@@ -231,6 +242,7 @@ function createUnusedTracing(): Tracing {
   return {
     enterSpan: failUnusedTracingAccess,
     startActiveSpan: failUnusedTracingAccess,
+    startSpan: failUnusedTracingAccess,
     Span: UnusedTracingSpan,
   };
 }
@@ -243,6 +255,9 @@ function createExecutionContext(): ExecutionContext {
     passThroughOnException() {},
     waitUntil(promise: Promise<unknown>) {
       void promise;
+    },
+    abort() {
+      throw new Error("Unexpected execution context abort in tests");
     },
     props: undefined,
     tracing: createUnusedTracing(),
@@ -262,6 +277,9 @@ function createObservedExecutionContext(): {
       passThroughOnException() {},
       waitUntil(promise: Promise<unknown>) {
         waitUntilPromises.push(promise);
+      },
+      abort() {
+        throw new Error("Unexpected execution context abort in tests");
       },
       props: undefined,
       tracing: createUnusedTracing(),
