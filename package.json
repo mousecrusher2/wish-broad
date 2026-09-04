@@ -29,7 +29,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.54.2",
-    "@cloudflare/workers-types": "^5.20260830.1",
+    "@cloudflare/workers-types": "^5.20260901.1",
     "@playwright/cli": "^0.1.18",
     "@rolldown/plugin-babel": "^0.2.3",
     "@tailwindcss/vite": "^4.3.3",
@@ -38,7 +38,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "babel-plugin-react-compiler": "^1.0.0",
     "eslint-plugin-better-tailwindcss": "^4.7.0",
-    "knip": "^6.33.0",
+    "knip": "^6.34.0",
     "oxlint": "^1.80.0",
     "oxlint-tsgolint": "^7.0.2001",
     "prettier": "^3.9.6",
