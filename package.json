@@ -29,9 +29,9 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.54.4",
-    "@cloudflare/workers-types": "^5.20260905.1",
+    "@cloudflare/workers-types": "^5.20260907.1",
     "@playwright/cli": "^0.1.19",
-    "@rolldown/plugin-babel": "^0.2.3",
+    "@rolldown/plugin-babel": "^0.2.4",
     "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
