@@ -231,6 +231,29 @@ class UnusedTracingSpan {
     return this;
   }
 
+  recordException(
+    _exception:
+      | string
+      | {
+          code: string | number;
+          name?: string;
+          message?: string;
+          stack?: string;
+        }
+      | {
+          code?: string | number;
+          name: string;
+          message?: string;
+          stack?: string;
+        }
+      | {
+          code?: string | number;
+          name?: string;
+          message: string;
+          stack?: string;
+        },
+  ): void {}
+
   end(): void {}
 }
 
@@ -241,6 +264,7 @@ function failUnusedTracingAccess(): never {
 function createUnusedTracing(): Tracing {
   return {
     enterSpan: failUnusedTracingAccess,
+    getActiveSpan: failUnusedTracingAccess,
     startActiveSpan: failUnusedTracingAccess,
     startSpan: failUnusedTracingAccess,
     Span: UnusedTracingSpan,
