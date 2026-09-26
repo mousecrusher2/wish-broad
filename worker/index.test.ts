@@ -1650,15 +1650,72 @@ describe("worker app", () => {
     );
   });
 
-  it("returns success and logs when ingest close reports track errors", async () => {
+  it.each([
+    { tracks: [{ errorCode: "failed_to_close", mid: "0" }] },
+    { errorCode: "failed_to_close" },
+  ])(
+    "returns success and logs when ingest close reports %s",
+    async (closeResponse) => {
+      const env = createBindings();
+      const execution = createObservedExecutionContext();
+      const consoleWarnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => {});
+
+      dbMocks.getLive.mockResolvedValue({
+        notificationMessageId: 1n,
+        sessionId: "session-1",
+        tracks: [
+          {
+            location: "remote",
+            mid: "0",
+            sessionId: "session-1",
+            trackName: "video",
+          },
+        ],
+        userId: "user-1",
+      });
+      callsMocks.closeTracks.mockResolvedValue(ok(closeResponse));
+
+      const request = new Request("http://localhost/ingest/user-1/session-1", {
+        headers: {
+          Authorization: "Bearer live-token",
+        },
+        method: "DELETE",
+      });
+
+      const response = await app.fetch(request, env, execution.context);
+
+      expect(response.status).toBe(200);
+      expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
+        env.LIVE_DB,
+        "user-1",
+        "session-1",
+      );
+
+      await Promise.all(execution.waitUntilPromises);
+
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "track_close.sfu_errors",
+          level: "warn",
+          message: "SFU reported track close errors for user user-1:",
+          response: closeResponse,
+          sessionId: "session-1",
+        }),
+      );
+      expect(
+        notificationsMocks.deleteLiveStartedNotification,
+      ).toHaveBeenCalledWith(env, 1n);
+    },
+  );
+
+  it("logs a Calls transport failure after removing a live session", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
-    const consoleWarnSpy = vi
-      .spyOn(console, "warn")
-      .mockImplementation(() => {});
-
+    const warning = vi.spyOn(console, "warn");
     dbMocks.getLive.mockResolvedValue({
-      notificationMessageId: 1n,
+      notificationMessageId: null,
       sessionId: "session-1",
       tracks: [
         {
@@ -1671,43 +1728,33 @@ describe("worker app", () => {
       userId: "user-1",
     });
     callsMocks.closeTracks.mockResolvedValue(
-      ok({
-        tracks: [{ errorCode: "failed_to_close", mid: "0" }],
+      err(
+        new SfuApiError("Calls offline", {
+          endpoint: "/tracks/close",
+          kind: "request_failed",
+          statusText: "Unavailable",
+        }),
+      ),
+    );
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1/session-1", {
+        headers: { Authorization: "Bearer live-token" },
+        method: "DELETE",
       }),
+      env,
+      execution.context,
     );
-
-    const request = new Request("http://localhost/ingest/user-1/session-1", {
-      headers: {
-        Authorization: "Bearer live-token",
-      },
-      method: "DELETE",
-    });
-
-    const response = await app.fetch(request, env, execution.context);
-
     expect(response.status).toBe(200);
-    expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "session-1",
-    );
-
     await Promise.all(execution.waitUntilPromises);
-
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
+    expect(warning).toHaveBeenCalledWith(
       expect.objectContaining({
-        event: "track_close.sfu_errors",
-        level: "warn",
-        message: "SFU reported track close errors for user user-1:",
-        response: {
-          tracks: [{ errorCode: "failed_to_close", mid: "0" }],
-        },
+        event: "track_close.failed",
+        errorKind: "request_failed",
+        errorMessage: "Calls offline",
+        message: "Failed to close live tracks for user user-1:",
         sessionId: "session-1",
       }),
     );
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).toHaveBeenCalledWith(env, 1n);
   });
 
   it.each(["session_not_found", "session_gone"] as const)(
