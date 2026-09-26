@@ -1092,6 +1092,45 @@ describe("worker app", () => {
     expect(response.headers.get("location")).toBe("/ingest/user-1/new-session");
   });
 
+  it("logs failed cleanup of a stale stream notification without blocking ingest", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const warning = vi.spyOn(console, "warn");
+    dbMocks.getLive.mockResolvedValue({
+      notificationMessageId: 9n,
+      sessionId: "stale-session",
+      tracks: [],
+      userId: "user-1",
+    });
+    callsMocks.isSessionActive.mockResolvedValue(ok(false));
+    notificationsMocks.deleteLiveStartedNotification.mockResolvedValue(
+      err(new Error("Discord offline")),
+    );
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1?notify=0", {
+        body: "offer-sdp",
+        headers: {
+          Authorization: "Bearer live-token",
+          "Content-Type": "application/sdp",
+        },
+        method: "POST",
+      }),
+      env,
+      execution.context,
+    );
+    expect(response.status).toBe(201);
+    await Promise.all(execution.waitUntilPromises);
+    expect(warning).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "live_notification.delete_failed",
+        errorMessage: "Discord offline",
+        messageId: 9n,
+        sessionId: "stale-session",
+        userId: "user-1",
+      }),
+    );
+  });
+
   it("schedules the live start notification via waitUntil", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
@@ -1320,6 +1359,24 @@ describe("worker app", () => {
     expect(callsMocks.startIngest).not.toHaveBeenCalled();
   });
 
+  it("rejects an ingest request with a missing SDP body", async () => {
+    const env = createBindings();
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1", {
+        headers: {
+          Authorization: "Bearer live-token",
+          "Content-Type": "application/sdp",
+        },
+        method: "POST",
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("SDP offer is required");
+    expect(callsMocks.startIngest).not.toHaveBeenCalled();
+  });
+
   it("returns SFU client errors for invalid ingest offers", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
@@ -1506,6 +1563,47 @@ describe("worker app", () => {
     ).toHaveBeenCalledWith(env, 1n);
   });
 
+  it("logs a failed notification deletion after removing an ingest session", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const warning = vi.spyOn(console, "warn");
+    dbMocks.getLive.mockResolvedValue({
+      notificationMessageId: 7n,
+      sessionId: "session-1",
+      tracks: [
+        {
+          location: "remote",
+          mid: "0",
+          sessionId: "session-1",
+          trackName: "video",
+        },
+      ],
+      userId: "user-1",
+    });
+    notificationsMocks.deleteLiveStartedNotification.mockResolvedValue(
+      err(new Error("Discord offline")),
+    );
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1/session-1", {
+        headers: { Authorization: "Bearer live-token" },
+        method: "DELETE",
+      }),
+      env,
+      execution.context,
+    );
+    expect(response.status).toBe(200);
+    await Promise.all(execution.waitUntilPromises);
+    expect(warning).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "live_notification.delete_failed",
+        errorMessage: "Discord offline",
+        messageId: 7n,
+        sessionId: "session-1",
+        userId: "user-1",
+      }),
+    );
+  });
+
   it("returns success and logs when ingest close reports track errors", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
@@ -1566,56 +1664,78 @@ describe("worker app", () => {
     ).toHaveBeenCalledWith(env, 1n);
   });
 
-  it("returns success when ingest close says tracks are already gone", async () => {
+  it.each(["session_not_found", "session_gone"] as const)(
+    "returns success when ingest close reports %s",
+    async (kind) => {
+      const env = createBindings();
+      const execution = createObservedExecutionContext();
+
+      dbMocks.getLive.mockResolvedValue({
+        notificationMessageId: 1n,
+        sessionId: "session-1",
+        tracks: [
+          {
+            location: "remote",
+            mid: "0",
+            sessionId: "session-1",
+            trackName: "video",
+          },
+        ],
+        userId: "user-1",
+      });
+      callsMocks.closeTracks.mockResolvedValue(
+        err(
+          new SfuApiError("SFU request failed: session not found", {
+            endpoint: "/tracks/close",
+            kind,
+            statusText: "Not Found",
+          }),
+        ),
+      );
+
+      const response = await app.fetch(
+        new Request("http://localhost/ingest/user-1/session-1", {
+          headers: {
+            Authorization: "Bearer live-token",
+          },
+          method: "DELETE",
+        }),
+        env,
+        execution.context,
+      );
+
+      expect(response.status).toBe(200);
+      expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
+        env.LIVE_DB,
+        "user-1",
+        "session-1",
+      );
+
+      await Promise.all(execution.waitUntilPromises);
+
+      expect(
+        notificationsMocks.deleteLiveStartedNotification,
+      ).toHaveBeenCalledWith(env, 1n);
+    },
+  );
+
+  it("rejects ingest deletion when no stream exists", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
-
-    dbMocks.getLive.mockResolvedValue({
-      notificationMessageId: 1n,
-      sessionId: "session-1",
-      tracks: [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "session-1",
-          trackName: "video",
-        },
-      ],
-      userId: "user-1",
-    });
-    callsMocks.closeTracks.mockResolvedValue(
-      err(
-        new SfuApiError("SFU request failed: session not found", {
-          endpoint: "/tracks/close",
-          kind: "session_not_found",
-          statusText: "Not Found",
-        }),
-      ),
-    );
-
+    dbMocks.getLive.mockResolvedValue(null);
     const response = await app.fetch(
       new Request("http://localhost/ingest/user-1/session-1", {
-        headers: {
-          Authorization: "Bearer live-token",
-        },
+        headers: { Authorization: "Bearer live-token" },
         method: "DELETE",
       }),
       env,
       execution.context,
     );
-
-    expect(response.status).toBe(200);
-    expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "session-1",
-    );
-
-    await Promise.all(execution.waitUntilPromises);
-
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).toHaveBeenCalledWith(env, 1n);
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("No live stream found for this user");
+    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
+    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
+    expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
   it("rejects ingest deletion when the session id does not match", async () => {
