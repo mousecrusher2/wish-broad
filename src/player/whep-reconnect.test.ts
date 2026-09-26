@@ -26,6 +26,7 @@ describe("whep-reconnect", () => {
         new WHEPSessionError("unauthorized", {
           kind: "client_request_error",
           responseText: undefined,
+          retryable: true,
           stage: "post",
         }),
       ),
@@ -41,6 +42,16 @@ describe("whep-reconnect", () => {
       ),
     ).toBe("error");
     expect(resolveReconnectDisposition(new Error("network"))).toBe("retry");
+    expect(
+      resolveReconnectDisposition(
+        new WHEPSessionError("temporary", {
+          kind: "unexpected_response",
+          responseText: undefined,
+          retryable: true,
+          stage: "post",
+        }),
+      ),
+    ).toBe("retry");
   });
 
   it("uses exponential backoff capped by the remaining reconnect window", () => {

@@ -9,6 +9,8 @@ lerna-debug.log*
 
 node_modules
 .pnpm-store
+.stryker-tmp
+reports/
 dist
 dist-ssr
 *.tsbuildinfo

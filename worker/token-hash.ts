@@ -59,7 +59,7 @@ export async function verifyTokenHash(
   // Live tokens are stored as HMAC(token, LIVE_TOKEN_PEPPER), never as raw
   // bearer tokens. WebCrypto verify avoids reimplementing byte comparison.
   const pepperKey = await importPepperKey(pepper);
-  const expectedHashBytes = hexToBytes(expectedTokenHash.toLowerCase());
+  const expectedHashBytes = hexToBytes(expectedTokenHash);
 
   return crypto.subtle.verify(
     "HMAC",

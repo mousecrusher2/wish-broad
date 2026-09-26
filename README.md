@@ -97,6 +97,14 @@ pnpm run format:check
 pnpm build
 ```
 
+Run Stryker mutation testing across the frontend and Worker source:
+
+```sh
+pnpm test:mutation
+```
+
+This writes an HTML report to `reports/mutation/mutation.html` and reuses incremental results on later runs. The command exits unsuccessfully while any detectable mutation survives or lacks test coverage. The Vitest version is pinned to 4.1 because the current Stryker Vitest runner does not activate mutations correctly with Vitest 5. The Stryker configuration points at an absent TypeScript config to avoid preprocessing the project's TypeScript 7 config with APIs removed in TypeScript 7; Vitest still reads the normal project configuration.
+
 After editing D1 migrations or `schema.sql`, run:
 
 ```sh

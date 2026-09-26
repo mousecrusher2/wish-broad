@@ -31,6 +31,7 @@ describe("turn-credentials", () => {
     ]);
     const [, init] = fetchSpy.mock.calls[0] ?? [];
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/api/turn-credentials");
     expect(init).toMatchObject({
       credentials: "include",
       headers: {
@@ -64,5 +65,79 @@ describe("turn-credentials", () => {
     ).rejects.toMatchObject({
       name: "AbortError",
     });
+  });
+
+  it("returns null and logs the response details on an HTTP error", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("upstream down", { status: 503, statusText: "Unavailable" }),
+    );
+    expect(await fetchTurnIceServers(new AbortController().signal)).toBeNull();
+    expect(warn).toHaveBeenCalledWith("TURN credential request failed:", {
+      responseText: "upstream down",
+      status: 503,
+      statusText: "Unavailable",
+    });
+  });
+
+  it("fails open after a non-abort network error", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const error = new Error("offline");
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(error);
+    expect(await fetchTurnIceServers(new AbortController().signal)).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      "Failed to fetch TURN credentials:",
+      error,
+    );
+  });
+
+  it("reports malformed JSON, invalid schema, and an empty ICE server list", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fetchSpy.mockResolvedValueOnce(new Response("{"));
+    expect(await fetchTurnIceServers(new AbortController().signal)).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      "TURN credential response was not valid JSON:",
+      expect.any(SyntaxError),
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ iceServers: [{ urls: 42 }] })),
+    );
+    expect(await fetchTurnIceServers(new AbortController().signal)).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      "TURN credential response schema was invalid:",
+      expect.objectContaining({ responseBody: { iceServers: [{ urls: 42 }] } }),
+    );
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ iceServers: [] })),
+    );
+    expect(await fetchTurnIceServers(new AbortController().signal)).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      "TURN credential response did not contain any ICE servers",
+    );
+  });
+
+  it("retains optional credentials for nonempty values and omits absent values", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          iceServers: [
+            {
+              urls: "turn:example.net",
+              username: "alice",
+              credential: "secret",
+            },
+            { urls: ["stun:example.net"], username: "", credential: "" },
+          ],
+        }),
+      ),
+    );
+    expect(await fetchTurnIceServers(new AbortController().signal)).toEqual([
+      { urls: "turn:example.net", username: "alice", credential: "secret" },
+      { urls: ["stun:example.net"] },
+    ]);
   });
 });
