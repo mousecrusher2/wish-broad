@@ -1127,6 +1127,73 @@ describe("worker app", () => {
     );
   });
 
+  it.each(["false", "0"])(
+    "does not notify Discord when notify=%s",
+    async (notify) => {
+      const env = createBindings();
+      const execution = createObservedExecutionContext();
+      const response = await app.fetch(
+        new Request(
+          `https://wish-broad.example/ingest/user-1?notify=${notify}`,
+          {
+            body: "offer-sdp",
+            headers: {
+              Authorization: "Bearer live-token",
+              "Content-Type": "application/sdp",
+            },
+            method: "POST",
+          },
+        ),
+        env,
+        execution.context,
+      );
+
+      expect(response.status).toBe(201);
+      expect(await response.text()).toBe("answer-sdp");
+      expect(dbMocks.insertLive).toHaveBeenCalledOnce();
+      expect(execution.waitUntilPromises).toHaveLength(0);
+      expect(
+        notificationsMocks.sendLiveStartedNotification,
+      ).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [" APPLICATION/SDP ; charset=utf-8", 201],
+    ["application/sdp; charset=utf-8", 201],
+    ["application/sdpish", 415],
+    ["text/plain; application/sdp", 415],
+  ] as const)(
+    "validates the SDP media type %s",
+    async (contentType, status) => {
+      const env = createBindings();
+      const execution = createObservedExecutionContext();
+      const response = await app.fetch(
+        new Request("https://wish-broad.example/ingest/user-1?notify=0", {
+          body: "offer-sdp",
+          headers: {
+            Authorization: "Bearer live-token",
+            "Content-Type": contentType,
+          },
+          method: "POST",
+        }),
+        env,
+        execution.context,
+      );
+      expect(response.status).toBe(status);
+      expect(callsMocks.startIngest).toHaveBeenCalledTimes(
+        status === 201 ? 1 : 0,
+      );
+      if (status === 201) {
+        expect(await response.text()).toBe("answer-sdp");
+      } else {
+        expect(await response.text()).toBe(
+          "Content-Type must be application/sdp",
+        );
+      }
+    },
+  );
+
   it("keeps ingest successful when the live start notification fails", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
