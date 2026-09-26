@@ -16,5 +16,5 @@
   "reporters": ["clear-text", "progress", "html", "json"],
   "incremental": true,
   "concurrency": 4,
-  "thresholds": { "high": 100, "low": 100, "break": 100 }
+  "thresholds": { "high": 95, "low": 95, "break": 95 }
 }

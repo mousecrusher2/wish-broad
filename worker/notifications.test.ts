@@ -6,6 +6,10 @@ import {
 } from "./notifications";
 
 describe("worker live start notifications", () => {
+  const env = {
+    NOTIFICATIONS_DISCORD_WEBHOOK_URL:
+      "https://discord.com/api/webhooks/123/token",
+  };
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -131,5 +135,178 @@ describe("worker live start notifications", () => {
       "https://discord.com/api/webhooks/123/token/messages/1",
     );
     expect(init?.method).toBe("DELETE");
+  });
+
+  it.each([
+    ["0", 0n],
+    [0, 0n],
+    [12, 12n],
+    ["9223372036854775808", 9223372036854775808n],
+    [" 21 ", 21n],
+  ])("accepts a valid webhook message id %s", async (id, expected) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ id }));
+    const result = await sendLiveStartedNotification(
+      env,
+      "member",
+      "https://wish.test",
+    );
+    expect(result._unsafeUnwrap()).toEqual({ messageId: expected });
+  });
+
+  it.each([null, false, {}, [], "", "bad", "-1", -1, 0.5])(
+    "rejects malformed webhook message id %s",
+    async (id) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ id }));
+      const result = await sendLiveStartedNotification(
+        env,
+        "member",
+        "https://wish.test",
+      );
+      expect(result._unsafeUnwrapErr()).toMatchObject({
+        kind: "http_error",
+        message: "Discord webhook response did not include a valid message id",
+      });
+    },
+  );
+
+  it.each(["{}", "null", "[]", "false"])(
+    "rejects a webhook response missing an ID (%s)",
+    async (body) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body));
+      const result = await sendLiveStartedNotification(
+        env,
+        "member",
+        "https://wish.test",
+      );
+      expect(result._unsafeUnwrapErr()).toMatchObject({
+        kind: "http_error",
+        message: "Discord webhook response did not include a message id",
+        responseBodyText: body,
+      });
+    },
+  );
+
+  it("rejects invalid JSON from a successful webhook response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("not json", { status: 200 }),
+    );
+    const result = await sendLiveStartedNotification(
+      env,
+      "member",
+      "https://wish.test",
+    );
+    expect(result._unsafeUnwrapErr()).toMatchObject({
+      kind: "http_error",
+      message: "Discord webhook response was not valid JSON",
+      responseBodyText: "not json",
+    });
+  });
+
+  it("normalizes and truncates an upstream error body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(` \n  ${"x".repeat(250)}  \t`, {
+        status: 429,
+        statusText: "Too Many Requests",
+      }),
+    );
+    const result = await sendLiveStartedNotification(
+      env,
+      "member",
+      "https://wish.test",
+    );
+    expect(result._unsafeUnwrapErr()).toMatchObject({
+      kind: "http_error",
+      responseBodyText: "x".repeat(200),
+      statusText: "Too Many Requests",
+    });
+  });
+
+  it("does not attach an empty upstream body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(" \n\t ", { status: 500 }),
+    );
+    const result = await sendLiveStartedNotification(
+      env,
+      "member",
+      "https://wish.test",
+    );
+    expect(result._unsafeUnwrapErr().responseBodyText).toBeUndefined();
+  });
+
+  it.each([
+    [new Error("offline"), "request_failed", "offline"],
+    ["offline", "request_failed", "offline"],
+    [new Error(" "), "request_failed", "Error:  "],
+    [new DOMException("aborted", "AbortError"), "request_timeout", "aborted"],
+  ])("classifies webhook transport failure %s", async (failure, kind, body) => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(failure);
+    const result = await sendLiveStartedNotification(
+      env,
+      "member",
+      "https://wish.test",
+    );
+    expect(result._unsafeUnwrapErr()).toMatchObject({
+      kind,
+      responseBodyText: body,
+    });
+  });
+
+  it("preserves an existing webhook query while adding wait=true", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ id: "7" }));
+    const result = await sendLiveStartedNotification(
+      {
+        NOTIFICATIONS_DISCORD_WEBHOOK_URL: `${env.NOTIFICATIONS_DISCORD_WEBHOOK_URL}?wait=false&thread_id=4`,
+      },
+      "member",
+      "https://wish.test",
+    );
+    expect(result._unsafeUnwrap()).toEqual({ messageId: 7n });
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      "https://discord.com/api/webhooks/123/token?wait=true&thread_id=4",
+    );
+  });
+
+  it("removes trailing slashes from the webhook URL for message deletion", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const result = await deleteLiveStartedNotification(
+      {
+        NOTIFICATIONS_DISCORD_WEBHOOK_URL: `${env.NOTIFICATIONS_DISCORD_WEBHOOK_URL}///?thread_id=4`,
+      },
+      42n,
+    );
+    expect(result.isOk()).toBe(true);
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      "https://discord.com/api/webhooks/123/token/messages/42?thread_id=4",
+    );
+  });
+
+  it("reports a failed webhook message deletion with its endpoint and response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("  missing \n now  ", {
+        status: 404,
+        statusText: "Not Found",
+      }),
+    );
+    const result = await deleteLiveStartedNotification(env, 42n);
+    expect(result._unsafeUnwrapErr()).toMatchObject({
+      endpoint: `${env.NOTIFICATIONS_DISCORD_WEBHOOK_URL}/messages/42`,
+      kind: "http_error",
+      responseBodyText: "missing now",
+      statusText: "Not Found",
+    });
+  });
+
+  it("reports DELETE transport failure without throwing", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("offline"));
+    const result = await deleteLiveStartedNotification(env, 42n);
+    expect(result._unsafeUnwrapErr()).toMatchObject({
+      kind: "request_failed",
+      responseBodyText: "offline",
+      endpoint: `${env.NOTIFICATIONS_DISCORD_WEBHOOK_URL}/messages/42`,
+    });
   });
 });

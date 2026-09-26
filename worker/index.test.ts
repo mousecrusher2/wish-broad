@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bindings } from "./types";
 import type { DiscordGuildMember, DiscordOAuthToken } from "./discord";
 import type { StoredTrack } from "./sfu";
-import { SfuApiError } from "./sfu";
+import { LiveNotFoundError, SfuApiError } from "./sfu";
 import { hashTokenWithPepper } from "./token-hash";
 
 const dbMocks = vi.hoisted(() => ({
@@ -606,6 +606,223 @@ describe("worker app", () => {
     expect(dbMocks.setUser).not.toHaveBeenCalled();
   });
 
+  it("uses secure state and auth cookies in production and clears both on logout", async () => {
+    const env = createBindings();
+    const started = await app.fetch(
+      new Request("https://wish.test/login?ignored=1#fragment"),
+      env,
+      createExecutionContext(),
+    );
+    const stateCookie = started.headers.get("set-cookie");
+    expect(stateCookie).toContain("Path=/login");
+    expect(stateCookie).toContain("SameSite=Lax");
+    expect(stateCookie).toContain("HttpOnly");
+    expect(stateCookie).toContain("Secure");
+    expect(stateCookie).toContain("Max-Age=600");
+    expect(discordMocks.buildDiscordAuthorizationUrl).toHaveBeenCalledWith(
+      env,
+      "https://wish.test/login/callback",
+      "oauth-state",
+    );
+
+    const completed = await app.fetch(
+      new Request(
+        "https://wish.test/login/callback?code=code&state=oauth-state",
+        {
+          headers: { Cookie: "discord_oauth_state=oauth-state" },
+        },
+      ),
+      env,
+      createExecutionContext(),
+    );
+    const cookies = completed.headers.getSetCookie();
+    expect(cookies).toEqual([
+      expect.stringContaining("discord_oauth_state="),
+      expect.stringContaining("authtoken="),
+    ]);
+    expect(cookies[0]).toContain("Path=/login");
+    expect(cookies[0]).toContain("Secure");
+    expect(cookies[1]).toContain("HttpOnly");
+    expect(cookies[1]).toContain("SameSite=Strict");
+    expect(cookies[1]).toContain("Secure");
+    const loggedOut = await app.fetch(
+      new Request("https://wish.test/logout", {
+        method: "POST",
+        headers: { Origin: "https://wish.test" },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(loggedOut.headers.get("set-cookie")).toContain("Secure");
+  });
+
+  it.each([
+    [
+      "http://localhost/login/callback?code=code&state=s",
+      undefined,
+      "Invalid OAuth state",
+      400,
+    ],
+    [
+      "http://localhost/login/callback?code=code",
+      "discord_oauth_state=s",
+      "Invalid OAuth state",
+      400,
+    ],
+    [
+      "http://localhost/login/callback?code=code&state=wrong",
+      "discord_oauth_state=s",
+      "Invalid OAuth state",
+      400,
+    ],
+    [
+      "http://localhost/login/callback?error=access_denied&state=s",
+      "discord_oauth_state=s",
+      "Discord authorization failed: access_denied",
+      401,
+    ],
+    [
+      "http://localhost/login/callback?error=access_denied&error_description=Denied&state=s",
+      "discord_oauth_state=s",
+      "Discord authorization failed: Denied",
+      401,
+    ],
+    [
+      "http://localhost/login/callback?state=s",
+      "discord_oauth_state=s",
+      "Authorization code is required",
+      400,
+    ],
+  ])("validates OAuth callback %s", async (url, cookie, body, status) => {
+    const response = await app.fetch(
+      new Request(url, cookie ? { headers: { Cookie: cookie } } : {}),
+      createBindings(),
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(status);
+    expect(await response.text()).toBe(body);
+    expect(response.headers.get("set-cookie")).toContain(
+      "discord_oauth_state=",
+    );
+    expect(discordMocks.exchangeCodeForToken).not.toHaveBeenCalled();
+  });
+
+  it("reports token exchange errors without looking up the member", async () => {
+    const env = createBindings();
+    discordMocks.exchangeCodeForToken.mockResolvedValue(
+      err(
+        new discordMocks.DiscordApiError("bad token", {
+          endpoint: "https://discord.com/api/oauth2/token",
+          kind: "http_error",
+        }),
+      ),
+    );
+    discordMocks.getDiscordErrorMessage.mockReturnValue("OAuth unavailable");
+    const response = await app.fetch(
+      new Request("http://localhost/login/callback?code=code&state=s", {
+        headers: { Cookie: "discord_oauth_state=s" },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(502);
+    expect(await response.text()).toBe(
+      "Discord login failed: OAuth unavailable",
+    );
+    expect(discordMocks.getGuildMember).not.toHaveBeenCalled();
+    expect(discordMocks.revokeAccessToken).not.toHaveBeenCalled();
+  });
+
+  it.each(["unauthorized", "forbidden", "not_found"] as const)(
+    "treats guild membership %s as unauthorized",
+    async (kind) => {
+      const env = createBindings();
+      discordMocks.getGuildMember.mockResolvedValue(
+        err(
+          new discordMocks.DiscordApiError("no membership", {
+            endpoint: `https://discord.com/api/v10/users/@me/guilds/${env.AUTHORIZED_GUILD_ID}/member`,
+            kind,
+          }),
+        ),
+      );
+      const response = await app.fetch(
+        new Request("http://localhost/login/callback?code=code&state=s", {
+          headers: { Cookie: "discord_oauth_state=s" },
+        }),
+        env,
+        createExecutionContext(),
+      );
+      expect(response.status).toBe(401);
+      expect(await response.text()).toBe(
+        "Unauthorized: You are not a member of the authorized Discord server",
+      );
+      expect(discordMocks.revokeAccessToken).toHaveBeenCalledWith(
+        env,
+        "discord-access-token",
+      );
+    },
+  );
+
+  it("reports unrelated Discord member failures as upstream errors and revokes the token", async () => {
+    const env = createBindings();
+    discordMocks.getGuildMember.mockResolvedValue(
+      err(
+        new discordMocks.DiscordApiError("service error", {
+          endpoint: "https://discord.com/api/v10/users/@me",
+          kind: "not_found",
+        }),
+      ),
+    );
+    discordMocks.getDiscordErrorMessage.mockReturnValue("Service unavailable");
+    discordMocks.revokeAccessToken.mockResolvedValue(
+      err(new Error("revoke failed")),
+    );
+    const response = await app.fetch(
+      new Request("http://localhost/login/callback?code=code&state=s", {
+        headers: { Cookie: "discord_oauth_state=s" },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(502);
+    expect(await response.text()).toBe(
+      "Discord login failed: Service unavailable",
+    );
+    expect(discordMocks.revokeAccessToken).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [
+      {
+        nick: "Nickname",
+        user: { id: "u", global_name: "Global", username: "Username" },
+      },
+      "Nickname",
+    ],
+    [
+      {
+        nick: null,
+        user: { id: "u", global_name: null, username: "Username" },
+      },
+      "Username",
+    ],
+  ])("selects the Discord member display name", async (member, name) => {
+    const env = createBindings();
+    discordMocks.getGuildMember.mockResolvedValue(ok(member));
+    const response = await app.fetch(
+      new Request("http://localhost/login/callback?code=code&state=s", {
+        headers: { Cookie: "discord_oauth_state=s" },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(302);
+    expect(dbMocks.setUser).toHaveBeenCalledWith(env.LIVE_DB, {
+      userId: "u",
+      displayName: name,
+    });
+  });
+
   it("issues a live token for an authenticated user", async () => {
     const env = createBindings();
     const request = new Request("http://localhost/api/me/livetoken", {
@@ -636,6 +853,99 @@ describe("worker app", () => {
       "user-1",
       expectedTokenHash,
     );
+  });
+
+  it("returns the authenticated user's identity without exposing the JWT", async () => {
+    const env = createBindings();
+    const response = await app.fetch(
+      new Request("http://localhost/api/me", {
+        headers: {
+          Cookie: await createAuthCookie(env, {
+            userId: "viewer-42",
+            displayName: "Viewer Name",
+          }),
+        },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      userId: "viewer-42",
+      displayName: "Viewer Name",
+    });
+  });
+
+  it.each([true, false])(
+    "returns live-token status %s without revealing the token",
+    async (hasToken) => {
+      const env = createBindings();
+      dbMocks.hasLiveToken.mockResolvedValue(hasToken);
+      const response = await app.fetch(
+        new Request("http://localhost/api/me/livetoken", {
+          headers: {
+            Cookie: await createAuthCookie(env, { userId: "viewer-42" }),
+          },
+        }),
+        env,
+        createExecutionContext(),
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ hasToken });
+      expect(dbMocks.hasLiveToken).toHaveBeenCalledExactlyOnceWith(
+        env.LIVE_DB,
+        "viewer-42",
+      );
+    },
+  );
+
+  it("reports a failed live-token status lookup", async () => {
+    const env = createBindings();
+    dbMocks.hasLiveToken.mockRejectedValue(new Error("database unavailable"));
+    const response = await app.fetch(
+      new Request("http://localhost/api/me/livetoken", {
+        headers: { Cookie: await createAuthCookie(env) },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe("Failed to check live token");
+  });
+
+  it("reports a failed live-token save without returning a credential", async () => {
+    const env = createBindings();
+    dbMocks.setLiveToken.mockRejectedValue(new Error("database unavailable"));
+    const response = await app.fetch(
+      new Request("http://localhost/api/me/livetoken", {
+        method: "POST",
+        headers: {
+          Cookie: await createAuthCookie(env),
+          Origin: "http://localhost",
+        },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe("Failed to save live token");
+    expect(dbMocks.setLiveToken).toHaveBeenCalledOnce();
+  });
+
+  it("returns all live streams as a JSON array", async () => {
+    const env = createBindings();
+    const rows = [{ owner: { userId: "u", displayName: "User" } }];
+    dbMocks.getAllLives.mockResolvedValue(rows);
+    const response = await app.fetch(
+      new Request("http://localhost/api/lives", {
+        headers: { Cookie: await createAuthCookie(env) },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(rows);
+    expect(dbMocks.getAllLives).toHaveBeenCalledExactlyOnceWith(env.LIVE_DB);
   });
 
   it("returns authenticated TURN credentials with no-store caching", async () => {
@@ -1848,6 +2158,216 @@ describe("worker app", () => {
       env,
       "viewer-session",
       "viewer-answer",
+    );
+  });
+
+  it("deduplicates and trims WHEP session mids before closing tracks", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const response = await app.fetch(
+      new Request(
+        "http://localhost/play/user/viewer-session?mid=%200%20&mid=0&mid=1&mid=%20",
+        {
+          method: "DELETE",
+          headers: {
+            Cookie: await createAuthCookie(env),
+            Origin: "http://localhost",
+          },
+        },
+      ),
+      env,
+      execution.context,
+    );
+    expect(response.status).toBe(200);
+    await Promise.all(execution.waitUntilPromises);
+    expect(callsMocks.closeTracks).toHaveBeenCalledExactlyOnceWith(
+      env,
+      "viewer-session",
+      [
+        {
+          location: "remote",
+          mid: "0",
+          sessionId: "viewer-session",
+          trackName: "0",
+        },
+        {
+          location: "remote",
+          mid: "1",
+          sessionId: "viewer-session",
+          trackName: "1",
+        },
+      ],
+    );
+  });
+
+  it("reports a missing playback resource from the SFU without creating a session", async () => {
+    const env = createBindings();
+    dbMocks.getLive.mockResolvedValue({
+      userId: "streamer-1",
+      sessionId: "live-session",
+      tracks: [
+        {
+          location: "remote",
+          mid: "0",
+          sessionId: "live-session",
+          trackName: "video",
+        },
+      ],
+    });
+    callsMocks.startPlay.mockResolvedValue(
+      err(new LiveNotFoundError("streamer-1")),
+    );
+    const response = await requestPlayOffer(env);
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe("Live stream not found: streamer-1");
+  });
+
+  it("maps SFU playback service failure to a server error", async () => {
+    const env = createBindings();
+    dbMocks.getLive.mockResolvedValue({
+      userId: "streamer-1",
+      sessionId: "live-session",
+      tracks: [
+        {
+          location: "remote",
+          mid: "0",
+          sessionId: "live-session",
+          trackName: "video",
+        },
+      ],
+    });
+    callsMocks.startPlay.mockResolvedValue(
+      err(
+        new SfuApiError("unavailable", {
+          endpoint: "/tracks/new",
+          kind: "http_error",
+          statusText: "Bad Gateway",
+        }),
+      ),
+    );
+    const response = await requestPlayOffer(env);
+    expect(response.status).toBe(502);
+    expect(await response.text()).toBe("Failed to negotiate playback session");
+    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
+  });
+
+  it("maps SFU renegotiation service failure to a server error", async () => {
+    const env = createBindings();
+    callsMocks.renegotiateSession.mockResolvedValue(
+      err(
+        new SfuApiError("unavailable", {
+          endpoint: "/renegotiate",
+          kind: "http_error",
+          statusText: "Bad Gateway",
+        }),
+      ),
+    );
+    const response = await app.fetch(
+      new Request("http://localhost/play/streamer-1/viewer-session", {
+        method: "PATCH",
+        body: "viewer-answer",
+        headers: {
+          Cookie: await createAuthCookie(env),
+          "Content-Type": "application/sdp",
+          Origin: "http://localhost",
+        },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(502);
+    expect(await response.text()).toBe("Failed to submit WHEP answer");
+  });
+
+  it("reports a failed activity check before replacing an existing ingest", async () => {
+    const env = createBindings();
+    dbMocks.getLive.mockResolvedValue({
+      userId: "user-1",
+      sessionId: "old-session",
+      tracks: [],
+    });
+    callsMocks.isSessionActive.mockResolvedValue(
+      err(new Error("upstream down")),
+    );
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1", {
+        method: "POST",
+        body: "offer",
+        headers: {
+          Authorization: "Bearer live-token",
+          "Content-Type": "application/sdp",
+        },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(502);
+    expect(await response.text()).toBe(
+      "Failed to verify ingest session status",
+    );
+    expect(callsMocks.startIngest).not.toHaveBeenCalled();
+    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed activity check before starting playback", async () => {
+    const env = createBindings();
+    dbMocks.getLive.mockResolvedValue({
+      userId: "streamer-1",
+      sessionId: "live-session",
+      tracks: [],
+    });
+    callsMocks.isSessionActive.mockResolvedValue(
+      err(new Error("upstream down")),
+    );
+    const response = await requestPlayOffer(env);
+    expect(response.status).toBe(502);
+    expect(await response.text()).toBe("Failed to verify live stream status");
+    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+  });
+
+  it("cleans up an orphan notification when persistence rejects and logs failed deletion", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    dbMocks.setLiveNotificationMessageId.mockRejectedValue(
+      new Error("database lost"),
+    );
+    notificationsMocks.deleteLiveStartedNotification.mockResolvedValue(
+      err(new Error("webhook gone")),
+    );
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1", {
+        method: "POST",
+        body: "offer",
+        headers: {
+          Authorization: "Bearer live-token",
+          "Content-Type": "application/sdp",
+        },
+      }),
+      env,
+      execution.context,
+    );
+    expect(response.status).toBe(201);
+    await Promise.all(execution.waitUntilPromises);
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).toHaveBeenCalledWith(env, 1n);
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "live_notification.persist_failed",
+        errorMessage: "database lost",
+        messageId: 1n,
+        sessionId: "new-session",
+        userId: "user-1",
+      }),
+    );
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "live_notification.orphan_delete_failed",
+        errorMessage: "webhook gone",
+        messageId: 1n,
+        sessionId: "new-session",
+        userId: "user-1",
+      }),
     );
   });
 });

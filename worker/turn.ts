@@ -196,6 +196,7 @@ async function parseTurnCredentialsResponse(
 ): Promise<Result<TurnCredentialsResponse, TurnApiError>> {
   if (!response.ok) {
     const responseBody = await response
+      .clone()
       .json()
       .catch(() => response.text().catch(() => null));
     return err(

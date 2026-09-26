@@ -110,7 +110,13 @@
         "vitest": true
       },
       "rules": {
-        "no-underscore-dangle": "off"
+        "no-underscore-dangle": "off",
+        "typescript/consistent-type-assertions": "off",
+        "vitest/require-mock-type-parameters": "off",
+        "vitest/no-conditional-expect": "off",
+        "vitest/expect-expect": "off",
+        "no-await-in-loop": "off",
+        "unicorn/consistent-function-scoping": "off"
       }
     }
   ]

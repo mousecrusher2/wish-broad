@@ -216,7 +216,7 @@ async function parseWhepSessionResponse(
   const parsedExpectedRemoteTrackCount =
     expectedRemoteTrackCountHeader === null
       ? null
-      : Number.parseInt(expectedRemoteTrackCountHeader, 10);
+      : Number(expectedRemoteTrackCountHeader);
   if (
     expectedRemoteTrackCountHeader !== null &&
     (!Number.isInteger(parsedExpectedRemoteTrackCount) ||

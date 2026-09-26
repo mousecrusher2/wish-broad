@@ -134,4 +134,108 @@ describe("worker turn credentials", () => {
       "https://rtc.live.cloudflare.com/v1/turn/keys/turn-key-id/credentials/generate-ice-servers",
     );
   });
+
+  const env = { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" };
+
+  it.each([
+    ["turn:host:53", false],
+    ["turn:host:53?transport=tcp", false],
+    ["turn:[2001:db8::1]:53?transport=udp", false],
+    ["turn:[2001:db8::1]:3478?transport=udp", true],
+    ["turn:[2001:db8::1]", true],
+    ["turn:[2001:db8::1", true],
+    ["turn:host:3478", true],
+    ["turn:host", true],
+    ["turn:", true],
+    ["host:53", true],
+    ["no-colon", true],
+  ] as const)(
+    "filters ICE URL %s according to its port",
+    async (url, allowed) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        Response.json({ iceServers: [{ urls: [url, "stun:backup:3478"] }] }),
+      );
+      const result = await generateTurnIceServers(env, "user");
+      expect(result.isOk()).toBe(true);
+      expect(result._unsafeUnwrap()).toEqual([
+        { urls: allowed ? [url, "stun:backup:3478"] : ["stun:backup:3478"] },
+      ]);
+    },
+  );
+
+  it("accepts a string URL and removes empty optional credentials", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        iceServers: [{ urls: "stun:host:3478", username: "", credential: "" }],
+      }),
+    );
+    const result = await generateTurnIceServers(env, "user");
+    expect(result._unsafeUnwrap()).toEqual([{ urls: ["stun:host:3478"] }]);
+  });
+
+  it.each([
+    [new Error("offline"), "request_failed", "offline"],
+    ["offline", "request_failed", "offline"],
+    [new DOMException("aborted", "AbortError"), "request_timeout", "aborted"],
+  ])("classifies fetch failure %s", async (failure, kind, body) => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(failure);
+    const result = await generateTurnIceServers(env, "user");
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr()).toMatchObject({
+      kind,
+      message:
+        kind === "request_timeout"
+          ? "TURN credential request timed out"
+          : "TURN credential request failed",
+      responseBody: body,
+    });
+  });
+
+  it.each([
+    [
+      new Response('{"error":"denied"}', {
+        status: 403,
+        statusText: "Forbidden",
+      }),
+      "http_error",
+      { error: "denied" },
+    ],
+    [
+      new Response("plain error", { status: 502, statusText: "Bad Gateway" }),
+      "http_error",
+      "plain error",
+    ],
+    [
+      new Response("invalid", { status: 200, statusText: "OK" }),
+      "invalid_response_json",
+      undefined,
+    ],
+    [
+      Response.json({ iceServers: "invalid" }),
+      "invalid_response_schema",
+      undefined,
+    ],
+    [
+      Response.json({ iceServers: [] }),
+      "empty_ice_servers",
+      { iceServers: [] },
+    ],
+  ])(
+    "classifies invalid TURN responses as %s",
+    async (response, kind, body) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+      const result = await generateTurnIceServers(env, "user");
+      expect(result.isErr()).toBe(true);
+      const error = result._unsafeUnwrapErr();
+      expect(error).toBeInstanceOf(TurnApiError);
+      expect(error.kind).toBe(kind);
+      expect(error.endpoint).toContain(
+        "/v1/turn/keys/key/credentials/generate-ice-servers",
+      );
+      expect(error.statusText).toBe(
+        kind === "empty_ice_servers" ? undefined : response.statusText,
+      );
+      if (body !== undefined) expect(error.responseBody).toEqual(body);
+    },
+  );
 });
