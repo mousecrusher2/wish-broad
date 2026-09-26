@@ -569,6 +569,52 @@ describe("worker app", () => {
     expect(response.headers.get("set-cookie")).toContain("authtoken=");
   });
 
+  it.each([
+    ["Channel Nick", "Global Name", "user_name", "Channel Nick"],
+    [null, "Global Name", "user_name", "Global Name"],
+    [null, null, "user_name", "user_name"],
+  ] as const)(
+    "chooses the Discord display name from nick=%s global=%s",
+    async (nick, globalName, username, expected) => {
+      const env = createBindings();
+      discordMocks.getGuildMember.mockResolvedValue(
+        ok({
+          nick,
+          user: { id: "user-1", username, global_name: globalName },
+        }),
+      );
+      const response = await app.fetch(
+        new Request("http://localhost/login/callback?code=code&state=s", {
+          headers: { Cookie: "discord_oauth_state=s" },
+        }),
+        env,
+        createExecutionContext(),
+      );
+      expect(response.status).toBe(302);
+      expect(dbMocks.setUser).toHaveBeenCalledWith(env.LIVE_DB, {
+        userId: "user-1",
+        displayName: expected,
+      });
+    },
+  );
+
+  it("sets the login cookie expiration one day in the future", async () => {
+    const now = Date.now();
+    const response = await app.fetch(
+      new Request("http://localhost/login/callback?code=code&state=s", {
+        headers: { Cookie: "discord_oauth_state=s" },
+      }),
+      createBindings(),
+      createExecutionContext(),
+    );
+    const cookie = response.headers.get("set-cookie") ?? "";
+    const expiration = /Expires=([^;]+)/iu.exec(cookie)?.[1];
+    expect(expiration).toBeDefined();
+    const remainingMs = Date.parse(expiration ?? "") - now;
+    expect(remainingMs).toBeGreaterThan(86_399_000);
+    expect(remainingMs).toBeLessThanOrEqual(86_400_000);
+  });
+
   it("rejects Discord login when the user is not in the authorized guild", async () => {
     const env = createBindings();
 

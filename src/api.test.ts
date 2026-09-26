@@ -119,6 +119,16 @@ describe("api data layer", () => {
       if (result.isOk()) throw new Error("Expected an error");
       expect(result.error).toBe(networkError);
     }
+    expect(console.error).toHaveBeenNthCalledWith(
+      1,
+      "Failed to fetch current user:",
+      networkError,
+    );
+    expect(console.error).toHaveBeenNthCalledWith(
+      2,
+      "Failed to fetch live streams:",
+      networkError,
+    );
   });
 
   it("treats non-401 API errors as authenticated responses", async () => {

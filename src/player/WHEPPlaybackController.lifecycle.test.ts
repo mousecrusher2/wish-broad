@@ -130,9 +130,15 @@ describe("playback lifecycle", () => {
     expect(snapshots[0]).toEqual(createDefaultSnapshot());
     controller.load("  user  ");
     expect(fake.sessions).toHaveLength(0);
-    expect(snapshots.at(-1)).toMatchObject({
+    expect(snapshots.at(-1)).toEqual({
       isLoading: true,
-      playbackState: { resourceUserId: "user", phase: "connecting" },
+      playbackState: {
+        connectionStatus: "connecting",
+        hasStream: false,
+        phase: "connecting",
+        resourceUserId: "user",
+        retryCount: 0,
+      },
     });
     controller.attachVideoElement(document.createElement("video"));
     expect(getSession().resourceUserId).toBe("user");
@@ -159,6 +165,34 @@ describe("playback lifecycle", () => {
     expect(fake.sessions).toHaveLength(0);
   });
 
+  it("keeps attempt identifiers increasing across reloads and disconnects", () => {
+    const controller = new WHEPPlaybackController();
+    const initialId = Reflect.get(controller, "attemptId") as number;
+    controller.attachVideoElement(document.createElement("video"));
+    controller.load("user");
+    const loadedId = Reflect.get(controller, "attemptId") as number;
+    controller.load("other");
+    const reloadedId = Reflect.get(controller, "attemptId") as number;
+    controller.disconnect();
+    const disconnectedId = Reflect.get(controller, "attemptId") as number;
+    expect(initialId).toBe(0);
+    expect(loadedId).toBeGreaterThan(initialId);
+    expect(reloadedId).toBeGreaterThan(loadedId);
+    expect(disconnectedId).toBeGreaterThan(reloadedId);
+    expect(fake.sessions).toHaveLength(2);
+    controller.dispose();
+  });
+
+  it("holds a pending load until a non-null video element is available", () => {
+    const controller = new WHEPPlaybackController();
+    controller.load("user");
+    controller.attachVideoElement(null);
+    expect(fake.sessions).toHaveLength(0);
+    controller.attachVideoElement(document.createElement("video"));
+    expect(fake.sessions).toHaveLength(1);
+    controller.dispose();
+  });
+
   it("preserves a reconnecting state and schedules only one retry for repeated failures", async () => {
     const controller = startController();
     const first = getSession();
@@ -173,8 +207,11 @@ describe("playback lifecycle", () => {
     expect(first.dispose).toHaveBeenCalledOnce();
     const snapshots: Array<ReturnType<typeof createDefaultSnapshot>> = [];
     controller.setSnapshotSubscriber((snapshot) => snapshots.push(snapshot));
-    expect(snapshots.at(-1)?.playbackState).toMatchObject({
+    expect(snapshots.at(-1)?.playbackState).toEqual({
+      connectionStatus: "connecting",
+      hasStream: false,
       phase: "reconnecting",
+      resourceUserId: "user",
       retryCount: 1,
     });
     controller.dispose();
@@ -198,6 +235,26 @@ describe("playback lifecycle", () => {
     controller.dispose();
   });
 
+  it("cancels a queued retry when playback is disconnected", async () => {
+    const controller = startController();
+    const first = getSession();
+    connected(first);
+    fake.results.push({
+      isErr: () => true,
+      error: new Error("temporary failure"),
+    });
+    first.snapshot.status = "failed";
+    first.callbacks.onStatusChange("failed");
+    await vi.advanceTimersByTimeAsync(3_001);
+    expect(fake.sessions).toHaveLength(2);
+    expect(Reflect.get(controller, "reconnectTimerId")).not.toBeNull();
+    controller.disconnect();
+    expect(Reflect.get(controller, "reconnectTimerId")).toBeNull();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fake.sessions).toHaveLength(2);
+    controller.dispose();
+  });
+
   it("classifies an absent initial stream as ended and other failures as errors", async () => {
     fake.results.push({
       isErr: () => true,
@@ -211,12 +268,14 @@ describe("playback lifecycle", () => {
     await Promise.resolve();
     const seen: Array<ReturnType<typeof createDefaultSnapshot>> = [];
     missing.setSnapshotSubscriber((snapshot) => seen.push(snapshot));
-    expect(seen.at(-1)).toMatchObject({
+    expect(seen.at(-1)).toEqual({
       isLoading: false,
       playbackState: {
         phase: "ended",
         connectionStatus: "disconnected",
         hasStream: false,
+        resourceUserId: "user",
+        retryCount: 0,
       },
     });
 
@@ -225,9 +284,15 @@ describe("playback lifecycle", () => {
     await Promise.resolve();
     const errors: Array<ReturnType<typeof createDefaultSnapshot>> = [];
     error.setSnapshotSubscriber((snapshot) => errors.push(snapshot));
-    expect(errors.at(-1)).toMatchObject({
+    expect(errors.at(-1)).toEqual({
       isLoading: false,
-      playbackState: { phase: "error", connectionStatus: "failed" },
+      playbackState: {
+        phase: "error",
+        connectionStatus: "failed",
+        hasStream: false,
+        resourceUserId: "user",
+        retryCount: 0,
+      },
     });
     expect(console.error).toHaveBeenCalledWith(
       "WHEP playback failed:",
@@ -241,8 +306,12 @@ describe("playback lifecycle", () => {
     controller.setSnapshotSubscriber((snapshot) => snapshots.push(snapshot));
     const session = getSession();
     connected(session, true);
-    expect(snapshots.at(-1)).toMatchObject({
-      playbackState: { phase: "connected", hasStream: true, retryCount: 0 },
+    expect(snapshots.at(-1)?.playbackState).toEqual({
+      connectionStatus: "connected",
+      hasStream: true,
+      phase: "connected",
+      resourceUserId: "user",
+      retryCount: 0,
     });
     session.snapshot.hasStream = false;
     session.callbacks.onStreamChange(false);
@@ -451,6 +520,30 @@ describe("playback lifecycle", () => {
     });
     await vi.advanceTimersByTimeAsync(3_500);
     expect(fake.sessions).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("ignores stream callbacks before connection and during recovery", async () => {
+    const controller = startController();
+    const session = getSession();
+    const snapshots: Array<ReturnType<typeof createDefaultSnapshot>> = [];
+    controller.setSnapshotSubscriber((snapshot) => snapshots.push(snapshot));
+    session.snapshot.hasStream = true;
+    session.callbacks.onStreamChange(true);
+    expect(snapshots.at(-1)?.playbackState).toEqual({
+      connectionStatus: "connecting",
+      hasStream: false,
+      phase: "connecting",
+      resourceUserId: "user",
+      retryCount: 0,
+    });
+    connected(session, true);
+    session.snapshot.status = "disconnected";
+    session.snapshot.hasStream = false;
+    session.callbacks.onStatusChange("disconnected");
+    const recovering = snapshots.at(-1);
+    session.callbacks.onStreamChange(true);
+    expect(snapshots.at(-1)).toBe(recovering);
     controller.dispose();
   });
 
