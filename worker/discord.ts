@@ -148,13 +148,7 @@ function trimResponseBody(text: string | undefined): string | undefined {
 }
 
 function looksLikeHtml(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  return (
-    normalized.startsWith("<!doctype html") ||
-    normalized.startsWith("<html") ||
-    normalized.startsWith("<body") ||
-    normalized.startsWith("<")
-  );
+  return text.trim().startsWith("<");
 }
 
 function createDiscordBasicAuthHeader(env: DiscordEnv): string {

@@ -126,6 +126,34 @@ describe("worker discord helpers", () => {
     });
   });
 
+  it("aborts an outstanding Discord request after ten seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+        (_endpoint, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          }),
+      );
+      const request = getGuildMember("access", "guild");
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(fetchSpy.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(fetchSpy.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetchSpy.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      expect((await request)._unsafeUnwrapErr()).toMatchObject({
+        kind: "request_timeout",
+        message: "Discord request timed out",
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("generates a 32-byte unpredictable OAuth state with leading zeroes", () => {
     const random = vi
       .spyOn(crypto, "getRandomValues")
@@ -284,6 +312,47 @@ describe("worker discord helpers", () => {
         statusText: "Error",
         responseBodyJson: { message: "problem" },
       }),
+    });
+  });
+
+  it.each([
+    [401, "unauthorized", "Discord request failed: unauthorized"],
+    [403, "forbidden", "Discord request failed: forbidden"],
+    [404, "not_found", "Discord request failed: not found"],
+    [429, "rate_limited", "Discord request failed: rate limited"],
+    [502, "http_error", "Discord request failed"],
+  ] as const)(
+    "preserves the HTTP %i error details",
+    (status, kind, message) => {
+      const error = DiscordApiError.fromHttpFailure(
+        status,
+        "Upstream Error",
+        "https://discord.test/endpoint",
+        "upstream detail",
+        { message: "upstream detail" },
+      );
+      expect(error).toMatchObject({
+        name: "DiscordApiError",
+        kind,
+        message,
+        endpoint: "https://discord.test/endpoint",
+        statusText: "Upstream Error",
+        responseBodyText: "upstream detail",
+        responseBodyJson: { message: "upstream detail" },
+      });
+    },
+  );
+
+  it("treats a whitespace-only unsuccessful response as an absent body", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("  \n\t ", { status: 502, statusText: "Bad Gateway" }),
+    );
+    const result = await getGuildMember("access", "guild");
+    expect(result._unsafeUnwrapErr()).toMatchObject({
+      kind: "http_error",
+      responseBodyJson: undefined,
+      responseBodyText: undefined,
+      statusText: "Bad Gateway",
     });
   });
 
