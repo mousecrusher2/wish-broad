@@ -42,6 +42,37 @@ describe("authentication screens", () => {
         .getAttribute("href"),
     ).toBe("/login");
   });
+
+  it("keeps the authentication screens legible and centered", () => {
+    auth.state = { status: "loading" };
+    const loading = render(<App />);
+    const loadingTitle = screen.getByRole("heading", {
+      name: "ANGOU BROADCAST",
+    });
+    const loadingPanel = loadingTitle.parentElement;
+    expect(loading.container.firstElementChild?.className).toContain(
+      "min-h-screen",
+    );
+    expect(loadingPanel?.className).toContain("bg-slate-900/75");
+    expect(loadingPanel?.parentElement?.className).toContain("justify-center");
+    expect(loadingTitle.className).toContain("text-3xl");
+    expect(screen.getByText("認証状態を確認中...").className).toContain(
+      "text-slate-300",
+    );
+    loading.unmount();
+
+    auth.state = { status: "error", error: "network offline" };
+    render(<App />);
+    expect(
+      screen.getByRole("heading", { name: "ANGOU BROADCAST" }).className,
+    ).toContain("text-3xl");
+    expect(
+      screen.getByText("認証状態の確認中にエラーが発生しました。").className,
+    ).toContain("text-slate-300");
+    expect(
+      screen.getByRole("button", { name: "再読み込み" }).className,
+    ).toContain("bg-cyan-400");
+  });
 });
 
 describe("stream browser", () => {

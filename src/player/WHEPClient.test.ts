@@ -404,6 +404,54 @@ describe("WHEP browser session", () => {
     await session.dispose();
   });
 
+  it.each(["signalingstatechange", "connectionstatechange"])(
+    "stops waiting for ICE when the peer closes during %s",
+    async (eventName) => {
+      const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(answer());
+      vi.stubGlobal("fetch", fetchSpy);
+      const { session, pc } = createSession();
+      pc.iceGatheringState = "gathering";
+      const starting = session.start(new AbortController().signal);
+      await vi.waitFor(() =>
+        expect(pc.setLocalDescription).toHaveBeenCalledOnce(),
+      );
+      if (eventName === "signalingstatechange") pc.signalingState = "closed";
+      else pc.connectionState = "closed";
+      pc.dispatchEvent(new Event(eventName));
+      expect((await starting).isOk()).toBe(true);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      await session.dispose({ notifyServer: false });
+    },
+  );
+
+  it("returns an error if the browser does not retain its local offer", async () => {
+    const fetchSpy = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchSpy);
+    const { session, pc } = createSession();
+    pc.setLocalDescription.mockImplementation(async () => undefined);
+    const result = await session.start(new AbortController().signal);
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr().message).toBe(
+      "Failed to create local SDP offer",
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(pc.close).toHaveBeenCalledOnce();
+  });
+
+  it("does not post if the attempt aborts after setting its local offer", async () => {
+    const fetchSpy = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchSpy);
+    const { session, pc } = createSession();
+    const abort = new AbortController();
+    pc.setLocalDescription.mockImplementation(async () => {
+      abort.abort();
+    });
+    const result = await session.start(abort.signal);
+    expect(result.isOk()).toBe(true);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    await session.dispose({ notifyServer: false });
+  });
+
   it("treats empty offers and failed transport as start errors", async () => {
     const noOffer = createSession();
     noOffer.pc.createOffer.mockResolvedValue({ type: "offer", sdp: "" });
@@ -439,6 +487,48 @@ describe("WHEP browser session", () => {
       message: "bad answer",
     });
     expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects a counter-offer if no local SDP answer is produced", async () => {
+    const fetchSpy = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(answer("counter", 406))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const { session, pc } = createSession();
+    pc.createAnswer.mockResolvedValue({ type: "answer", sdp: "" });
+    const result = await session.start(new AbortController().signal);
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr().message).toBe(
+      "Failed to create local SDP answer",
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      new URL("https://wish.test/play/user/session-1"),
+      { method: "DELETE" },
+    );
+  });
+
+  it("cleans up a counter-offer session when PATCH fails on the network", async () => {
+    const fetchSpy = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(answer("counter", 406))
+      .mockRejectedValueOnce(new TypeError("PATCH offline"))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const { session, pc } = createSession();
+    const result = await session.start(new AbortController().signal);
+    expect(result.isErr()).toBe(true);
+    expect(result._unsafeUnwrapErr()).toMatchObject({
+      message: "PATCH offline",
+    });
+    expect(pc.close).toHaveBeenCalledOnce();
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      3,
+      new URL("https://wish.test/play/user/session-1"),
+      { method: "DELETE" },
+    );
   });
 
   it("allows repeated disposal and skips DELETE when requested", async () => {
@@ -563,6 +653,39 @@ describe("WHEP browser session", () => {
       expect(onStatusChange).toHaveBeenCalledTimes(
         expected === "disconnected" ? 0 : 1,
       );
+    },
+  );
+
+  it.each([
+    ["disconnected", "connected", "stable", "connecting"],
+    ["connected", "disconnected", "stable", "disconnected"],
+    ["connected", "failed", "stable", "failed"],
+    ["closed", "connected", "stable", "disconnected"],
+    ["connected", "connected", "closed", "disconnected"],
+  ] as const)(
+    "clears the active stream when peer=%s ice=%s signaling=%s",
+    async (connection, ice, signaling, expected) => {
+      const { session, pc, video, onStatusChange, onStreamChange } =
+        createSession();
+      pc.connectionState = "connected";
+      pc.iceConnectionState = "connected";
+      pc.dispatchEvent(new Event("connectionstatechange"));
+      const stream = video.srcObject;
+      if (!(stream instanceof FakeMediaStream))
+        throw new Error("Missing stream");
+      stream.addTrack(new FakeTrack("video"));
+      expect(session.getSnapshot().hasStream).toBe(true);
+      pc.connectionState = connection;
+      pc.iceConnectionState = ice;
+      pc.signalingState = signaling;
+      pc.dispatchEvent(new Event("iceconnectionstatechange"));
+      expect(session.getSnapshot()).toMatchObject({
+        hasStream: false,
+        status: expected,
+      });
+      expect(onStatusChange).toHaveBeenLastCalledWith(expected);
+      expect(onStreamChange).toHaveBeenLastCalledWith(false);
+      await session.dispose({ notifyServer: false });
     },
   );
 

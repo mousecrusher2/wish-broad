@@ -18,19 +18,32 @@ type State = {
 
 const fake = vi.hoisted(() => ({
   sessions: [] as State[],
-  results: [] as Array<{ isErr: () => boolean; error?: Error }>,
+  results: [] as Array<
+    | { isErr: () => boolean; error?: Error }
+    | Promise<{ isErr: () => boolean; error?: Error }>
+  >,
 }));
 
 vi.mock("./WHEPClient", () => {
   class MockWHEPSessionError extends Error {
+    readonly kind: string;
+    readonly retryable: boolean;
     constructor(
       message: string,
-      readonly missing = false,
+      options: { kind: string; retryable?: boolean },
     ) {
       super(message);
+      this.kind = options.kind;
+      this.retryable = options.retryable ?? true;
     }
     isNotFound() {
-      return this.missing;
+      return this.kind === "resource_not_found";
+    }
+    isClientRequestError() {
+      return (
+        this.kind === "resource_not_found" ||
+        this.kind === "client_request_error"
+      );
     }
   }
   class MockWHEPSession {
@@ -499,6 +512,85 @@ describe("playback lifecycle", () => {
       "WHEP playback failed:",
       expect.objectContaining({ message: "WHEP reconnect window expired" }),
     );
+    controller.dispose();
+  });
+
+  it("ignores a late failure from an attempt replaced by another stream", async () => {
+    let finishFirst:
+      ((result: { isErr: () => boolean; error?: Error }) => void) | undefined;
+    fake.results.push(
+      new Promise((resolve) => {
+        finishFirst = resolve;
+      }),
+    );
+    const controller = startController();
+    const first = getSession();
+    const snapshots: Array<ReturnType<typeof createDefaultSnapshot>> = [];
+    controller.setSnapshotSubscriber((snapshot) => snapshots.push(snapshot));
+    controller.load("second");
+    expect(first.dispose).toHaveBeenCalledOnce();
+    const second = getSession(1);
+    finishFirst?.({ isErr: () => true, error: new Error("stale failure") });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(snapshots.at(-1)).toMatchObject({
+      playbackState: { phase: "connecting", resourceUserId: "second" },
+    });
+    connected(second);
+    expect(snapshots.at(-1)).toMatchObject({
+      playbackState: { phase: "connected", resourceUserId: "second" },
+    });
+    controller.dispose();
+  });
+
+  it("recognizes a session that connected before start resolves", async () => {
+    let finish: ((result: { isErr: () => boolean }) => void) | undefined;
+    fake.results.push(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const controller = startController();
+    const session = getSession();
+    const snapshots: Array<ReturnType<typeof createDefaultSnapshot>> = [];
+    controller.setSnapshotSubscriber((snapshot) => snapshots.push(snapshot));
+    session.snapshot.status = "connected";
+    session.snapshot.hasStream = true;
+    finish?.({ isErr: () => false });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(snapshots.at(-1)).toMatchObject({
+      isLoading: false,
+      playbackState: { phase: "connected", hasStream: true },
+    });
+    expect(Reflect.get(controller, "playbackMonitor")).not.toBeNull();
+    controller.dispose();
+  });
+
+  it("ends a retry on a permanent client request error", async () => {
+    const controller = startController();
+    const first = getSession();
+    connected(first);
+    fake.results.push({
+      isErr: () => true,
+      error: new WHEPSessionError("forbidden", {
+        kind: "client_request_error",
+        responseText: "forbidden",
+        retryable: false,
+        stage: "post",
+      }),
+    });
+    first.snapshot.status = "failed";
+    first.callbacks.onStatusChange("failed");
+    await vi.advanceTimersByTimeAsync(3_001);
+    await vi.advanceTimersByTimeAsync(1);
+    const snapshots: Array<ReturnType<typeof createDefaultSnapshot>> = [];
+    controller.setSnapshotSubscriber((snapshot) => snapshots.push(snapshot));
+    expect(fake.sessions).toHaveLength(2);
+    expect(snapshots.at(-1)).toMatchObject({
+      isLoading: false,
+      playbackState: { phase: "error", connectionStatus: "failed" },
+    });
     controller.dispose();
   });
 });
