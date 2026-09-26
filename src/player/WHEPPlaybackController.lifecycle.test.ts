@@ -13,7 +13,11 @@ type State = {
     expectedRemoteTrackCount: number;
   };
   dispose: (options?: unknown) => Promise<void>;
-  stats: Array<Array<{ id: string; kind: string; bytesReceived: number }>>;
+  stats: Array<
+    | Array<{ id: string; kind: string; bytesReceived: number }>
+    | Promise<Array<{ id: string; kind: string; bytesReceived: number }>>
+  >;
+  statsRequests: number;
 };
 
 const fake = vi.hoisted(() => ({
@@ -62,6 +66,7 @@ vi.mock("./WHEPClient", () => {
         },
         dispose: vi.fn(async () => undefined),
         stats: [],
+        statsRequests: 0,
       };
       fake.sessions.push(this.state);
     }
@@ -75,6 +80,7 @@ vi.mock("./WHEPClient", () => {
       return this.state.snapshot;
     }
     getInboundReceiverStats() {
+      this.state.statsRequests += 1;
       return Promise.resolve(this.state.stats.shift() ?? []);
     }
   }
@@ -391,6 +397,56 @@ describe("playback lifecycle", () => {
     await vi.advanceTimersByTimeAsync(7_000);
     expect(fake.sessions).toHaveLength(1);
     expect(first.dispose).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("does not overlap inbound receiver polls while one request is pending", async () => {
+    let finishStats:
+      | ((
+          stats: Array<{ id: string; kind: string; bytesReceived: number }>,
+        ) => void)
+      | undefined;
+    const controller = startController();
+    const first = getSession();
+    first.stats.push(
+      new Promise((resolve) => {
+        finishStats = resolve;
+      }),
+    );
+    connected(first);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(first.statsRequests).toBe(1);
+    expect(fake.sessions).toHaveLength(1);
+    finishStats?.([{ id: "video", kind: "video", bytesReceived: 1 }]);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(first.statsRequests).toBe(2);
+    expect(fake.sessions).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("ignores a receiver poll that resolves after the stream disconnects", async () => {
+    let finishStats:
+      | ((
+          stats: Array<{ id: string; kind: string; bytesReceived: number }>,
+        ) => void)
+      | undefined;
+    const controller = startController();
+    const first = getSession();
+    first.stats.push(
+      new Promise((resolve) => {
+        finishStats = resolve;
+      }),
+    );
+    connected(first);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(first.statsRequests).toBe(1);
+    controller.disconnect();
+    finishStats?.([{ id: "video", kind: "video", bytesReceived: 1 }]);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(fake.sessions).toHaveLength(1);
+    expect(first.dispose).toHaveBeenCalledOnce();
     controller.dispose();
   });
 

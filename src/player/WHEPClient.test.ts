@@ -1012,6 +1012,21 @@ describe("WHEP browser session", () => {
     });
   });
 
+  it("uses the fallback message if an error response cannot be read", async () => {
+    const response = new Response("unreadable", { status: 503 });
+    vi.spyOn(response, "text").mockRejectedValue(
+      new Error("body stream failed"),
+    );
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(response));
+    const { session } = createSession();
+    const result = await session.start(new AbortController().signal);
+    expect(result._unsafeUnwrapErr()).toMatchObject({
+      kind: "server_request_error",
+      message: "Unexpected WHEP session response: 503",
+      responseText: undefined,
+    });
+  });
+
   it("accepts an SDP content type with different casing and parameters", async () => {
     vi.stubGlobal(
       "fetch",
