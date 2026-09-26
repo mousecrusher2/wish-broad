@@ -483,4 +483,156 @@ describe("Cloudflare Calls client", () => {
       "SFU request timed out",
     );
   });
+
+  it("preserves plain-text HTTP error bodies from the session, renegotiation, and activity APIs", async () => {
+    queue(
+      new Response("bad offer", { status: 400, statusText: "Bad Request" }),
+      new Response("bad answer", {
+        status: 422,
+        statusText: "Unprocessable Content",
+      }),
+      new Response("upstream down", { status: 503, statusText: "Unavailable" }),
+    );
+    const create = await startIngest(env, "live", "offer");
+    expect(create._unsafeUnwrapErr()).toMatchObject({
+      kind: "bad_request",
+      message: "SFU request failed: bad request",
+      responseBody: "bad offer",
+      statusText: "Bad Request",
+    });
+    const patch = await renegotiateSession(env, "viewer", "answer");
+    expect(patch._unsafeUnwrapErr()).toMatchObject({
+      kind: "unprocessable_content",
+      message: "SFU request failed: unprocessable content",
+      responseBody: "bad answer",
+      statusText: "Unprocessable Content",
+    });
+    const active = await isSessionActive(env, "viewer");
+    expect(active._unsafeUnwrapErr()).toMatchObject({
+      kind: "http_error",
+      message: "SFU request failed",
+      responseBody: "upstream down",
+      statusText: "Unavailable",
+    });
+  });
+
+  it("aborts a hanging Calls request after eight seconds and clears its timer", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi.fn<typeof fetch>().mockImplementation(
+        (_input, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      );
+      vi.stubGlobal("fetch", fetchSpy);
+      const pending = isSessionActive(env, "ingest");
+      await vi.advanceTimersByTimeAsync(7_999);
+      expect(fetchSpy.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await pending)._unsafeUnwrapErr()).toMatchObject({
+        kind: "request_timeout",
+        message: "SFU request timed out",
+        responseBody: "aborted",
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates session creation transport failures for ingest and playback", async () => {
+    const fetchSpy = queue(
+      new TypeError("ingest offline"),
+      new TypeError("play offline"),
+    );
+    const ingest = await startIngest(env, "live", "offer");
+    expect(ingest._unsafeUnwrapErr()).toMatchObject({
+      name: "SfuApiError",
+      kind: "request_failed",
+      message: "SFU request failed",
+      responseBody: "ingest offline",
+      endpoint: `${base}/new`,
+    });
+    const play = await startPlay(env, "live", [track], "offer");
+    expect(play._unsafeUnwrapErr()).toMatchObject({
+      name: "SfuApiError",
+      kind: "request_failed",
+      message: "SFU request failed",
+      responseBody: "play offline",
+      endpoint: `${base}/new`,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [404, "session_not_found", "SFU request failed: session not found"],
+    [410, "session_gone", "SFU request failed: session gone"],
+  ] as const)(
+    "preserves a %i session failure",
+    async (status, kind, message) => {
+      const failed = reply({ code: status }, status);
+      Object.defineProperty(failed, "url", { value: `${base}/new` });
+      queue(failed);
+      const result = await startPlay(env, "live", [track]);
+      expect(result._unsafeUnwrapErr()).toMatchObject({
+        name: "SfuApiError",
+        endpoint: `${base}/new`,
+        kind,
+        message,
+        responseBody: { code: status },
+        statusText: "Failed",
+      });
+    },
+  );
+
+  it("retains schema issues and the original body from every invalid SFU response", async () => {
+    queue(
+      reply({ sessionId: 42 }),
+      reply({ sessionId: "ingest" }),
+      reply({ tracks: "bad" }),
+    );
+    const invalidSession = await startPlay(env, "live", [track]);
+    expect(invalidSession._unsafeUnwrapErr()).toMatchObject({
+      kind: "invalid_response_schema",
+      message: "Invalid SFU response schema",
+      endpoint: `${base}/new`,
+      responseBody: {
+        responseBody: { sessionId: 42 },
+        issues: expect.any(Array),
+      },
+    });
+    const invalidTracks = await startIngest(env, "live", "offer");
+    expect(invalidTracks._unsafeUnwrapErr()).toMatchObject({
+      kind: "invalid_response_schema",
+      message: "Invalid SFU response schema",
+      endpoint: `${base}/ingest/tracks/new`,
+      responseBody: {
+        responseBody: { tracks: "bad" },
+        issues: expect.any(Array),
+      },
+    });
+  });
+
+  it("retains invalid JSON parse failures with their endpoint", async () => {
+    queue(
+      new Response("invalid json"),
+      reply({ sessionId: "ingest" }),
+      new Response("bad tracks"),
+    );
+    const session = await startIngest(env, "live", "offer");
+    expect(session._unsafeUnwrapErr()).toMatchObject({
+      kind: "invalid_response_json",
+      message: "Invalid SFU response JSON",
+      responseBody: { error: expect.any(String) },
+    });
+    const tracks = await startIngest(env, "live", "offer");
+    expect(tracks._unsafeUnwrapErr()).toMatchObject({
+      kind: "invalid_response_json",
+      message: "Invalid SFU response JSON",
+      responseBody: { error: expect.any(String) },
+    });
+  });
 });

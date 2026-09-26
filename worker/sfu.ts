@@ -367,6 +367,7 @@ async function readSfuJsonResponse(
 ): Promise<Result<unknown, SfuFailure>> {
   if (!response.ok) {
     const responseBody = await response
+      .clone()
       .json()
       .catch(() => response.text().catch(() => null));
     return err(
@@ -608,6 +609,7 @@ export async function renegotiateSession(
   const response = responseResult.value;
   if (!response.ok) {
     const responseBody = await response
+      .clone()
       .json()
       .catch(() => response.text().catch(() => null));
     const failure = sfuFailureFromHttpFailure(
@@ -731,6 +733,7 @@ export async function isSessionActive(
 
   if (!response.ok) {
     const responseBody = await response
+      .clone()
       .json()
       .catch(() => response.text().catch(() => null));
     const responseFailure = sfuFailureFromHttpFailure(

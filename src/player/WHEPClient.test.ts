@@ -666,4 +666,260 @@ describe("WHEP browser session", () => {
     track.id = "";
     expect(await session.getInboundReceiverStats()).toEqual([]);
   });
+
+  it("reports ICE candidate errors and keeps listening for status changes", async () => {
+    const { session, pc, onStatusChange } = createSession();
+    const warning = vi.spyOn(console, "warn");
+    const errorEvent = new Event("icecandidateerror");
+    Object.assign(errorEvent, {
+      errorCode: 701,
+      errorText: "TURN unavailable",
+      url: "turn:bad:3478",
+    });
+    pc.dispatchEvent(errorEvent);
+    expect(warning).toHaveBeenCalledWith("ICE candidate error:", {
+      errorCode: 701,
+      errorText: "TURN unavailable",
+      url: "turn:bad:3478",
+    });
+    expect(onStatusChange).toHaveBeenCalledExactlyOnceWith("connecting");
+    pc.connectionState = "connected";
+    pc.iceConnectionState = "connected";
+    pc.dispatchEvent(new Event("icecandidate"));
+    expect(session.getSnapshot().status).toBe("connected");
+    expect(onStatusChange).toHaveBeenLastCalledWith("connected");
+    await session.dispose({ notifyServer: false });
+    pc.dispatchEvent(errorEvent);
+    expect(warning).toHaveBeenCalledOnce();
+  });
+
+  it("restores the media stream on track events and handles autoplay rejection", async () => {
+    const { session, pc, video } = createSession();
+    const warning = vi.spyOn(console, "warn");
+    video.play.mockRejectedValueOnce(new Error("autoplay denied"));
+    video.srcObject = null;
+    const track = new FakeTrack("incoming");
+    const event = new Event("track");
+    Object.defineProperty(event, "track", { value: track });
+    pc.dispatchEvent(event);
+    await vi.waitFor(() =>
+      expect(warning).toHaveBeenCalledWith(
+        "Autoplay failed:",
+        expect.objectContaining({ message: "autoplay denied" }),
+      ),
+    );
+    expect(video.srcObject).toBeInstanceOf(FakeMediaStream);
+    expect(session.getSnapshot().remoteTrackCount).toBe(1);
+    await session.dispose({ notifyServer: false });
+    pc.dispatchEvent(event);
+    expect(video.play).toHaveBeenCalledOnce();
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
+  it("does not repeat stream callbacks for unchanged media availability", async () => {
+    const { session, pc, video, onStreamChange, onStatusChange } =
+      createSession();
+    pc.connectionState = "connected";
+    pc.iceConnectionState = "connected";
+    pc.dispatchEvent(new Event("connectionstatechange"));
+    const stream = video.srcObject;
+    if (!(stream instanceof FakeMediaStream)) throw new Error("Missing stream");
+    const track = new FakeTrack("a");
+    stream.addTrack(track);
+    expect(onStreamChange).toHaveBeenCalledExactlyOnceWith(true);
+    stream.addTrack(new FakeTrack("b"));
+    pc.dispatchEvent(new Event("negotiationneeded"));
+    expect(onStreamChange).toHaveBeenCalledOnce();
+    expect(onStatusChange).toHaveBeenCalledOnce();
+    pc.iceConnectionState = "checking";
+    pc.dispatchEvent(new Event("iceconnectionstatechange"));
+    expect(session.getSnapshot()).toMatchObject({
+      status: "connecting",
+      hasStream: false,
+    });
+    expect(onStreamChange).toHaveBeenLastCalledWith(false);
+    pc.iceConnectionState = "completed";
+    pc.dispatchEvent(new Event("iceconnectionstatechange"));
+    expect(session.getSnapshot().status).toBe("connected");
+    expect(session.getSnapshot().hasStream).toBe(true);
+    await session.dispose({ notifyServer: false });
+  });
+
+  it("removes a track and retains its historical maximum for expected media", async () => {
+    const { session, pc, video } = createSession();
+    pc.connectionState = "connected";
+    pc.iceConnectionState = "connected";
+    pc.dispatchEvent(new Event("connectionstatechange"));
+    const stream = video.srcObject;
+    if (!(stream instanceof FakeMediaStream)) throw new Error("Missing stream");
+    const a = new FakeTrack("a");
+    const b = new FakeTrack("b", "audio");
+    stream.addTrack(a);
+    stream.addTrack(b);
+    expect(session.getSnapshot()).toMatchObject({
+      remoteTrackCount: 2,
+      expectedRemoteTrackCount: 2,
+    });
+    stream.removeTrack(a);
+    expect(session.getSnapshot()).toMatchObject({
+      remoteTrackCount: 1,
+      liveTrackCount: 1,
+      expectedRemoteTrackCount: 2,
+    });
+    a.muted = true;
+    a.dispatchEvent(new Event("mute"));
+    expect(session.getSnapshot().hasStream).toBe(true);
+    await session.dispose({ notifyServer: false });
+    expect(a.stop).not.toHaveBeenCalled();
+    expect(b.stop).toHaveBeenCalledOnce();
+  });
+
+  it("deletes a server session that registers while disposal is waiting", async () => {
+    let finishRegistration: ((response: Response) => void) | undefined;
+    const fetchSpy = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishRegistration = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const { session, pc } = createSession();
+    const starting = session.start(new AbortController().signal);
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledOnce());
+    const disposing = session.dispose();
+    expect(pc.close).toHaveBeenCalledOnce();
+    finishRegistration?.(answer());
+    expect((await starting).isOk()).toBe(true);
+    await disposing;
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      new URL("https://wish.test/play/user/session-1"),
+      { method: "DELETE" },
+    );
+    expect(session.getSnapshot().status).toBe("disconnected");
+  });
+
+  it("finishes local disposal when an in-flight registration fails", async () => {
+    let rejectRegistration: ((error: Error) => void) | undefined;
+    const fetchSpy = vi.fn<typeof fetch>().mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectRegistration = reject;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    const { session, pc } = createSession();
+    const starting = session.start(new AbortController().signal);
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledOnce());
+    const disposing = session.dispose();
+    rejectRegistration?.(new TypeError("registration aborted"));
+    expect((await starting).isOk()).toBe(true);
+    await disposing;
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(pc.close).toHaveBeenCalledOnce();
+  });
+
+  it("does not perform a second cleanup when dispose is called concurrently", async () => {
+    let finishDeletion: ((response: Response) => void) | undefined;
+    const fetchSpy = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(answer())
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishDeletion = resolve;
+          }),
+      );
+    vi.stubGlobal("fetch", fetchSpy);
+    const { session, pc } = createSession();
+    await session.start(new AbortController().signal);
+    const first = session.dispose();
+    const second = session.dispose();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    finishDeletion?.(new Response(null, { status: 204 }));
+    await Promise.all([first, second]);
+    await session.dispose();
+    expect(pc.close).toHaveBeenCalledOnce();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [404, "resource_not_found"],
+    [499, "client_request_error"],
+    [500, "server_request_error"],
+    [599, "server_request_error"],
+    [302, "unexpected_response"],
+  ] as const)(
+    "classifies HTTP %i and preserves a nonempty response",
+    async (status, kind) => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(new Response("  reason  ", { status })),
+      );
+      const { session } = createSession();
+      const result = await session.start(new AbortController().signal);
+      expect(result.isErr()).toBe(true);
+      expect(result._unsafeUnwrapErr()).toMatchObject({
+        kind,
+        message: "  reason  ",
+        responseText: "  reason  ",
+        stage: "post",
+      });
+    },
+  );
+
+  it("uses the fallback message when the response body is whitespace", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response("  \n ", { status: 502 })),
+    );
+    const { session } = createSession();
+    const result = await session.start(new AbortController().signal);
+    expect(result._unsafeUnwrapErr()).toMatchObject({
+      kind: "server_request_error",
+      message: "Unexpected WHEP session response: 502",
+      responseText: undefined,
+    });
+  });
+
+  it("accepts an SDP content type with different casing and parameters", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        answer("remote", 201, {
+          "content-type": "APPLICATION/SDP; charset=utf-8",
+        }),
+      ),
+    );
+    const { session, pc } = createSession();
+    expect((await session.start(new AbortController().signal)).isOk()).toBe(
+      true,
+    );
+    expect(pc.remoteDescription).toEqual({ type: "answer", sdp: "remote" });
+    await session.dispose({ notifyServer: false });
+  });
+
+  it.each(["closed signaling", "closed connection"])(
+    "finishes ICE gathering when the peer has %s",
+    async (state) => {
+      const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(answer());
+      vi.stubGlobal("fetch", fetchSpy);
+      const { session, pc } = createSession();
+      pc.iceGatheringState = "gathering";
+      if (state === "closed signaling") pc.signalingState = "closed";
+      else pc.connectionState = "closed";
+      expect((await session.start(new AbortController().signal)).isOk()).toBe(
+        true,
+      );
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      await session.dispose({ notifyServer: false });
+    },
+  );
 });

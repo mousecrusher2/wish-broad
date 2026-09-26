@@ -79,10 +79,6 @@ function createWebhookMessageEndpoint(
 }
 
 function parseMessageId(rawMessageId: unknown): bigint | null {
-  if (typeof rawMessageId === "bigint") {
-    return rawMessageId >= 0n ? rawMessageId : null;
-  }
-
   if (typeof rawMessageId === "number") {
     if (!Number.isInteger(rawMessageId) || rawMessageId < 0) {
       return null;

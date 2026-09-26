@@ -133,6 +133,9 @@ describe("OBS streaming settings", () => {
     mock.token = { status: "available", token: null };
     render(<OBSStreamingInfo isOpen onClose={vi.fn()} />);
     expect(screen.getByText(/既存のトークンは再表示できません/u)).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "👁️ トークンを表示" }),
+    ).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: "🔄 新しいトークンを発行" }),
     );
@@ -181,5 +184,110 @@ describe("OBS streaming settings", () => {
     expect(
       screen.getByRole("button", { name: "👁️ トークンを表示" }),
     ).toBeTruthy();
+  });
+
+  it("shows the default user placeholder and OBS setup steps", () => {
+    mock.user = { status: "unauthenticated" };
+    render(<OBSStreamingInfo isOpen onClose={vi.fn()} />);
+    const url = screen.getByLabelText("配信URL (Server):") as HTMLInputElement;
+    expect(url.placeholder).toBe("取得できません");
+    expect(url.value).toBe("");
+    expect(screen.getByText("📖 OBS設定方法")).toBeTruthy();
+    expect(screen.getByText("サービス: 「WHIP」を選択")).toBeTruthy();
+    expect(
+      screen.getByText("Bearerトークン: 上記の配信キーをコピー"),
+    ).toBeTruthy();
+  });
+
+  it("resets the copy success indicator after two seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      render(<OBSStreamingInfo isOpen onClose={vi.fn()} />);
+      fireEvent.click(screen.getByRole("button", { name: "📋 コピー" }));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(
+        screen.getByRole("button", { name: "✅ コピー済み" }),
+      ).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(1_999);
+      });
+      expect(
+        screen.getByRole("button", { name: "✅ コピー済み" }),
+      ).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(screen.getByRole("button", { name: "📋 コピー" })).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hides a revealed token before retrying status lookup", async () => {
+    mock.token = { status: "available", token: "secret" };
+    const view = render(<OBSStreamingInfo isOpen onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "👁️ トークンを表示" }));
+    expect(screen.getByLabelText("Bearerトークン")).toBeTruthy();
+    mock.token = { status: "error" };
+    mock.error = "offline";
+    view.rerender(<OBSStreamingInfo isOpen onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "再試行" }));
+    expect(mock.fetchTokenStatus).toHaveBeenCalledOnce();
+    mock.token = { status: "available", token: "secret" };
+    mock.error = null;
+    view.rerender(<OBSStreamingInfo isOpen onClose={vi.fn()} />);
+    expect(screen.queryByLabelText("Bearerトークン")).toBeNull();
+  });
+
+  it("applies recognizable styling to fields and actions", () => {
+    const view = render(<OBSStreamingInfo isOpen onClose={vi.fn()} />);
+    const url = screen.getByLabelText("配信URL (Server):");
+    const label = screen.getByText("配信URL (Server):");
+    const copy = screen.getByRole("button", { name: "📋 コピー" });
+    const create = screen.getByRole("button", {
+      name: "🔑 Bearerトークンを発行",
+    });
+    expect(label.className).toContain("text-slate-200");
+    expect(url.className).toContain("focus:border-cyan-400");
+    expect(url.parentElement?.className).toContain("sm:flex-row");
+    expect(copy.className).toContain("hover:bg-slate-700");
+    expect(create.className).toContain("bg-cyan-400");
+    expect(
+      screen.getByText("📖 OBS設定方法").parentElement?.className,
+    ).toContain("bg-slate-950/30");
+    expect(
+      screen.getByText("Bearerトークン (Stream Key):").parentElement?.className,
+    ).toContain("shadow-inner");
+    mock.token = { status: "available", token: "secret" };
+    view.rerender(<OBSStreamingInfo isOpen onClose={vi.fn()} />);
+    expect(
+      screen.getByRole("button", { name: "👁️ トークンを表示" }).className,
+    ).toContain("border-slate-600");
+    expect(
+      screen.getByRole("button", { name: "🔄 新しいトークンを発行" }).className,
+    ).toContain("bg-amber-400");
+    fireEvent.click(screen.getByRole("button", { name: "👁️ トークンを表示" }));
+    expect(screen.getByLabelText("Bearerトークン").className).toContain(
+      "focus:ring-cyan-400/20",
+    );
+    expect(
+      screen.getByRole("button", { name: "🙈 非表示" }).className,
+    ).toContain("border-slate-600");
+    mock.error = "offline";
+    view.rerender(<OBSStreamingInfo isOpen onClose={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "再試行" }).className).toContain(
+      "bg-rose-500",
+    );
+  });
+
+  it("shows a loading token indicator without an error", () => {
+    mock.token = { status: "loading" };
+    render(<OBSStreamingInfo isOpen onClose={vi.fn()} />);
+    expect(screen.getByText("読み込み中...")).toHaveProperty("tagName", "P");
+    expect(screen.getByText("読み込み中...").className).toContain(
+      "text-amber-200",
+    );
   });
 });

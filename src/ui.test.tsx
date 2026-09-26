@@ -78,6 +78,71 @@ describe("stream browser", () => {
     expect(container.querySelector(".rounded-full")).toBeTruthy();
   });
 
+  it.each([
+    [
+      "idle",
+      "border-white/10 bg-slate-900/70",
+      "bg-slate-500",
+      "text-slate-200",
+    ],
+    [
+      "connected",
+      "border-emerald-400/20 bg-emerald-500/10",
+      "bg-emerald-400",
+      "text-emerald-100",
+    ],
+    [
+      "connecting",
+      "border-amber-400/20 bg-amber-500/10",
+      "bg-amber-400",
+      "text-amber-50",
+    ],
+    [
+      "reconnecting",
+      "border-amber-400/20 bg-amber-500/10",
+      "bg-amber-400",
+      "text-amber-50",
+    ],
+    [
+      "ended",
+      "border-white/10 bg-slate-900/70",
+      "bg-slate-500",
+      "text-slate-200",
+    ],
+    [
+      "error",
+      "border-rose-400/20 bg-rose-500/10",
+      "bg-rose-400",
+      "text-rose-100",
+    ],
+  ] as const)(
+    "uses distinct status colors for %s",
+    (phase, panel, dot, text) => {
+      const state = {
+        ...createDefaultPlaybackState(),
+        phase,
+      } as WHEPPlaybackState;
+      const { container } = render(
+        <ConnectionControls playbackState={state} />,
+      );
+      const panelElement = container.firstElementChild;
+      const dotElement = panelElement?.firstElementChild;
+      const textElement = panelElement?.lastElementChild;
+      expect(panelElement?.className).toContain(panel);
+      expect(dotElement?.className).toContain(dot);
+      expect(textElement?.className).toContain(text);
+    },
+  );
+
+  it("keeps the status label height with a nonbreaking space while idle", () => {
+    const { container } = render(
+      <ConnectionControls playbackState={createDefaultPlaybackState()} />,
+    );
+    expect(container.firstElementChild?.lastElementChild?.textContent).toBe(
+      "\u00A0",
+    );
+  });
+
   function showBrowser(
     overrides: Partial<Parameters<typeof StreamSelection>[0]> = {},
   ) {

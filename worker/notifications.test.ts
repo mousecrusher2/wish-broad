@@ -79,6 +79,8 @@ describe("worker live start notifications", () => {
 
     expect(result.error).toBeInstanceOf(DiscordWebhookError);
     expect(result.error).toMatchObject({
+      name: "DiscordWebhookError",
+      message: "Discord webhook request failed",
       endpoint: "https://discord.com/api/webhooks/123/token?wait=true",
       kind: "http_error",
       responseBodyText: "bad gateway",
@@ -247,6 +249,10 @@ describe("worker live start notifications", () => {
     );
     expect(result._unsafeUnwrapErr()).toMatchObject({
       kind,
+      message:
+        kind === "request_timeout"
+          ? "Discord webhook request timed out"
+          : "Discord webhook request failed",
       responseBodyText: body,
     });
   });
@@ -307,6 +313,49 @@ describe("worker live start notifications", () => {
       kind: "request_failed",
       responseBodyText: "offline",
       endpoint: `${env.NOTIFICATIONS_DISCORD_WEBHOOK_URL}/messages/42`,
+    });
+  });
+
+  it("aborts a hanging webhook request after five seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+        (_url, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("aborted by timeout", "AbortError"));
+            });
+          }),
+      );
+      const resultPromise = sendLiveStartedNotification(
+        env,
+        "member",
+        "https://wish.test",
+      );
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fetchSpy.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect((await resultPromise)._unsafeUnwrapErr()).toMatchObject({
+        kind: "request_timeout",
+        message: "Discord webhook request timed out",
+        responseBodyText: "aborted by timeout",
+      });
+      expect(fetchSpy.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not attach an empty response body to DELETE failure", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("", { status: 500 }),
+    );
+    const result = await deleteLiveStartedNotification(env, 42n);
+    expect(result._unsafeUnwrapErr()).toMatchObject({
+      kind: "http_error",
+      message: "Discord webhook request failed",
+      responseBodyText: undefined,
     });
   });
 });

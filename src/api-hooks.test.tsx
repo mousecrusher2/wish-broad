@@ -78,6 +78,29 @@ describe("API hooks", () => {
     });
   });
 
+  it("uses consistent SWR cache options and prioritizes unauthorized results", () => {
+    const hook = renderHook(() => useBootstrapAuthState());
+    for (const key of ["current-user", "live-streams", "live-token-state"]) {
+      expect(swr.options.get(key)).toEqual({
+        revalidateIfStale: false,
+        revalidateOnFocus: false,
+        revalidateOnReconnect: false,
+        shouldRetryOnError: false,
+      });
+    }
+    swr.data.set("current-user", ok(user));
+    swr.data.set("live-streams", err(new UnauthorizedError()));
+    hook.rerender();
+    expect(hook.result.current).toEqual({ status: "unauthenticated" });
+    swr.data.set("live-streams", err(new Error("offline")));
+    hook.rerender();
+    expect(hook.result.current).toEqual({ status: "authenticated" });
+    swr.data.clear();
+    swr.data.set("live-token-state", err(new Error("token offline")));
+    hook.rerender();
+    expect(hook.result.current).toEqual({ status: "loading" });
+  });
+
   it("presents current user states and the suspense fallback", () => {
     const current = renderHook(() => useCurrentUser());
     expect(current.result.current).toEqual({ status: "loading" });
@@ -236,6 +259,68 @@ describe("API hooks", () => {
     });
     expect(failed?.isErr()).toBe(true);
     expect(hook.result.current.error).toBe("offline");
+  });
+
+  it("exposes the loading state while token status refresh is pending", async () => {
+    swr.data.set("live-token-state", ok({ status: "available", token: null }));
+    let finish: ((value: unknown) => void) | undefined;
+    swr.mutate.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const hook = renderHook(() => useLiveToken());
+    expect(hook.result.current.state).toEqual({
+      status: "available",
+      token: null,
+    });
+    let request:
+      ReturnType<typeof hook.result.current.fetchTokenStatus> | undefined;
+    act(() => {
+      request = hook.result.current.fetchTokenStatus();
+    });
+    expect(hook.result.current.state).toEqual({ status: "loading" });
+    await act(async () => {
+      finish?.(ok({ status: "none" }));
+      await request;
+    });
+    expect(hook.result.current.state).toEqual({
+      status: "available",
+      token: null,
+    });
+    expect(hook.result.current.error).toBeNull();
+  });
+
+  it("exposes loading and resets the override after token creation completes", async () => {
+    swr.data.set("live-token-state", ok({ status: "none" }));
+    let finish: ((response: Response) => void) | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    );
+    swr.mutate.mockResolvedValue(undefined);
+    const hook = renderHook(() => useLiveToken());
+    let request: ReturnType<typeof hook.result.current.createToken> | undefined;
+    act(() => {
+      request = hook.result.current.createToken();
+    });
+    expect(hook.result.current.state).toEqual({ status: "loading" });
+    await act(async () => {
+      finish?.(Response.json({ success: true, token: "new-token" }));
+      await request;
+    });
+    expect(hook.result.current.state).toEqual({ status: "none" });
+    expect(hook.result.current.error).toBeNull();
+    expect(swr.mutate).toHaveBeenCalledWith(
+      ok({ status: "available", token: "new-token" }),
+      { revalidate: false },
+    );
   });
 
   it("creates a token, caches it, and returns it only for the new token", async () => {

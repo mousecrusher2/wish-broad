@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useEffect } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { err, ok } from "neverthrow";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,7 @@ const mock = vi.hoisted(() => ({
   user: null as unknown,
   revalidate: vi.fn<() => Promise<void>>(),
   playerRenders: vi.fn<(resource: string | null) => void>(),
+  playerMounts: vi.fn<(resource: string | null) => void>(),
 }));
 
 vi.mock("./api", () => ({
@@ -70,6 +72,7 @@ vi.mock("./components/StreamSelection", () => ({
         })}
       </span>
       <button onClick={() => onResourceChange(" u ")}>Select user</button>
+      <button onClick={() => onResourceChange("   ")}>Clear user</button>
       <button onClick={onLoadClick}>Load selected</button>
       <button onClick={onRefresh}>Refresh streams</button>
     </div>
@@ -84,6 +87,9 @@ vi.mock("./WHEPPlayer", () => ({
     onSnapshotChange: (snapshot: unknown) => void;
   }) => {
     mock.playerRenders(resourceUserId);
+    useEffect(() => {
+      mock.playerMounts(resourceUserId);
+    }, [resourceUserId]);
     return (
       <div data-testid="player">
         {resourceUserId ?? "no stream"}
@@ -102,6 +108,22 @@ vi.mock("./WHEPPlayer", () => ({
           }
         >
           End playback
+        </button>
+        <button
+          onClick={() =>
+            onSnapshotChange({
+              isLoading: false,
+              playbackState: {
+                connectionStatus: "connected",
+                hasStream: true,
+                phase: "connected",
+                resourceUserId: "u",
+                retryCount: 0,
+              },
+            })
+          }
+        >
+          Resume playback
         </button>
       </div>
     );
@@ -125,6 +147,9 @@ describe("player page", () => {
   it("greets the current user and opens and closes OBS settings", () => {
     render(<WHEPPlayerPage />);
     expect(screen.getByText("Alice")).toBeTruthy();
+    expect(screen.getByText("Alice").parentElement?.textContent).toBe(
+      "ようこそ、Alice さん",
+    );
     expect(
       screen
         .getByRole("button", { name: "ログアウト" })
@@ -153,6 +178,12 @@ describe("player page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Load selected" }));
     expect(screen.getByTestId("player").textContent).toContain("u");
     expect(mock.playerRenders).toHaveBeenCalledWith("u");
+    expect(mock.playerMounts.mock.calls.map(([resource]) => resource)).toEqual([
+      null,
+      "u",
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "End playback" }));
+    expect(mock.revalidate).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("button", { name: "End playback" }));
     expect(mock.revalidate).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("button", { name: "Load selected" }));
@@ -160,13 +191,44 @@ describe("player page", () => {
       mock.playerRenders.mock.calls.filter(([resource]) => resource === "u")
         .length,
     ).toBeGreaterThan(1);
+    expect(mock.playerMounts.mock.calls.map(([resource]) => resource)).toEqual([
+      null,
+      "u",
+      "u",
+    ]);
+  });
+
+  it("only refreshes when a connected player first transitions to ended", () => {
+    render(<WHEPPlayerPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Select user" }));
+    fireEvent.click(screen.getByRole("button", { name: "Load selected" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume playback" }));
+    expect(mock.revalidate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "End playback" }));
+    expect(mock.revalidate).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Resume playback" }));
+    fireEvent.click(screen.getByRole("button", { name: "End playback" }));
+    expect(mock.revalidate).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not load an empty stream selection", () => {
+    render(<WHEPPlayerPage />);
+    expect(
+      JSON.parse(screen.getByTestId("stream-state").textContent ?? "{}")
+        .resource,
+    ).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Clear user" }));
+    fireEvent.click(screen.getByRole("button", { name: "Load selected" }));
+    expect(mock.playerMounts).toHaveBeenCalledExactlyOnceWith(null);
+    expect(screen.getByTestId("player").textContent).toContain("no stream");
   });
 
   it.each([
-    ["loading", [], null, true],
+    ["ready", [{ owner: { userId: "u" } }], null, false],
+    ["loading", [{ owner: { userId: "stale" } }], null, true],
     ["refreshing", [{ owner: { userId: "u" } }], null, true],
-    ["retrying", [], "offline", true],
-    ["error", [], "offline", false],
+    ["retrying", [{ owner: { userId: "stale" } }], "offline", true],
+    ["error", [{ owner: { userId: "stale" } }], "offline", false],
   ] as const)(
     "maps the %s live-list status to the selector",
     (status, streams, error, streamsLoading) => {
@@ -180,7 +242,11 @@ describe("player page", () => {
       const state = JSON.parse(
         screen.getByTestId("stream-state").textContent ?? "{}",
       );
-      expect(state).toMatchObject({ streams, error, streamsLoading });
+      expect(state).toMatchObject({
+        streams: status === "ready" || status === "refreshing" ? streams : [],
+        error,
+        streamsLoading,
+      });
     },
   );
 });

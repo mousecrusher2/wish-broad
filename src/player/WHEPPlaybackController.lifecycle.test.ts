@@ -133,13 +133,56 @@ describe("playback lifecycle", () => {
 
   it("ignores blank loads and does not restart after disposal", () => {
     const controller = new WHEPPlaybackController();
+    controller.attachVideoElement(document.createElement("video"));
     controller.load("   ");
     expect(fake.sessions).toHaveLength(0);
+    const snapshots: Array<ReturnType<typeof createDefaultSnapshot>> = [];
+    controller.setSnapshotSubscriber((snapshot) => snapshots.push(snapshot));
+    expect(snapshots.at(-1)).toEqual(createDefaultSnapshot());
     controller.dispose();
     controller.attachVideoElement(document.createElement("video"));
     controller.load("user");
     controller.dispose();
     expect(fake.sessions).toHaveLength(0);
+  });
+
+  it("preserves a reconnecting state and schedules only one retry for repeated failures", async () => {
+    const controller = startController();
+    const first = getSession();
+    connected(first);
+    first.snapshot.status = "disconnected";
+    first.callbacks.onStatusChange("disconnected");
+    first.callbacks.onStatusChange("disconnected");
+    expect(Reflect.get(controller, "recoveryTimerId")).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fake.sessions).toHaveLength(2);
+    expect(first.dispose).toHaveBeenCalledOnce();
+    const snapshots: Array<ReturnType<typeof createDefaultSnapshot>> = [];
+    controller.setSnapshotSubscriber((snapshot) => snapshots.push(snapshot));
+    expect(snapshots.at(-1)?.playbackState).toMatchObject({
+      phase: "reconnecting",
+      retryCount: 1,
+    });
+    controller.dispose();
+  });
+
+  it("retries if a previously required inbound receiver disappears", async () => {
+    const controller = startController();
+    const first = getSession();
+    first.stats = [
+      [{ id: "video", kind: "video", bytesReceived: 5 }],
+      [{ id: "video", kind: "video", bytesReceived: 6 }],
+      [],
+      [],
+      [],
+    ];
+    connected(first);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(first.dispose).toHaveBeenCalledOnce();
+    expect(fake.sessions).toHaveLength(2);
+    controller.dispose();
   });
 
   it("classifies an absent initial stream as ended and other failures as errors", async () => {
@@ -346,6 +389,116 @@ describe("playback lifecycle", () => {
     await vi.advanceTimersByTimeAsync(31_000);
     expect(fake.sessions).toHaveLength(1);
     expect(Reflect.get(controller, "playbackMonitor")).toBeNull();
+    controller.dispose();
+  });
+
+  it("does not create a pending session after disconnecting before video attachment", () => {
+    const controller = new WHEPPlaybackController();
+    controller.load("user");
+    controller.disconnect();
+    controller.attachVideoElement(document.createElement("video"));
+    expect(fake.sessions).toHaveLength(0);
+    const snapshots: Array<ReturnType<typeof createDefaultSnapshot>> = [];
+    controller.setSnapshotSubscriber((snapshot) => snapshots.push(snapshot));
+    expect(snapshots.at(-1)).toEqual(createDefaultSnapshot());
+    controller.dispose();
+  });
+
+  it("keeps only the latest snapshot subscriber", () => {
+    const controller = new WHEPPlaybackController();
+    const oldSubscriber =
+      vi.fn<(snapshot: ReturnType<typeof createDefaultSnapshot>) => void>();
+    const currentSubscriber =
+      vi.fn<(snapshot: ReturnType<typeof createDefaultSnapshot>) => void>();
+    controller.setSnapshotSubscriber(oldSubscriber);
+    controller.setSnapshotSubscriber(currentSubscriber);
+    controller.unsetSnapshotSubscriber(oldSubscriber);
+    controller.load("user");
+    expect(oldSubscriber).toHaveBeenCalledOnce();
+    expect(currentSubscriber).toHaveBeenCalledTimes(2);
+    controller.unsetSnapshotSubscriber(currentSubscriber);
+    controller.disconnect();
+    expect(currentSubscriber).toHaveBeenCalledTimes(2);
+    controller.dispose();
+  });
+
+  it("updates a preconnection failure without treating it as an established stream", async () => {
+    const controller = startController();
+    const first = getSession();
+    const snapshots: Array<ReturnType<typeof createDefaultSnapshot>> = [];
+    controller.setSnapshotSubscriber((snapshot) => snapshots.push(snapshot));
+    first.snapshot.status = "failed";
+    first.callbacks.onStatusChange("failed");
+    expect(snapshots.at(-1)).toMatchObject({
+      playbackState: {
+        phase: "connecting",
+        connectionStatus: "failed",
+        resourceUserId: "user",
+      },
+    });
+    await vi.advanceTimersByTimeAsync(3_500);
+    expect(fake.sessions).toHaveLength(1);
+    controller.dispose();
+  });
+
+  it("expires repeated not-found retries as a stream end", async () => {
+    const controller = startController();
+    const first = getSession();
+    connected(first);
+    first.snapshot.status = "disconnected";
+    first.callbacks.onStatusChange("disconnected");
+    fake.results.push(
+      ...Array.from({ length: 40 }, () => ({
+        isErr: () => true,
+        error: new WHEPSessionError("gone", {
+          kind: "resource_not_found",
+          responseText: "gone",
+          stage: "post",
+        }),
+      })),
+    );
+    await vi.advanceTimersByTimeAsync(34_000);
+    const snapshots: Array<ReturnType<typeof createDefaultSnapshot>> = [];
+    controller.setSnapshotSubscriber((snapshot) => snapshots.push(snapshot));
+    expect(snapshots.at(-1)).toMatchObject({
+      isLoading: false,
+      playbackState: {
+        phase: "ended",
+        connectionStatus: "disconnected",
+        resourceUserId: "user",
+      },
+    });
+    expect(fake.sessions.length).toBeGreaterThan(2);
+    controller.dispose();
+  });
+
+  it("expires repeated transport failures as a playback error", async () => {
+    const controller = startController();
+    const first = getSession();
+    connected(first);
+    first.snapshot.status = "failed";
+    first.callbacks.onStatusChange("failed");
+    fake.results.push(
+      ...Array.from({ length: 40 }, () => ({
+        isErr: () => true,
+        error: new Error("temporary network failure"),
+      })),
+    );
+    await vi.advanceTimersByTimeAsync(34_000);
+    const snapshots: Array<ReturnType<typeof createDefaultSnapshot>> = [];
+    controller.setSnapshotSubscriber((snapshot) => snapshots.push(snapshot));
+    expect(snapshots.at(-1)).toMatchObject({
+      isLoading: false,
+      playbackState: {
+        phase: "error",
+        connectionStatus: "failed",
+        resourceUserId: "user",
+      },
+    });
+    expect(console.error).toHaveBeenCalledWith(
+      "WHEP playback failed:",
+      expect.objectContaining({ message: "WHEP reconnect window expired" }),
+    );
     controller.dispose();
   });
 });
