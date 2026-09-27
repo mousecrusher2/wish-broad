@@ -797,6 +797,7 @@ describe("worker app", () => {
 
   it("reports token exchange errors without looking up the member", async () => {
     const env = createBindings();
+    const errorLog = vi.spyOn(console, "error");
     discordMocks.exchangeCodeForToken.mockResolvedValue(
       err(
         new discordMocks.DiscordApiError("bad token", {
@@ -819,6 +820,13 @@ describe("worker app", () => {
     );
     expect(discordMocks.getGuildMember).not.toHaveBeenCalled();
     expect(discordMocks.revokeAccessToken).not.toHaveBeenCalled();
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "discord.login_token_exchange_failed",
+        errorKind: "http_error",
+        errorMessage: "bad token",
+      }),
+    );
   });
 
   it.each(["unauthorized", "forbidden", "not_found"] as const)(
@@ -853,6 +861,8 @@ describe("worker app", () => {
 
   it("reports unrelated Discord member failures as upstream errors and revokes the token", async () => {
     const env = createBindings();
+    const errorLog = vi.spyOn(console, "error");
+    const warning = vi.spyOn(console, "warn");
     discordMocks.getGuildMember.mockResolvedValue(
       err(
         new discordMocks.DiscordApiError("service error", {
@@ -877,6 +887,19 @@ describe("worker app", () => {
       "Discord login failed: Service unavailable",
     );
     expect(discordMocks.revokeAccessToken).toHaveBeenCalledOnce();
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "discord.login_member_check_failed",
+        errorKind: "not_found",
+        guildId: env.AUTHORIZED_GUILD_ID,
+      }),
+    );
+    expect(warning).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "discord.oauth_revoke_failed",
+        errorMessage: "revoke failed",
+      }),
+    );
   });
 
   it.each([
@@ -1095,6 +1118,39 @@ describe("worker app", () => {
 
     expect(response.status).toBe(504);
     expect(await response.text()).toBe("Failed to generate TURN credentials");
+  });
+
+  it("logs upstream TURN failures with the requesting user", async () => {
+    const env = createBindings();
+    const errorLog = vi.spyOn(console, "error");
+    turnMocks.generateTurnIceServers.mockResolvedValue(
+      err(
+        Object.assign(new Error("Cloudflare unavailable"), {
+          endpoint:
+            "https://rtc.live.cloudflare.com/v1/turn/keys/key/credentials/generate-ice-servers",
+          kind: "request_failed",
+        }),
+      ),
+    );
+    const response = await app.fetch(
+      new Request("http://localhost/api/turn-credentials", {
+        headers: {
+          Cookie: await createAuthCookie(env, { userId: "viewer-1" }),
+        },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(502);
+    expect(await response.text()).toBe("Failed to generate TURN credentials");
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "turn_credentials.generate_failed",
+        errorKind: "request_failed",
+        errorMessage: "Cloudflare unavailable",
+        userId: "viewer-1",
+      }),
+    );
   });
 
   it("rejects ingest when the bearer token does not match the stored hash", async () => {
