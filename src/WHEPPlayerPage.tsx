@@ -2,6 +2,7 @@ import { Suspense, useState } from "react";
 import { OBSStreamingInfo } from "./OBSStreamingInfo";
 import { StreamSelection } from "./components/StreamSelection";
 import { WHEPPlayer } from "./WHEPPlayer";
+import { nextPlayerLoadSequence } from "./player/next-player-load-sequence";
 import {
   createDefaultSnapshot,
   type WHEPPlaybackControllerSnapshot,
@@ -12,13 +13,10 @@ import {
   useSuspenseCurrentUser,
 } from "./api";
 
-type PlayerSelection =
-  | { kind: "idle" }
-  | {
-      kind: "selected";
-      resourceUserId: string;
-      loadSequence: number;
-    };
+type PlayerSelection = {
+  resourceUserId: string;
+  loadSequence: number;
+} | null;
 
 function CurrentUserGreeting() {
   const currentUserResult = useSuspenseCurrentUser();
@@ -70,10 +68,7 @@ function StreamSelectionPanel({
     liveStreamsState.status === "refreshing" ||
     liveStreamsState.status === "retrying";
   const streamsError =
-    liveStreamsState.status === "error" ||
-    liveStreamsState.status === "retrying"
-      ? liveStreamsState.error
-      : null;
+    "error" in liveStreamsState ? liveStreamsState.error : null;
 
   return (
     <StreamSelection
@@ -92,9 +87,7 @@ function StreamSelectionPanel({
 
 function WHEPPlayerPageContent() {
   const [resource, setResource] = useState("");
-  const [playerSelection, setPlayerSelection] = useState<PlayerSelection>({
-    kind: "idle",
-  });
+  const [playerSelection, setPlayerSelection] = useState<PlayerSelection>(null);
   const [isObsSettingsOpen, setIsObsSettingsOpen] = useState(false);
   const [playerSnapshot, setPlayerSnapshot] =
     useState<WHEPPlaybackControllerSnapshot>(createDefaultSnapshot);
@@ -107,18 +100,12 @@ function WHEPPlayerPageContent() {
 
   const handleLoadClick = () => {
     const trimmedResource = resource.trim();
-    if (trimmedResource.length === 0) {
-      return;
-    }
-
     setPlayerSelection((currentSelection) => ({
-      kind: "selected",
       resourceUserId: trimmedResource,
       // Loading the same stream again creates a fresh controller and session.
-      loadSequence:
-        currentSelection.kind === "selected"
-          ? currentSelection.loadSequence + 1
-          : 1,
+      loadSequence: currentSelection
+        ? nextPlayerLoadSequence(currentSelection.loadSequence)
+        : 1,
     }));
   };
 
@@ -140,8 +127,7 @@ function WHEPPlayerPageContent() {
   };
 
   const { isLoading, playbackState } = playerSnapshot;
-  const activePlayer =
-    playerSelection.kind === "selected" ? playerSelection : null;
+  const activePlayer = playerSelection;
   const playerMountId = activePlayer?.loadSequence ?? 0;
 
   return (

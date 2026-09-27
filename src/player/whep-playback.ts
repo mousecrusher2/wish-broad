@@ -71,16 +71,6 @@ export function createPlaybackState(
   connectionStatus: WHEPRecoveringConnectionStatus,
   retryCount: number,
 ): WHEPConnectingPlaybackState | WHEPReconnectingPlaybackState {
-  if (phase === "connecting") {
-    return {
-      connectionStatus,
-      hasStream: false,
-      phase,
-      resourceUserId,
-      retryCount,
-    };
-  }
-
   return {
     connectionStatus,
     hasStream: false,

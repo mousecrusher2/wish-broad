@@ -44,11 +44,7 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function trimResponseBody(text: string | undefined): string | undefined {
-  if (!text) {
-    return undefined;
-  }
-
+function trimResponseBody(text: string): string | undefined {
   const normalized = text.replaceAll(/\s+/gu, " ").trim();
   if (normalized.length === 0) {
     return undefined;
@@ -70,19 +66,12 @@ function createWebhookMessageEndpoint(
   messageId: bigint,
 ): string {
   const url = new URL(webhookUrl);
-  let pathname = url.pathname;
-  while (pathname.endsWith("/")) {
-    pathname = pathname.slice(0, -1);
-  }
+  const pathname = url.pathname.replace(/\/+$/u, "");
   url.pathname = `${pathname}/messages/${messageId.toString()}`;
   return url.toString();
 }
 
 function parseMessageId(rawMessageId: unknown): bigint | null {
-  if (typeof rawMessageId === "bigint") {
-    return rawMessageId >= 0n ? rawMessageId : null;
-  }
-
   if (typeof rawMessageId === "number") {
     if (!Number.isInteger(rawMessageId) || rawMessageId < 0) {
       return null;

@@ -11,13 +11,9 @@ function hexToBytes(hex: string): Uint8Array {
     throw new Error("Invalid token hash");
   }
 
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let index = 0; index < bytes.length; index += 1) {
-    const byteOffset = index * 2;
-    bytes[index] = Number.parseInt(hex.slice(byteOffset, byteOffset + 2), 16);
-  }
-
-  return bytes;
+  return Uint8Array.from({ length: hex.length / 2 }, (_, index) =>
+    Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16),
+  );
 }
 
 async function importPepperKey(pepper: string): Promise<CryptoKey> {

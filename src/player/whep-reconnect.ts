@@ -52,7 +52,9 @@ export function resolveReconnectDisposition(
 
 export function shouldRecoverEstablishedSession(
   snapshot: WHEPSessionSnapshot,
-): boolean {
+): snapshot is WHEPSessionSnapshot & {
+  status: "disconnected" | "failed";
+} {
   return snapshot.status === "disconnected" || snapshot.status === "failed";
 }
 

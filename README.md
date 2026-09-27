@@ -97,6 +97,8 @@ pnpm run format:check
 pnpm build
 ```
 
+Mutation testing is available with `pnpm run test:mutation`. It runs Stryker across the frontend and Worker source and fails if the mutation score falls below 95%. Vitest is currently pinned to major version 4 because Stryker's Vitest runner does not yet correctly filter tests under Vitest 5 ([upstream compatibility fix](https://github.com/stryker-mutator/stryker-js/pull/6214)).
+
 After editing D1 migrations or `schema.sql`, run:
 
 ```sh

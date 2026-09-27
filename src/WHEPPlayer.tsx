@@ -79,11 +79,11 @@ export function WHEPPlayer({
       return;
     }
 
-    controller.load(trimmedResourceUserId);
+    void controller.load(trimmedResourceUserId);
   }, [controller, resourceUserId]);
 
   const videoRef = (videoElement: HTMLVideoElement | null) => {
-    controller.attachVideoElement(videoElement);
+    void controller.attachVideoElement(videoElement);
   };
 
   return (
