@@ -80,4 +80,66 @@ describe("hashed bearer authentication", () => {
     expect(token).toHaveBeenCalledOnce();
     expect(pepper).toHaveBeenCalledOnce();
   });
+
+  it("logs a malformed stored hash and denies the request", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { app, handler } = createApp({
+      pepper: "pepper",
+      token: "not-hex",
+      realm: "live",
+    });
+    const response = await app.request(
+      "/protected",
+      { headers: { authorization: "Bearer secret" } },
+      { LOG_LEVEL: "info" },
+    );
+    expect(response.status).toBe(401);
+    expect(response.headers.get("WWW-Authenticate")).toBe(
+      'Bearer realm="live"',
+    );
+    expect(handler).not.toHaveBeenCalled();
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "bearer_token.verify_failed",
+        errorMessage: "Invalid token hash",
+        errorName: "Error",
+        level: "error",
+      }),
+    );
+  });
+
+  it("does not call the token resolver without a valid bearer header", async () => {
+    const token = vi.fn(async () => "unused");
+    const pepper = vi.fn(async () => "pepper");
+    const { app, handler } = createApp({ token, pepper });
+    for (const authorization of [
+      "basic secret",
+      "Bearer secret extra",
+      "Bearer\t",
+    ]) {
+      expect(
+        (await app.request("/protected", { headers: { authorization } }))
+          .status,
+      ).toBe(401);
+    }
+    expect(token).not.toHaveBeenCalled();
+    expect(pepper).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does not verify or log when no stored token exists", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const pepper = vi.fn(async () => "pepper");
+    const { app, handler } = createApp({ token: async () => null, pepper });
+    const response = await app.request(
+      "/protected",
+      { headers: { authorization: "Bearer secret" } },
+      { LOG_LEVEL: "info" },
+    );
+    expect(response.status).toBe(401);
+    expect(await response.text()).toBe("Unauthorized");
+    expect(pepper).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    expect(errorLog).not.toHaveBeenCalled();
+  });
 });

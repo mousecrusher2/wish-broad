@@ -648,10 +648,15 @@ describe("WHEP browser session", () => {
 
   it.each([
     ["new", "new", "stable", "connecting"],
+    ["new", "connected", "stable", "connecting"],
+    ["connecting", "connected", "stable", "connecting"],
     ["connecting", "checking", "stable", "connecting"],
+    ["disconnected", "connected", "stable", "connecting"],
     ["connected", "checking", "stable", "connecting"],
+    ["connected", "new", "stable", "connecting"],
     ["connected", "connected", "stable", "connected"],
     ["connected", "completed", "stable", "connected"],
+    ["connected", "closed", "stable", "disconnected"],
     ["connected", "disconnected", "stable", "disconnected"],
     ["connected", "failed", "stable", "failed"],
     ["failed", "connected", "stable", "failed"],

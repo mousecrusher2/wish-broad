@@ -173,6 +173,76 @@ describe("worker turn credentials", () => {
     expect(result._unsafeUnwrap()).toEqual([{ urls: ["stun:host:3478"] }]);
   });
 
+  it("keeps nonempty username and credential on a string URL", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        iceServers: [
+          { urls: "turn:host:443", username: "viewer", credential: "secret" },
+        ],
+      }),
+    );
+    const result = await generateTurnIceServers(env, "user");
+    expect(result._unsafeUnwrap()).toEqual([
+      { urls: ["turn:host:443"], username: "viewer", credential: "secret" },
+    ]);
+  });
+
+  it("aborts a stalled TURN request after five seconds and clears its timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      let signal: AbortSignal | undefined;
+      vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+        signal = init?.signal ?? undefined;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+        });
+      });
+      const pending = generateTurnIceServers(env, "viewer");
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal?.aborted).toBe(true);
+      expect((await pending)._unsafeUnwrapErr()).toMatchObject({
+        kind: "request_timeout",
+        message: "TURN credential request timed out",
+        responseBody: "Aborted",
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports schema issues and the original invalid response", async () => {
+    const body = { iceServers: [{ urls: 42 }] };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json(body));
+    const result = await generateTurnIceServers(env, "viewer");
+    const error = result._unsafeUnwrapErr();
+    expect(error.message).toBe("TURN credential response schema was invalid");
+    expect(error.responseBody).toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({ message: expect.any(String) }),
+      ]),
+      responseBody: body,
+    });
+  });
+
+  it("reports invalid JSON with the parse error details", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("not-json", { status: 200, statusText: "OK" }),
+    );
+    const result = await generateTurnIceServers(env, "viewer");
+    expect(result._unsafeUnwrapErr()).toMatchObject({
+      kind: "invalid_response_json",
+      message: "TURN credential response was not valid JSON",
+      responseBody: expect.any(String),
+      statusText: "OK",
+    });
+  });
+
   it.each([
     [new Error("offline"), "request_failed", "offline"],
     ["offline", "request_failed", "offline"],
