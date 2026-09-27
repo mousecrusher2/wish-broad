@@ -901,6 +901,23 @@ describe("worker app", () => {
     );
   });
 
+  it.each(["/api/me", "/play/streamer-1"])(
+    "rejects unauthenticated access to %s",
+    async (path) => {
+      const env = createBindings();
+      const errorLog = vi.spyOn(console, "error");
+      const response = await app.fetch(
+        new Request(`http://localhost${path}`),
+        env,
+        createExecutionContext(),
+      );
+      expect(response.status).toBe(401);
+      expect(errorLog).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event: "worker.unhandled_error" }),
+      );
+    },
+  );
+
   it("returns the authenticated user's identity without exposing the JWT", async () => {
     const env = createBindings();
     const response = await app.fetch(
@@ -1405,6 +1422,20 @@ describe("worker app", () => {
     expect(callsMocks.startIngest).not.toHaveBeenCalled();
   });
 
+  it("rejects ingest when Content-Type is absent", async () => {
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1", {
+        headers: { Authorization: "Bearer live-token" },
+        method: "POST",
+      }),
+      createBindings(),
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(415);
+    expect(await response.text()).toBe("Content-Type must be application/sdp");
+    expect(callsMocks.startIngest).not.toHaveBeenCalled();
+  });
+
   it("rejects an ingest request with a missing SDP body", async () => {
     const env = createBindings();
     const response = await app.fetch(
@@ -1631,6 +1662,53 @@ describe("worker app", () => {
     expect(
       notificationsMocks.deleteLiveStartedNotification,
     ).toHaveBeenCalledWith(env, 1n);
+  });
+
+  it("warns when only one of several publisher tracks fails to close", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const warning = vi.spyOn(console, "warn");
+    dbMocks.getLive.mockResolvedValue({
+      notificationMessageId: null,
+      sessionId: "session-1",
+      tracks: [
+        {
+          location: "remote",
+          mid: "0",
+          sessionId: "session-1",
+          trackName: "video",
+        },
+        {
+          location: "remote",
+          mid: "1",
+          sessionId: "session-1",
+          trackName: "audio",
+        },
+      ],
+      userId: "user-1",
+    });
+    callsMocks.closeTracks.mockResolvedValue(
+      ok({
+        tracks: [{ mid: "0" }, { mid: "1", errorCode: "failed_to_close" }],
+      }),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1/session-1", {
+        headers: { Authorization: "Bearer live-token" },
+        method: "DELETE",
+      }),
+      env,
+      execution.context,
+    );
+    expect(response.status).toBe(200);
+    await Promise.all(execution.waitUntilPromises);
+    expect(warning).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "track_close.sfu_errors",
+        sessionId: "session-1",
+      }),
+    );
   });
 
   it("logs a failed notification deletion after removing an ingest session", async () => {

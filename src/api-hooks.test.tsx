@@ -106,6 +106,9 @@ describe("API hooks", () => {
     expect(current.result.current).toEqual({ status: "loading" });
     const suspense = renderHook(() => useSuspenseCurrentUser());
     expect(suspense.result.current.isErr()).toBe(true);
+    expect(suspense.result.current._unsafeUnwrapErr().message).toBe(
+      "Current user is unavailable",
+    );
     expect(swr.options.get("current-user")).toMatchObject({ suspense: true });
     swr.data.set("current-user", ok(user));
     current.rerender();
@@ -147,6 +150,10 @@ describe("API hooks", () => {
       error: expect.objectContaining({ message: "HTTP error! status: 503" }),
     });
     expect(await fetcher()).toMatchObject({ error: expect.any(SyntaxError) });
+    expect(console.error).toHaveBeenCalledWith(
+      "Failed to fetch token status:",
+      expect.any(SyntaxError),
+    );
     expect(await fetcher()).toMatchObject({
       error: expect.objectContaining({
         message: "Unexpected live token response",
@@ -158,6 +165,10 @@ describe("API hooks", () => {
     expect(await fetcher()).toMatchObject({
       error: expect.objectContaining({ message: "offline" }),
     });
+    expect(console.error).toHaveBeenCalledWith(
+      "Failed to fetch token status:",
+      expect.objectContaining({ message: "offline" }),
+    );
     expect(fetchSpy).toHaveBeenCalledWith("/api/me/livetoken", {
       method: "GET",
       credentials: "include",
@@ -375,6 +386,10 @@ describe("API hooks", () => {
     expect(result?.isErr()).toBe(true);
     if (error === null) {
       expect(hook.result.current.error).toEqual(expect.any(String));
+      expect(console.error).toHaveBeenCalledWith(
+        "Failed to create token:",
+        expect.any(SyntaxError),
+      );
     } else {
       expect(hook.result.current.error).toBe(error);
     }
@@ -382,5 +397,26 @@ describe("API hooks", () => {
       expect.objectContaining({ error: expect.any(Error) }),
       { revalidate: false },
     );
+  });
+
+  it("logs a token creation transport failure and retains its message", async () => {
+    const failure = new TypeError("network offline");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(failure));
+    swr.mutate.mockResolvedValue(undefined);
+    const hook = renderHook(() => useLiveToken());
+    let result:
+      Awaited<ReturnType<typeof hook.result.current.createToken>> | undefined;
+    await act(async () => {
+      result = await hook.result.current.createToken();
+    });
+    expect(result?.isErr()).toBe(true);
+    expect(hook.result.current.error).toBe("network offline");
+    expect(console.error).toHaveBeenCalledWith(
+      "Failed to create token:",
+      failure,
+    );
+    expect(swr.mutate).toHaveBeenCalledWith(err(failure), {
+      revalidate: false,
+    });
   });
 });
