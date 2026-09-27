@@ -1423,6 +1423,25 @@ describe("worker app", () => {
     expect(callsMocks.startIngest).not.toHaveBeenCalled();
   });
 
+  it("rejects an ingest request with whitespace-only SDP", async () => {
+    const env = createBindings();
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1", {
+        body: "  \n ",
+        headers: {
+          Authorization: "Bearer live-token",
+          "Content-Type": "application/sdp",
+        },
+        method: "POST",
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("SDP offer is required");
+    expect(callsMocks.startIngest).not.toHaveBeenCalled();
+  });
+
   it("returns SFU client errors for invalid ingest offers", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
@@ -1564,6 +1583,7 @@ describe("worker app", () => {
   it("closes publisher tracks before deleting an ingest session", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
+    const warning = vi.spyOn(console, "warn");
     const tracks: StoredTrack[] = [
       {
         location: "remote",
@@ -1598,6 +1618,10 @@ describe("worker app", () => {
     expect(execution.waitUntilPromises).toHaveLength(2);
 
     await Promise.all(execution.waitUntilPromises);
+
+    expect(warning).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "track_close.sfu_errors" }),
+    );
 
     expect(callsMocks.closeTracks).toHaveBeenCalledWith(
       env,
@@ -1746,6 +1770,9 @@ describe("worker app", () => {
     );
     expect(response.status).toBe(200);
     await Promise.all(execution.waitUntilPromises);
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).not.toHaveBeenCalled();
     expect(warning).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "track_close.failed",
@@ -1762,6 +1789,7 @@ describe("worker app", () => {
     async (kind) => {
       const env = createBindings();
       const execution = createObservedExecutionContext();
+      const warning = vi.spyOn(console, "warn");
 
       dbMocks.getLive.mockResolvedValue({
         notificationMessageId: 1n,
@@ -1805,6 +1833,10 @@ describe("worker app", () => {
       );
 
       await Promise.all(execution.waitUntilPromises);
+
+      expect(warning).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event: "track_close.failed" }),
+      );
 
       expect(
         notificationsMocks.deleteLiveStartedNotification,
@@ -2015,26 +2047,78 @@ describe("worker app", () => {
     ).toHaveBeenCalledWith(env, 1n);
   });
 
-  it("returns 400 for an empty WHEP offer", async () => {
-    const env = createBindings();
+  it.each(["inactive", "missing_during_play"] as const)(
+    "logs failed notification cleanup when playback is %s",
+    async (reason) => {
+      const env = createBindings();
+      const execution = createObservedExecutionContext();
+      const warning = vi.spyOn(console, "warn");
+      dbMocks.getLive.mockResolvedValue({
+        notificationMessageId: 11n,
+        sessionId: "live-session",
+        tracks: [
+          {
+            location: "remote",
+            mid: "0",
+            sessionId: "live-session",
+            trackName: "video",
+          },
+        ],
+        userId: "streamer-1",
+      });
+      notificationsMocks.deleteLiveStartedNotification.mockResolvedValue(
+        err(new Error("Discord offline")),
+      );
+      if (reason === "inactive") {
+        callsMocks.isSessionActive.mockResolvedValue(ok(false));
+      } else {
+        callsMocks.startPlay.mockResolvedValue(
+          err(
+            new SfuApiError("gone", {
+              endpoint: "/tracks/new",
+              kind: "session_not_found",
+            }),
+          ),
+        );
+      }
+      const response = await requestPlayOffer(env, execution.context);
+      expect(response.status).toBe(404);
+      await Promise.all(execution.waitUntilPromises);
+      expect(warning).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "live_notification.delete_failed",
+          errorMessage: "Discord offline",
+          messageId: 11n,
+          sessionId: "live-session",
+          userId: "streamer-1",
+        }),
+      );
+    },
+  );
 
-    const response = await app.fetch(
-      new Request("http://localhost/play/streamer-1", {
-        body: "",
-        headers: {
-          Cookie: await createAuthCookie(env),
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      createExecutionContext(),
-    );
+  it.each(["", "   "])(
+    "returns 400 for an empty WHEP offer %s",
+    async (body) => {
+      const env = createBindings();
 
-    expect(response.status).toBe(400);
-    expect(await response.text()).toBe("SDP offer is required");
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
-  });
+      const response = await app.fetch(
+        new Request("http://localhost/play/streamer-1", {
+          body,
+          headers: {
+            Cookie: await createAuthCookie(env),
+            "Content-Type": "application/sdp",
+          },
+          method: "POST",
+        }),
+        env,
+        createExecutionContext(),
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe("SDP offer is required");
+      expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns 204 for GET on the WHEP endpoint", async () => {
     const env = createBindings();
@@ -2339,26 +2423,29 @@ describe("worker app", () => {
     );
   });
 
-  it("returns 400 for an empty renegotiation SDP answer", async () => {
-    const env = createBindings();
+  it.each(["", "   "])(
+    "returns 400 for an empty renegotiation SDP answer %s",
+    async (body) => {
+      const env = createBindings();
 
-    const response = await app.fetch(
-      new Request("http://localhost/play/streamer-1/viewer-session", {
-        body: "",
-        headers: {
-          Cookie: await createAuthCookie(env),
-          "Content-Type": "application/sdp",
-        },
-        method: "PATCH",
-      }),
-      env,
-      createExecutionContext(),
-    );
+      const response = await app.fetch(
+        new Request("http://localhost/play/streamer-1/viewer-session", {
+          body,
+          headers: {
+            Cookie: await createAuthCookie(env),
+            "Content-Type": "application/sdp",
+          },
+          method: "PATCH",
+        }),
+        env,
+        createExecutionContext(),
+      );
 
-    expect(response.status).toBe(400);
-    expect(await response.text()).toBe("SDP answer is required");
-    expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe("SDP answer is required");
+      expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects WHEP answers when Content-Type is not application/sdp", async () => {
     const env = createBindings();

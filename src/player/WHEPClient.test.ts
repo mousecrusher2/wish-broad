@@ -374,6 +374,7 @@ describe("WHEP browser session", () => {
     const { session, pc } = createSession();
     pc.iceGatheringState = "gathering";
     const abort = new AbortController();
+    const removePeerListener = vi.spyOn(pc, "removeEventListener");
     const starting = session.start(abort.signal);
     await vi.waitFor(() =>
       expect(pc.setLocalDescription).toHaveBeenCalledOnce(),
@@ -381,6 +382,16 @@ describe("WHEP browser session", () => {
     abort.abort();
     expect((await starting).isOk()).toBe(true);
     expect(fetchSpy).not.toHaveBeenCalled();
+    for (const event of [
+      "icegatheringstatechange",
+      "connectionstatechange",
+      "signalingstatechange",
+    ]) {
+      expect(removePeerListener).toHaveBeenCalledWith(
+        event,
+        expect.any(Function),
+      );
+    }
     await session.dispose();
   });
 
@@ -394,13 +405,25 @@ describe("WHEP browser session", () => {
     );
     const { session, pc } = createSession();
     pc.iceGatheringState = "gathering";
-    const starting = session.start(new AbortController().signal);
+    const abort = new AbortController();
+    const removePeerListener = vi.spyOn(pc, "removeEventListener");
+    const starting = session.start(abort.signal);
     await vi.waitFor(() =>
       expect(pc.setLocalDescription).toHaveBeenCalledOnce(),
     );
     pc.iceGatheringState = "complete";
     pc.dispatchEvent(new Event("icegatheringstatechange"));
     expect((await starting).isOk()).toBe(true);
+    for (const event of [
+      "icegatheringstatechange",
+      "connectionstatechange",
+      "signalingstatechange",
+    ]) {
+      expect(removePeerListener).toHaveBeenCalledWith(
+        event,
+        expect.any(Function),
+      );
+    }
     await session.dispose();
   });
 

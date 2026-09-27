@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { StrictMode } from "react";
 import { createDefaultPlaybackState } from "./player/whep-playback";
 
 const controllers = vi.hoisted(() => ({
@@ -118,6 +119,8 @@ describe("WHEP player view", () => {
     const video = screen.getByLabelText(
       "ライブ配信プレイヤー",
     ) as HTMLVideoElement;
+    expect(video.parentElement?.className).toContain("rounded-[1.75rem]");
+    expect(video.parentElement?.className).toContain("bg-black/70");
     expect(video.controls).toBe(true);
     expect(video.className).toContain("opacity-100");
     expect(screen.queryByText("映像を待機中...")).toBeNull();
@@ -140,5 +143,40 @@ describe("WHEP player view", () => {
         />,
       ),
     ).toThrow("WHEPPlayer resource changed without remounting");
+  });
+
+  it("retains the controller across Strict Mode effect replay", async () => {
+    const view = render(
+      <StrictMode>
+        <WHEPPlayer
+          resourceUserId="user"
+          snapshot={snapshot}
+          onSnapshotChange={vi.fn()}
+        />
+      </StrictMode>,
+    );
+    const controller = controllers.instances.find(
+      (instance) => instance.setSnapshotSubscriber.mock.calls.length > 0,
+    );
+    expect(controller?.setSnapshotSubscriber).toHaveBeenCalledTimes(2);
+    expect(controller?.unsetSnapshotSubscriber).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    expect(controller?.dispose).not.toHaveBeenCalled();
+    view.unmount();
+    await Promise.resolve();
+    expect(controller?.dispose).toHaveBeenCalledOnce();
+    expect(controller?.attachVideoElement).toHaveBeenLastCalledWith(null);
+  });
+
+  it("does not load a blank resource identifier", () => {
+    render(
+      <WHEPPlayer
+        resourceUserId="  "
+        snapshot={snapshot}
+        onSnapshotChange={vi.fn()}
+      />,
+    );
+    expect(controllers.instances[0]?.load).not.toHaveBeenCalled();
+    expect(controllers.instances[0]?.disconnect).not.toHaveBeenCalled();
   });
 });

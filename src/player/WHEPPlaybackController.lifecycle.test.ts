@@ -357,6 +357,44 @@ describe("playback lifecycle", () => {
     controller.dispose();
   });
 
+  it("resets retry state once the replacement session connects", async () => {
+    const controller = startController();
+    const first = getSession();
+    const snapshots: Array<ReturnType<typeof createDefaultSnapshot>> = [];
+    controller.setSnapshotSubscriber((snapshot) => snapshots.push(snapshot));
+    connected(first, true);
+    first.snapshot.status = "disconnected";
+    first.callbacks.onStatusChange("disconnected");
+    expect(snapshots.at(-1)?.playbackState).toEqual({
+      connectionStatus: "disconnected",
+      hasStream: false,
+      phase: "reconnecting",
+      resourceUserId: "user",
+      retryCount: 0,
+    });
+    await vi.advanceTimersByTimeAsync(3_001);
+    const second = getSession(1);
+    expect(snapshots.at(-1)?.playbackState).toEqual({
+      connectionStatus: "connecting",
+      hasStream: false,
+      phase: "reconnecting",
+      resourceUserId: "user",
+      retryCount: 1,
+    });
+    connected(second, true);
+    expect(snapshots.at(-1)?.playbackState).toEqual({
+      connectionStatus: "connected",
+      hasStream: true,
+      phase: "connected",
+      resourceUserId: "user",
+      retryCount: 0,
+    });
+    expect(Reflect.get(controller, "reconnectDeadlineAt")).toBeNull();
+    expect(Reflect.get(controller, "reconnectTimerId")).toBeNull();
+    expect(first.dispose).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
   it("retries when inbound receivers never appear", async () => {
     const controller = startController();
     const first = getSession();
