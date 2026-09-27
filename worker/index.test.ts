@@ -492,6 +492,48 @@ describe("worker app", () => {
     );
   });
 
+  it("records the authenticated user and ingest session in request logs", async () => {
+    const env = createBindings();
+    const info = vi.spyOn(console, "info");
+    const ingest = await app.fetch(
+      new Request("http://localhost/ingest/user-1/session-1", {
+        headers: { Authorization: "Bearer live-token" },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    expect(ingest.status).toBe(204);
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ingest.request",
+        sessionId: "session-1",
+        userId: "user-1",
+      }),
+    );
+
+    const cookie = await createAuthCookie(env, { userId: "viewer-1" });
+    const play = await app.fetch(
+      new Request("http://localhost/play/streamer-1", {
+        headers: { Cookie: cookie },
+      }),
+      env,
+      createExecutionContext(),
+    );
+    const api = await app.fetch(
+      new Request("http://localhost/api/me", { headers: { Cookie: cookie } }),
+      env,
+      createExecutionContext(),
+    );
+    expect(play.status).toBe(204);
+    expect(api.status).toBe(200);
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "play.request", userId: "viewer-1" }),
+    );
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "api.request", userId: "viewer-1" }),
+    );
+  });
+
   it("redirects to Discord when login starts", async () => {
     const env = createBindings();
 
@@ -2666,6 +2708,72 @@ describe("worker app", () => {
     expect(response.status).toBe(404);
     expect(await response.text()).toBe("Live stream not found: streamer-1");
   });
+
+  it("returns a missing live without checking or deleting an absent stored session", async () => {
+    const env = createBindings();
+    callsMocks.startPlay.mockResolvedValue(
+      err(new LiveNotFoundError("streamer-1")),
+    );
+    const response = await requestPlayOffer(env);
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe("Live stream not found: streamer-1");
+    expect(callsMocks.isSessionActive).not.toHaveBeenCalled();
+    expect(callsMocks.startPlay).toHaveBeenCalledWith(
+      env,
+      "streamer-1",
+      [],
+      "viewer-offer",
+    );
+    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).not.toHaveBeenCalled();
+  });
+
+  it.each(["inactive", "missing_during_play"] as const)(
+    "does not delete a notification when the %s live row was replaced",
+    async (reason) => {
+      const env = createBindings();
+      const execution = createObservedExecutionContext();
+      dbMocks.getLive.mockResolvedValue({
+        notificationMessageId: 17n,
+        sessionId: "live-session",
+        tracks: [
+          {
+            location: "remote",
+            mid: "0",
+            sessionId: "live-session",
+            trackName: "video",
+          },
+        ],
+        userId: "streamer-1",
+      });
+      dbMocks.deleteLiveForSession.mockResolvedValue(false);
+      if (reason === "inactive") {
+        callsMocks.isSessionActive.mockResolvedValue(ok(false));
+      } else {
+        callsMocks.startPlay.mockResolvedValue(
+          err(
+            new SfuApiError("gone", {
+              endpoint: "/tracks/new",
+              kind: "session_not_found",
+            }),
+          ),
+        );
+      }
+      const response = await requestPlayOffer(env, execution.context);
+      expect(response.status).toBe(404);
+      expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
+        env.LIVE_DB,
+        "streamer-1",
+        "live-session",
+      );
+      expect(
+        notificationsMocks.deleteLiveStartedNotification,
+      ).not.toHaveBeenCalled();
+      expect(execution.waitUntilPromises).toHaveLength(0);
+    },
+  );
 
   it("maps SFU playback service failure to a server error", async () => {
     const env = createBindings();

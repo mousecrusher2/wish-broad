@@ -282,6 +282,32 @@ describe("WHEP browser session", () => {
     },
   );
 
+  it.each([
+    [
+      new Response("answer", {
+        status: 201,
+        headers: { location: "/play/user/session-1" },
+      }),
+      "Unexpected WHEP SDP response content type",
+    ],
+    [answer(" \n\t ", 201), "Empty SDP response"],
+  ])(
+    "rejects a missing media type or whitespace SDP (%s)",
+    async (response, message) => {
+      vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(response));
+      const { session, pc } = createSession();
+      const result = await session.start(new AbortController().signal);
+      expect(result._unsafeUnwrapErr()).toMatchObject({
+        kind: "invalid_sdp_response",
+        message,
+        retryable: false,
+        responseText: undefined,
+        stage: "post",
+      });
+      expect(pc.setRemoteDescription).not.toHaveBeenCalled();
+    },
+  );
+
   it("maps valid inbound RTP stats to receiver MIDs", async () => {
     const { session, pc } = createSession();
     const video = new FakeTrack("track-video");
