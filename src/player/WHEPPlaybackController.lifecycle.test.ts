@@ -438,6 +438,38 @@ describe("playback lifecycle", () => {
     controller.dispose();
   });
 
+  it("reconnects when audio stalls even while video continues advancing", async () => {
+    const controller = startController();
+    const first = getSession();
+    first.snapshot.expectedRemoteTrackCount = 2;
+    first.stats = Array.from({ length: 6 }, (_, tick) => [
+      { id: "video", kind: "video", bytesReceived: tick * 100 },
+      { id: "audio", kind: "audio", bytesReceived: 5 },
+    ]);
+    connected(first);
+    await vi.advanceTimersByTimeAsync(4_001);
+    expect(first.statsRequests).toBeGreaterThanOrEqual(4);
+    expect(first.dispose).toHaveBeenCalledOnce();
+    expect(fake.sessions).toHaveLength(2);
+    controller.dispose();
+  });
+
+  it("resets the stall window when each receiver resumes before the timeout", async () => {
+    const controller = startController();
+    const first = getSession();
+    first.snapshot.expectedRemoteTrackCount = 2;
+    first.stats = Array.from({ length: 9 }, (_, tick) => [
+      { id: "video", kind: "video", bytesReceived: tick * 10 },
+      { id: "audio", kind: "audio", bytesReceived: Math.floor(tick / 3) * 10 },
+    ]);
+    connected(first);
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(first.statsRequests).toBe(8);
+    expect(first.dispose).not.toHaveBeenCalled();
+    expect(fake.sessions).toHaveLength(1);
+    controller.dispose();
+  });
+
   it("does not overlap inbound receiver polls while one request is pending", async () => {
     let finishStats:
       | ((
