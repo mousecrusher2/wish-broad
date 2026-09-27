@@ -561,6 +561,32 @@ describe("playback lifecycle", () => {
     controller.dispose();
   });
 
+  it("pauses an established receiver's stall timer while the page is hidden", async () => {
+    const visibility = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockReturnValue("visible");
+    const controller = startController();
+    const first = getSession();
+    first.stats = Array.from({ length: 8 }, () => [
+      { id: "video", kind: "video", bytesReceived: 42 },
+    ]);
+    connected(first);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(first.statsRequests).toBe(2);
+    visibility.mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(first.statsRequests).toBe(2);
+    expect(first.dispose).not.toHaveBeenCalled();
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(2_001);
+    expect(first.statsRequests).toBe(4);
+    expect(first.dispose).toHaveBeenCalledOnce();
+    expect(fake.sessions).toHaveLength(2);
+    controller.dispose();
+  });
+
   it("ignores stale session callbacks after loading a replacement", async () => {
     const controller = startController();
     const first = getSession();

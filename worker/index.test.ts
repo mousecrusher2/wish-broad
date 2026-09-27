@@ -2079,20 +2079,41 @@ describe("worker app", () => {
     expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
-  it("returns 500 when stored live track data is invalid on ingest delete", async () => {
+  it.each(
+    (
+      [
+        [],
+        [
+          {
+            location: "remote",
+            mid: "",
+            sessionId: "session-1",
+            trackName: "video",
+          },
+        ],
+        [
+          {
+            location: "remote",
+            mid: "0",
+            sessionId: "session-1",
+            trackName: "video",
+          },
+          {
+            location: "remote",
+            mid: "",
+            sessionId: "session-1",
+            trackName: "audio",
+          },
+        ],
+      ] as StoredTrack[][]
+    ).map((tracks) => ({ tracks })),
+  )("returns 500 for invalid stored live tracks %s", async ({ tracks }) => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
 
     dbMocks.getLive.mockResolvedValue({
       sessionId: "session-1",
-      tracks: [
-        {
-          location: "remote",
-          mid: "",
-          sessionId: "session-1",
-          trackName: "video",
-        },
-      ],
+      tracks,
       userId: "user-1",
     });
 

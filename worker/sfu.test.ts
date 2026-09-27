@@ -295,6 +295,17 @@ describe("Cloudflare Calls client", () => {
     );
   });
 
+  it("preserves a playback track request's HTTP failure classification", async () => {
+    queue(
+      reply({ sessionId: "viewer" }),
+      reply({ error: "invalid offer" }, 422),
+    );
+    await expectSfuFailure(
+      await startPlay(env, "live", [track], "offer"),
+      "unprocessable_content",
+    );
+  });
+
   it("propagates ingest track failures and invalid responses", async () => {
     queue(
       reply({ sessionId: "ingest" }),
@@ -322,6 +333,10 @@ describe("Cloudflare Calls client", () => {
     [
       { tracks: [{ trackName: "video", mid: "2" }] },
       "SFU response did not include SDP for playback",
+    ],
+    [
+      { sessionDescription: { type: "answer", sdp: "sdp" } },
+      "SFU response did not include playback tracks",
     ],
     [
       { sessionDescription: { type: "answer", sdp: "sdp" }, tracks: [] },

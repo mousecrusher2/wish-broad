@@ -765,6 +765,27 @@ describe("WHEP browser session", () => {
     },
   );
 
+  it("accepts one expected remote track as the minimum valid count", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          answer("remote-answer", 201, { "Wish-Live-Track-Count": "1" }),
+        ),
+    );
+    const { session, pc } = createSession();
+    expect((await session.start(new AbortController().signal)).isOk()).toBe(
+      true,
+    );
+    expect(pc.remoteDescription).toEqual({
+      type: "answer",
+      sdp: "remote-answer",
+    });
+    expect(session.getSnapshot().expectedRemoteTrackCount).toBe(1);
+    await session.dispose({ notifyServer: false });
+  });
+
   it("uses a relative session Location against the resource URL", async () => {
     const fetchSpy = vi
       .fn<typeof fetch>()
