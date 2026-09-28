@@ -53,20 +53,7 @@ function writeConsole(
   level: Exclude<LogLevel, "silent">,
   record: LogFields,
 ): void {
-  switch (level) {
-    case "debug":
-      console.debug(record);
-      break;
-    case "info":
-      console.info(record);
-      break;
-    case "warn":
-      console.warn(record);
-      break;
-    case "error":
-      console.error(record);
-      break;
-  }
+  console[level](record);
 }
 
 function writeLog(
@@ -88,6 +75,10 @@ function writeLog(
 
 export function logInfo(env: LogEnv, event: string, fields?: LogFields): void {
   writeLog(env, "info", event, fields);
+}
+
+export function logDebug(env: LogEnv, event: string, fields?: LogFields): void {
+  writeLog(env, "debug", event, fields);
 }
 
 export function logWarn(env: LogEnv, event: string, fields?: LogFields): void {

@@ -29,6 +29,8 @@ type WHEPSessionCallbacks = {
   onStreamChange?: (hasStream: boolean) => void;
 };
 
+type WHEPSessionHandlers = Required<WHEPSessionCallbacks>;
+
 type WHEPSessionRuntimeState =
   | { hasStream: false; status: "disconnected" }
   | { hasStream: false; status: "connecting" }
@@ -48,9 +50,9 @@ type WHEPSessionOptions = {
 };
 
 type ServerSessionState =
-  | { kind: "idle" }
   | { kind: "registering"; promise: Promise<WhepSessionResponse> }
-  | { kind: "registered"; location: string };
+  | { kind: "registered"; location: string }
+  | null;
 
 type WhepSessionResponse =
   | {
@@ -213,27 +215,25 @@ async function parseWhepSessionResponse(
   const expectedRemoteTrackCountHeader = response.headers.get(
     "Wish-Live-Track-Count",
   );
-  const parsedExpectedRemoteTrackCount =
-    expectedRemoteTrackCountHeader === null
-      ? null
-      : Number.parseInt(expectedRemoteTrackCountHeader, 10);
-  if (
-    expectedRemoteTrackCountHeader !== null &&
-    (!Number.isInteger(parsedExpectedRemoteTrackCount) ||
-      parsedExpectedRemoteTrackCount === null ||
-      parsedExpectedRemoteTrackCount < 1)
-  ) {
-    throw new WHEPSessionError("Invalid Wish-Live-Track-Count header", {
-      kind: "unexpected_response",
-      responseText: expectedRemoteTrackCountHeader,
-      retryable: false,
-      stage: "post",
-    });
+  let expectedRemoteTrackCount: number | null = null;
+  if (expectedRemoteTrackCountHeader !== null) {
+    const parsedExpectedRemoteTrackCount = Number.parseInt(
+      expectedRemoteTrackCountHeader,
+      10,
+    );
+    if (
+      !Number.isInteger(parsedExpectedRemoteTrackCount) ||
+      parsedExpectedRemoteTrackCount < 1
+    ) {
+      throw new WHEPSessionError("Invalid Wish-Live-Track-Count header", {
+        kind: "unexpected_response",
+        responseText: expectedRemoteTrackCountHeader,
+        retryable: false,
+        stage: "post",
+      });
+    }
+    expectedRemoteTrackCount = parsedExpectedRemoteTrackCount;
   }
-  const expectedRemoteTrackCount: number | null =
-    expectedRemoteTrackCountHeader === null
-      ? null
-      : parsedExpectedRemoteTrackCount;
   const sdp = await readSdpResponse(response);
 
   if (response.status === 406) {
@@ -314,7 +314,7 @@ async function waitForIceGatheringComplete(
 
 export class WHEPSession {
   private readonly abortController = new AbortController();
-  private readonly callbacks: WHEPSessionCallbacks;
+  private readonly callbacks: WHEPSessionHandlers;
   private readonly eventListenerCleanups: Array<() => void> = [];
   private readonly pc = new RTCPeerConnection({ bundlePolicy: "max-bundle" });
   private readonly remoteStream = new MediaStream();
@@ -329,7 +329,7 @@ export class WHEPSession {
   private maxRemoteTrackCount = 0;
   private runtimeState: WHEPSessionRuntimeState =
     createRuntimeState("disconnected");
-  private serverSession: ServerSessionState = { kind: "idle" };
+  private serverSession: ServerSessionState = null;
 
   constructor({
     callbacks = {},
@@ -341,7 +341,10 @@ export class WHEPSession {
       throw new Error("Resource user id is required");
     }
 
-    this.callbacks = callbacks;
+    this.callbacks = {
+      onStatusChange: callbacks.onStatusChange ?? (() => undefined),
+      onStreamChange: callbacks.onStreamChange ?? (() => undefined),
+    };
     this.resourceUserId = trimmedResourceUserId;
     this.videoElement = videoElement;
     this.videoElement.srcObject = this.remoteStream;
@@ -360,19 +363,12 @@ export class WHEPSession {
   private setStatus(nextStatus: WHEPConnectionStatus): void {
     const previousState = this.runtimeState;
     const nextState = createRuntimeState(nextStatus, previousState);
-    if (
-      previousState.status === nextState.status &&
-      previousState.hasStream === nextState.hasStream
-    ) {
-      return;
-    }
-
     this.runtimeState = nextState;
     if (previousState.status !== nextState.status) {
-      this.callbacks.onStatusChange?.(nextStatus);
+      this.callbacks.onStatusChange(nextStatus);
     }
     if (previousState.hasStream !== nextState.hasStream) {
-      this.callbacks.onStreamChange?.(nextState.hasStream);
+      this.callbacks.onStreamChange(nextState.hasStream);
     }
   }
 
@@ -386,7 +382,7 @@ export class WHEPSession {
     }
 
     this.runtimeState = { hasStream, status: "connected" };
-    this.callbacks.onStreamChange?.(hasStream);
+    this.callbacks.onStreamChange(hasStream);
   }
 
   getSnapshot(): WHEPSessionSnapshot {
@@ -431,7 +427,7 @@ export class WHEPSession {
           }
 
           const nextBytesReceived = readInboundReceiverBytes(report);
-          if (typeof nextBytesReceived === "number") {
+          if (nextBytesReceived !== null) {
             bytesReceived = nextBytesReceived;
           }
         });
@@ -519,12 +515,6 @@ export class WHEPSession {
 
     const nextStatus = this.deriveConnectionStatus();
     this.setStatus(nextStatus);
-
-    if (nextStatus === "failed" || nextStatus === "disconnected") {
-      this.setStreamState(false);
-      return;
-    }
-
     this.refreshStreamState();
   }
 
@@ -619,13 +609,8 @@ export class WHEPSession {
         return;
       }
 
-      this.attachRemoteTrackListeners(event.track);
       this.remoteStream.addTrack(event.track);
-
-      if (this.videoElement.srcObject !== this.remoteStream) {
-        this.videoElement.srcObject = this.remoteStream;
-      }
-
+      this.attachRemoteTrackListeners(event.track);
       this.refreshStreamState();
       void this.videoElement.play().catch((error: Error) => {
         console.warn("Autoplay failed:", error);
@@ -689,7 +674,8 @@ export class WHEPSession {
   }
 
   private cleanupRemoteTrack(track: MediaStreamTrack): void {
-    this.remoteTrackCleanups.get(track)?.();
+    const cleanup = this.remoteTrackCleanups.get(track) ?? (() => undefined);
+    cleanup();
   }
 
   private releaseLocalResources(): void {
@@ -706,7 +692,7 @@ export class WHEPSession {
   }
 
   private async deleteRegisteredSession(): Promise<void> {
-    if (this.serverSession.kind !== "registered") {
+    if (this.serverSession?.kind !== "registered") {
       return;
     }
 
@@ -737,7 +723,7 @@ export class WHEPSession {
     // a session before the abort reaches it, wait for the registration result so
     // the returned Location can still be DELETEd instead of leaking a Calls
     // playback session.
-    if (this.serverSession.kind === "registering") {
+    if (this.serverSession?.kind === "registering") {
       const registrationResult = await this.serverSession.promise.catch(
         () => null,
       );
@@ -815,12 +801,10 @@ export class WHEPSession {
         promise: registrationPromise,
       };
       const sessionResponse = await registrationPromise;
-      if (sessionResponse.expectedRemoteTrackCount !== null) {
-        // Custom Worker header: expected ingest track count. It lets the
-        // controller reject degraded playback that negotiates only a subset.
-        this.expectedRemoteTrackCount =
-          sessionResponse.expectedRemoteTrackCount;
-      }
+      // Custom Worker header: expected ingest track count. It lets the
+      // controller reject degraded playback that negotiates only a subset.
+      this.expectedRemoteTrackCount =
+        sessionResponse.expectedRemoteTrackCount ?? 0;
       this.serverSession = {
         kind: "registered",
         location: sessionResponse.sessionUrl.toString(),
@@ -830,56 +814,60 @@ export class WHEPSession {
         return ok(undefined);
       }
 
-      if (sessionResponse.kind === "accepted") {
-        await this.pc.setRemoteDescription(
-          new RTCSessionDescription({
-            type: "answer",
-            sdp: sessionResponse.sdp,
-          }),
-        );
-      } else {
-        await this.pc.setLocalDescription({ type: "rollback" });
-        await this.pc.setRemoteDescription(
-          new RTCSessionDescription({
-            type: "offer",
-            sdp: sessionResponse.sdp,
-          }),
-        );
-
-        const localAnswer = await this.pc.createAnswer();
-        await this.pc.setLocalDescription(localAnswer);
-        // This PATCH answers a WHEP 406 counter-offer. It is not a trickle ICE
-        // candidate PATCH, so gather the full answer before sending.
-        await waitForIceGatheringComplete(this.pc, signal);
-
-        const localAnswerSdp = this.pc.localDescription.sdp;
-        if (!localAnswerSdp) {
-          throw new Error("Failed to create local SDP answer");
-        }
-
-        const patchResponseResult = await fetch(sessionResponse.sessionUrl, {
-          method: "PATCH",
-          headers: {
-            Accept: "application/sdp",
-            "Content-Type": "application/sdp",
-          },
-          body: localAnswerSdp,
-          signal,
-        })
-          .then((response) => ok(response))
-          .catch((error: Error) => err(error));
-        if (patchResponseResult.isErr()) {
-          throw patchResponseResult.error;
-        }
-
-        const patchResponse = patchResponseResult.value;
-        if (patchResponse.status !== 204) {
-          throw await createResponseError(
-            patchResponse,
-            `Unexpected WHEP answer response: ${String(patchResponse.status)}`,
-            "patch",
+      switch (sessionResponse.kind) {
+        case "counterOffer": {
+          await this.pc.setLocalDescription({ type: "rollback" });
+          await this.pc.setRemoteDescription(
+            new RTCSessionDescription({
+              type: "offer",
+              sdp: sessionResponse.sdp,
+            }),
           );
+
+          const localAnswer = await this.pc.createAnswer();
+          await this.pc.setLocalDescription(localAnswer);
+          // This PATCH answers a WHEP 406 counter-offer. It is not a trickle ICE
+          // candidate PATCH, so gather the full answer before sending.
+          await waitForIceGatheringComplete(this.pc, signal);
+
+          const localAnswerSdp = this.pc.localDescription.sdp;
+          if (!localAnswerSdp) {
+            throw new Error("Failed to create local SDP answer");
+          }
+
+          const patchResponseResult = await fetch(sessionResponse.sessionUrl, {
+            method: "PATCH",
+            headers: {
+              Accept: "application/sdp",
+              "Content-Type": "application/sdp",
+            },
+            body: localAnswerSdp,
+            signal,
+          })
+            .then((response) => ok(response))
+            .catch((error: Error) => err(error));
+          if (patchResponseResult.isErr()) {
+            throw patchResponseResult.error;
+          }
+
+          const patchResponse = patchResponseResult.value;
+          if (patchResponse.status !== 204) {
+            throw await createResponseError(
+              patchResponse,
+              `Unexpected WHEP answer response: ${String(patchResponse.status)}`,
+              "patch",
+            );
+          }
+          break;
         }
+        case "accepted":
+          await this.pc.setRemoteDescription(
+            new RTCSessionDescription({
+              type: "answer",
+              sdp: sessionResponse.sdp,
+            }),
+          );
+          break;
       }
       return ok(undefined);
     };

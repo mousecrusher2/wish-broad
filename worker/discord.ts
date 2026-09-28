@@ -134,11 +134,7 @@ export class DiscordApiError extends Error {
   }
 }
 
-function trimResponseBody(text: string | undefined): string | undefined {
-  if (!text) {
-    return undefined;
-  }
-
+function trimResponseBody(text: string): string | undefined {
   const normalized = text.replaceAll(/\s+/gu, " ").trim();
   if (normalized.length === 0) {
     return undefined;
@@ -148,13 +144,8 @@ function trimResponseBody(text: string | undefined): string | undefined {
 }
 
 function looksLikeHtml(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  return (
-    normalized.startsWith("<!doctype html") ||
-    normalized.startsWith("<html") ||
-    normalized.startsWith("<body") ||
-    normalized.startsWith("<")
-  );
+  const normalized = text.trim();
+  return normalized.startsWith("<");
 }
 
 function createDiscordBasicAuthHeader(env: DiscordEnv): string {
@@ -209,12 +200,10 @@ async function fetchDiscordJson<TInput, TOutput>(
   const response = responseResult.value;
   const responseText = await response.text();
   let responseJson: unknown = undefined;
-  if (responseText.trim().length > 0) {
-    try {
-      responseJson = JSON.parse(responseText);
-    } catch {
-      responseJson = undefined;
-    }
+  try {
+    responseJson = JSON.parse(responseText);
+  } catch {
+    responseJson = undefined;
   }
 
   if (!response.ok) {
@@ -417,12 +406,10 @@ export async function revokeAccessToken(
 
   const responseText = await response.text();
   let responseJson: unknown = undefined;
-  if (responseText.trim().length > 0) {
-    try {
-      responseJson = JSON.parse(responseText);
-    } catch {
-      responseJson = undefined;
-    }
+  try {
+    responseJson = JSON.parse(responseText);
+  } catch {
+    responseJson = undefined;
   }
   return err(
     DiscordApiError.fromHttpFailure(

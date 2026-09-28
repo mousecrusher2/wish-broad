@@ -450,7 +450,6 @@ app.post("/play/:userId", async (c) => {
 
   const liveTrackRecord = await db.getLive(c.env.LIVE_DB, userId);
   const tracks = liveTrackRecord?.tracks ?? [];
-  let hasActiveSession = false;
   if (liveTrackRecord) {
     // Playback names one live owner, so this is the cheapest safe point to
     // reconcile stale D1 state with Calls without scanning every live row.
@@ -466,38 +465,36 @@ app.post("/play/:userId", async (c) => {
       });
       return c.text("Failed to verify live stream status", 502);
     }
-    hasActiveSession = isActiveResult.value;
-  }
-
-  if (liveTrackRecord && !hasActiveSession) {
-    const deleted = await db.deleteLiveForSession(
-      c.env.LIVE_DB,
-      userId,
-      liveTrackRecord.sessionId,
-    );
-    if (deleted) {
-      const notificationMessageId = liveTrackRecord.notificationMessageId;
-      if (
-        notificationMessageId !== null &&
-        notificationMessageId !== undefined
-      ) {
-        c.executionCtx.waitUntil(
-          deleteLiveStartedNotification(c.env, notificationMessageId).then(
-            (deleteResult) => {
-              if (deleteResult.isErr()) {
-                logWarn(c.env, "live_notification.delete_failed", {
-                  ...createErrorLogFields(deleteResult.error),
-                  messageId: notificationMessageId,
-                  sessionId: liveTrackRecord.sessionId,
-                  userId,
-                });
-              }
-            },
-          ),
-        );
+    if (!isActiveResult.value) {
+      const deleted = await db.deleteLiveForSession(
+        c.env.LIVE_DB,
+        userId,
+        liveTrackRecord.sessionId,
+      );
+      if (deleted) {
+        const notificationMessageId = liveTrackRecord.notificationMessageId;
+        if (
+          notificationMessageId !== null &&
+          notificationMessageId !== undefined
+        ) {
+          c.executionCtx.waitUntil(
+            deleteLiveStartedNotification(c.env, notificationMessageId).then(
+              (deleteResult) => {
+                if (deleteResult.isErr()) {
+                  logWarn(c.env, "live_notification.delete_failed", {
+                    ...createErrorLogFields(deleteResult.error),
+                    messageId: notificationMessageId,
+                    sessionId: liveTrackRecord.sessionId,
+                    userId,
+                  });
+                }
+              },
+            ),
+          );
+        }
       }
+      return c.text(`Live stream not found: ${userId}`, 404);
     }
-    return c.text(`Live stream not found: ${userId}`, 404);
   }
 
   if (!isSdpContentType(c.req.header("content-type"))) {

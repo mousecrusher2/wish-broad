@@ -11,7 +11,6 @@ import {
   getReconnectDelayMs,
   resolveReconnectDisposition,
   shouldReconnectForPlaybackStall,
-  shouldReconnectForTrackDiscoveryTimeout,
   shouldRecoverEstablishedSession,
 } from "./whep-reconnect";
 import {
@@ -21,15 +20,16 @@ import {
 } from "./whep-playback";
 
 type AttemptMode = WHEPReconnectAttemptMode;
+type AttemptId = symbol;
 
 type PendingAttempt = {
   abortController: AbortController;
-  attemptId: number;
+  attemptId: AttemptId;
   mode: AttemptMode;
+  resourceUserId: string;
 };
 
 type PlaybackMonitorState = {
-  attemptId: number;
   discoveryTimeoutId: number | null;
   expectedTrackCount: number;
   intervalId: number | null;
@@ -98,9 +98,9 @@ function createTerminalPlaybackState(
 
 export class WHEPPlaybackController {
   private attemptAbortController: AbortController | null = null;
-  private attemptId = 0;
+  private attemptId: AttemptId = Symbol("WHEP playback attempt");
   private disposed = false;
-  private loadingAttemptId: number | null = null;
+  private loadingAttemptId: AttemptId | null = null;
   private pendingAttempt: PendingAttempt | null = null;
   private playbackMonitor: PlaybackMonitorState | null = null;
   private reconnectDeadlineAt: number | null = null;
@@ -111,35 +111,33 @@ export class WHEPPlaybackController {
   private session: WHEPSession | null = null;
   private snapshot = createDefaultSnapshot();
   private snapshotSubscriber: SnapshotSubscriber | null = null;
-  private targetResourceUserId: string | null = null;
   private videoElement: HTMLVideoElement | null = null;
 
-  attachVideoElement(videoElement: HTMLVideoElement | null): void {
+  attachVideoElement(videoElement: HTMLVideoElement | null): Promise<void> {
     if (this.disposed) {
-      return;
+      return Promise.resolve();
     }
 
     this.videoElement = videoElement;
 
     if (!videoElement || this.pendingAttempt === null) {
-      return;
+      return Promise.resolve();
     }
 
     const pendingAttempt = this.pendingAttempt;
     this.pendingAttempt = null;
-    void this.startAttempt(pendingAttempt);
+    return this.startAttempt(pendingAttempt);
   }
 
-  load(resourceUserId: string): void {
+  load(resourceUserId: string): Promise<void> {
     const trimmedResourceUserId = resourceUserId.trim();
     if (trimmedResourceUserId.length === 0 || this.disposed) {
-      return;
+      return Promise.resolve();
     }
 
-    this.resetRuntime(false);
-    this.targetResourceUserId = trimmedResourceUserId;
+    this.resetRuntime();
 
-    const attempt = this.createAttempt("initial");
+    const attempt = this.createAttempt("initial", trimmedResourceUserId);
     this.loadingAttemptId = attempt.attemptId;
     this.updateSnapshot({
       isLoading: true,
@@ -151,11 +149,11 @@ export class WHEPPlaybackController {
       ),
     });
 
-    void this.startAttempt(attempt);
+    return this.startAttempt(attempt);
   }
 
   disconnect(): void {
-    this.resetRuntime(true);
+    this.resetRuntime();
     this.replaceSnapshot(createDefaultSnapshot());
   }
 
@@ -166,7 +164,7 @@ export class WHEPPlaybackController {
 
     this.disposed = true;
     this.snapshotSubscriber = null;
-    this.resetRuntime(true);
+    this.resetRuntime();
     this.videoElement = null;
   }
 
@@ -181,12 +179,15 @@ export class WHEPPlaybackController {
     }
   }
 
-  private bumpAttemptId(): number {
-    this.attemptId += 1;
+  private bumpAttemptId(): AttemptId {
+    this.attemptId = Symbol("WHEP playback attempt");
     return this.attemptId;
   }
 
-  private createAttempt(mode: AttemptMode): PendingAttempt {
+  private createAttempt(
+    mode: AttemptMode,
+    resourceUserId: string,
+  ): PendingAttempt {
     this.pendingAttempt = null;
     this.disposeSession();
 
@@ -196,23 +197,12 @@ export class WHEPPlaybackController {
       abortController,
       attemptId: this.bumpAttemptId(),
       mode,
+      resourceUserId,
     };
   }
 
-  private isActiveAttempt(attemptId: number): boolean {
-    return !this.disposed && this.attemptId === attemptId;
-  }
-
-  private isActiveSession(attemptId: number, session: WHEPSession): boolean {
-    return this.isActiveAttempt(attemptId) && this.session === session;
-  }
-
-  private canReconnect(): boolean {
-    return (
-      this.targetResourceUserId !== null &&
-      (this.snapshot.playbackState.phase === "connected" ||
-        this.snapshot.playbackState.phase === "reconnecting")
-    );
+  private isActiveSession(attemptId: AttemptId, session: WHEPSession): boolean {
+    return this.attemptId === attemptId && this.session === session;
   }
 
   private clearReconnectTimer(): void {
@@ -288,7 +278,7 @@ export class WHEPPlaybackController {
     this.updateSnapshot({ playbackState });
   }
 
-  private resetRuntime(clearTarget: boolean): void {
+  private resetRuntime(): void {
     this.bumpAttemptId();
     this.pendingAttempt = null;
     this.loadingAttemptId = null;
@@ -296,10 +286,6 @@ export class WHEPPlaybackController {
     this.clearRecoveryTimer();
     this.clearReconnectState();
     this.disposeSession();
-
-    if (clearTarget) {
-      this.targetResourceUserId = null;
-    }
 
     this.snapshot = {
       ...this.snapshot,
@@ -312,7 +298,7 @@ export class WHEPPlaybackController {
     resourceUserId: string,
     error?: Error,
   ): void {
-    this.resetRuntime(true);
+    this.resetRuntime();
     this.updateSnapshot({
       isLoading: false,
       playbackState: createTerminalPlaybackState(phase, resourceUserId),
@@ -339,21 +325,17 @@ export class WHEPPlaybackController {
 
     if (isNotFoundError(error)) {
       this.reconnectSawNotFound = true;
-      this.queueReconnect();
+      this.queueReconnect(resourceUserId);
       return;
     }
 
-    switch (resolveReconnectDisposition(error)) {
-      case "ended":
-        this.finalizePlayback("ended", resourceUserId);
-        break;
-      case "error":
-        this.finalizePlayback("error", resourceUserId, error);
-        break;
-      case "retry":
-        this.queueReconnect();
-        break;
+    if (resolveReconnectDisposition(error) === "error") {
+      this.finalizePlayback("error", resourceUserId, error);
+      return;
     }
+
+    // resource_not_found was handled above; remaining dispositions retry.
+    this.queueReconnect(resourceUserId);
   }
 
   private handleConnected(resourceUserId: string, session: WHEPSession): void {
@@ -370,13 +352,9 @@ export class WHEPPlaybackController {
   }
 
   private updateRecoveringPlaybackState(
+    resourceUserId: string,
     connectionStatus: "disconnected" | "failed",
   ): void {
-    const resourceUserId = this.targetResourceUserId;
-    if (resourceUserId === null) {
-      return;
-    }
-
     this.updatePlaybackState({
       connectionStatus,
       hasStream: false,
@@ -386,15 +364,13 @@ export class WHEPPlaybackController {
     });
   }
 
-  private queueReconnect(options?: { immediate?: boolean }): void {
-    if (!this.canReconnect() || this.targetResourceUserId === null) {
-      return;
-    }
-
+  private queueReconnect(
+    resourceUserId: string,
+    options?: { immediate?: boolean },
+  ): void {
     this.clearPlaybackMonitor();
     this.clearRecoveryTimer();
 
-    const resourceUserId = this.targetResourceUserId;
     const now = Date.now();
     if (this.reconnectDeadlineAt === null) {
       this.reconnectDeadlineAt = now + WHEP_RECONNECT_WINDOW_MS;
@@ -420,19 +396,11 @@ export class WHEPPlaybackController {
       retryCount: this.retryCount,
     });
 
-    if (this.reconnectTimerId !== null) {
-      return;
-    }
-
     const delayMs = options?.immediate
       ? 0
       : getReconnectDelayMs(this.retryCount, this.reconnectDeadlineAt - now);
     this.reconnectTimerId = window.setTimeout(() => {
       this.reconnectTimerId = null;
-
-      if (!this.canReconnect() || this.targetResourceUserId === null) {
-        return;
-      }
 
       const reconnectDeadlineAt = this.reconnectDeadlineAt;
       if (reconnectDeadlineAt === null || Date.now() >= reconnectDeadlineAt) {
@@ -447,63 +415,41 @@ export class WHEPPlaybackController {
       }
 
       this.retryCount += 1;
-      void this.startAttempt(this.createAttempt("retry"));
+      void this.startAttempt(this.createAttempt("retry", resourceUserId));
     }, delayMs);
   }
 
-  private startRecoveryTimer(attemptId: number, session: WHEPSession): void {
-    if (
-      !this.isActiveSession(attemptId, session) ||
-      this.recoveryTimerId !== null ||
-      this.reconnectTimerId !== null
-    ) {
-      return;
-    }
-
+  private startRecoveryTimer(
+    session: WHEPSession,
+    resourceUserId: string,
+  ): void {
     const sessionSnapshot = session.getSnapshot();
     if (!shouldRecoverEstablishedSession(sessionSnapshot)) {
       this.clearRecoveryTimer();
       return;
     }
-    if (
-      sessionSnapshot.status !== "disconnected" &&
-      sessionSnapshot.status !== "failed"
-    ) {
-      this.clearRecoveryTimer();
+    if (this.recoveryTimerId !== null || this.reconnectTimerId !== null) {
       return;
     }
 
     this.clearPlaybackMonitor();
-    this.updateRecoveringPlaybackState(sessionSnapshot.status);
+    this.updateRecoveringPlaybackState(resourceUserId, sessionSnapshot.status);
     this.recoveryTimerId = window.setTimeout(() => {
       this.recoveryTimerId = null;
 
-      if (!this.isActiveSession(attemptId, session)) {
-        return;
-      }
-
-      if (!shouldRecoverEstablishedSession(session.getSnapshot())) {
-        return;
-      }
-
       this.disposeSession();
-      this.queueReconnect({ immediate: true });
+      this.queueReconnect(resourceUserId, { immediate: true });
     }, WHEP_SESSION_RECOVERY_GRACE_MS);
   }
 
   private startPlaybackMonitor(
-    attemptId: number,
+    attemptId: AttemptId,
     session: WHEPSession,
     resourceUserId: string,
   ): void {
-    if (!this.isActiveSession(attemptId, session)) {
-      return;
-    }
-
     this.clearPlaybackMonitor();
 
     const playbackMonitor: PlaybackMonitorState = {
-      attemptId,
       discoveryTimeoutId: null,
       expectedTrackCount: Math.max(
         1,
@@ -541,10 +487,7 @@ export class WHEPPlaybackController {
     let pollInFlight = false;
 
     const startInterval = () => {
-      if (
-        this.playbackMonitor !== playbackMonitor ||
-        playbackMonitor.intervalId !== null
-      ) {
+      if (playbackMonitor.intervalId !== null) {
         return;
       }
 
@@ -552,10 +495,6 @@ export class WHEPPlaybackController {
     };
 
     const syncMonitor = () => {
-      if (this.playbackMonitor !== playbackMonitor) {
-        return;
-      }
-
       const shouldPoll = document.visibilityState === "visible";
 
       if (!shouldPoll) {
@@ -585,18 +524,10 @@ export class WHEPPlaybackController {
             return;
           }
 
-          if (
-            !shouldReconnectForTrackDiscoveryTimeout(
-              WHEP_TRACK_DISCOVERY_GRACE_MS,
-            )
-          ) {
-            return;
-          }
-
           this.clearPlaybackMonitor();
-          this.updateRecoveringPlaybackState("disconnected");
+          this.updateRecoveringPlaybackState(resourceUserId, "disconnected");
           this.disposeSession();
-          this.queueReconnect({ immediate: true });
+          this.queueReconnect(resourceUserId, { immediate: true });
         }, WHEP_TRACK_DISCOVERY_GRACE_MS);
       }
     };
@@ -604,13 +535,6 @@ export class WHEPPlaybackController {
     const initializeRequiredReceivers = (
       receiverStats: WHEPInboundReceiverStat[],
     ) => {
-      if (
-        this.playbackMonitor !== playbackMonitor ||
-        !this.isActiveSession(attemptId, session)
-      ) {
-        return;
-      }
-
       playbackMonitor.requiredReceiverIds = receiverStats.map(
         (stat) => stat.id,
       );
@@ -690,9 +614,9 @@ export class WHEPPlaybackController {
             }
 
             this.clearPlaybackMonitor();
-            this.updateRecoveringPlaybackState("disconnected");
+            this.updateRecoveringPlaybackState(resourceUserId, "disconnected");
             this.disposeSession();
-            this.queueReconnect({ immediate: true });
+            this.queueReconnect(resourceUserId, { immediate: true });
             return;
           }
         })
@@ -718,22 +642,18 @@ export class WHEPPlaybackController {
     abortController,
     attemptId,
     mode,
+    resourceUserId,
   }: PendingAttempt): Promise<void> {
-    if (
-      abortController.signal.aborted ||
-      this.attemptAbortController !== abortController ||
-      !this.isActiveAttempt(attemptId) ||
-      this.targetResourceUserId === null
-    ) {
-      return;
-    }
-
     if (this.videoElement === null) {
-      this.pendingAttempt = { abortController, attemptId, mode };
+      this.pendingAttempt = {
+        abortController,
+        attemptId,
+        mode,
+        resourceUserId,
+      };
       return;
     }
 
-    const resourceUserId = this.targetResourceUserId;
     const phase = mode === "retry" ? "reconnecting" : "connecting";
     let sessionWasConnected = false;
 
@@ -767,7 +687,7 @@ export class WHEPPlaybackController {
             return;
           }
 
-          this.startRecoveryTimer(attemptId, session);
+          this.startRecoveryTimer(session, resourceUserId);
         },
         onStreamChange: (hasStream) => {
           if (

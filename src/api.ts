@@ -354,7 +354,9 @@ export function useLiveToken() {
     overrideState ??
     (data?.isOk() ? data.value : null) ??
     ({ status: "loading" } satisfies LiveTokenState);
-  const error = overrideError ?? (data?.isErr() ? data.error.message : null);
+  const error =
+    overrideError ??
+    (overrideState === null && data?.isErr() ? data.error.message : null);
 
   const fetchTokenStatus = async (): Promise<Result<void, Error>> => {
     setOverrideState({ status: "loading" });

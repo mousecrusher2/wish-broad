@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useCurrentUser, useLiveToken } from "./api";
 
 type LiveTokenState = ReturnType<typeof useLiveToken>["state"];
-type CopyStatus = "none" | "url" | "token";
+type CopyStatus = "url" | "token" | null;
 
 const fieldLabelClasses =
   "mb-2 block text-sm font-semibold tracking-wide text-slate-200";
@@ -29,7 +29,7 @@ function StreamingUrlSection({
   copyStatus: CopyStatus;
   copyToClipboard: (
     text: string,
-    type: Exclude<CopyStatus, "none">,
+    type: Exclude<CopyStatus, null>,
   ) => Promise<void>;
 }>) {
   const currentUserState = useCurrentUser();
@@ -125,7 +125,7 @@ function VisibleTokenField({
   copyStatus: CopyStatus;
   copyToClipboard: (
     text: string,
-    type: Exclude<CopyStatus, "none">,
+    type: Exclude<CopyStatus, null>,
   ) => Promise<void>;
   onHideToken: () => void;
 }>) {
@@ -177,7 +177,7 @@ function AvailableTokenState({
   copyStatus: CopyStatus;
   copyToClipboard: (
     text: string,
-    type: Exclude<CopyStatus, "none">,
+    type: Exclude<CopyStatus, null>,
   ) => Promise<void>;
 }>) {
   return (
@@ -235,7 +235,7 @@ function TokenStateContent({
   copyStatus: CopyStatus;
   copyToClipboard: (
     text: string,
-    type: Exclude<CopyStatus, "none">,
+    type: Exclude<CopyStatus, null>,
   ) => Promise<void>;
 }>) {
   switch (state.status) {
@@ -279,7 +279,7 @@ function TokenSection({
   copyStatus: CopyStatus;
   copyToClipboard: (
     text: string,
-    type: Exclude<CopyStatus, "none">,
+    type: Exclude<CopyStatus, null>,
   ) => Promise<void>;
 }>) {
   return (
@@ -330,7 +330,7 @@ export function OBSStreamingInfo({
   const titleId = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [showToken, setShowToken] = useState(false);
-  const [copyStatus, setCopyStatus] = useState<CopyStatus>("none");
+  const [copyStatus, setCopyStatus] = useState<CopyStatus>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -355,7 +355,7 @@ export function OBSStreamingInfo({
       .then(() => {
         setCopyStatus(type);
         setTimeout(() => {
-          setCopyStatus("none");
+          setCopyStatus(null);
         }, 2000);
       })
       .catch((clipboardError: Error) => {

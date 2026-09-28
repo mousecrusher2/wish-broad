@@ -40,6 +40,15 @@ describe("whep-reconnect", () => {
         }),
       ),
     ).toBe("error");
+    expect(
+      resolveReconnectDisposition(
+        new WHEPSessionError("temporary response issue", {
+          kind: "unexpected_response",
+          responseText: undefined,
+          stage: "post",
+        }),
+      ),
+    ).toBe("retry");
     expect(resolveReconnectDisposition(new Error("network"))).toBe("retry");
   });
 
