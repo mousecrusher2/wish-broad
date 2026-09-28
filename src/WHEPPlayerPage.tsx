@@ -2,7 +2,6 @@ import { Suspense, useState } from "react";
 import { OBSStreamingInfo } from "./OBSStreamingInfo";
 import { StreamSelection } from "./components/StreamSelection";
 import { WHEPPlayer } from "./WHEPPlayer";
-import { nextPlayerLoadSequence } from "./player/next-player-load-sequence";
 import {
   createDefaultSnapshot,
   type WHEPPlaybackControllerSnapshot,
@@ -103,9 +102,7 @@ function WHEPPlayerPageContent() {
     setPlayerSelection((currentSelection) => ({
       resourceUserId: trimmedResource,
       // Loading the same stream again creates a fresh controller and session.
-      loadSequence: currentSelection
-        ? nextPlayerLoadSequence(currentSelection.loadSequence)
-        : 1,
+      loadSequence: currentSelection ? currentSelection.loadSequence + 1 : 1,
     }));
   };
 

@@ -86,16 +86,24 @@ type WHEPSessionErrorOptions = {
 
 function createRuntimeState(
   status: WHEPConnectionStatus,
-  previousState: WHEPSessionRuntimeState,
+  previousState?: WHEPSessionRuntimeState,
 ): WHEPSessionRuntimeState {
-  if (status === "connected") {
-    return {
-      hasStream: previousState.hasStream,
-      status,
-    };
+  switch (status) {
+    case "disconnected":
+      return { hasStream: false, status };
+    case "connecting":
+      return { hasStream: false, status };
+    case "connected":
+      return {
+        hasStream:
+          previousState?.status === "connected"
+            ? previousState.hasStream
+            : false,
+        status,
+      };
+    case "failed":
+      return { hasStream: false, status };
   }
-
-  return { hasStream: false, status };
 }
 
 export class WHEPSessionError extends Error {
@@ -242,10 +250,7 @@ function readInboundReceiverBytes(report: unknown): number | null {
 
   const type: unknown = Reflect.get(report, "type");
   const bytesReceived: unknown = Reflect.get(report, "bytesReceived");
-  if (type !== "inbound-rtp") {
-    return null;
-  }
-  if (typeof bytesReceived !== "number") {
+  if (type !== "inbound-rtp" || typeof bytesReceived !== "number") {
     return null;
   }
 
@@ -264,7 +269,13 @@ async function waitForIceGatheringComplete(
   pc: RTCPeerConnection,
   signal: AbortSignal,
 ): Promise<void> {
-  signal.throwIfAborted();
+  if (signal.aborted) {
+    throw new WHEPSessionError("WHEP connection was aborted", {
+      kind: "aborted",
+      responseText: undefined,
+      stage: "local",
+    });
+  }
 
   if (isIceGatheringFinished(pc)) {
     return;
@@ -285,7 +296,13 @@ async function waitForIceGatheringComplete(
     };
     const onAbort = () => {
       cleanup();
-      reject(new Error());
+      reject(
+        new WHEPSessionError("WHEP connection was aborted", {
+          kind: "aborted",
+          responseText: undefined,
+          stage: "local",
+        }),
+      );
     };
 
     pc.addEventListener("icegatheringstatechange", onStateChange);
@@ -310,10 +327,8 @@ export class WHEPSession {
   private expectedRemoteTrackCount = 0;
   private lifecycle: WHEPSessionLifecycle = { kind: "active" };
   private maxRemoteTrackCount = 0;
-  private runtimeState: WHEPSessionRuntimeState = {
-    hasStream: false,
-    status: "disconnected",
-  };
+  private runtimeState: WHEPSessionRuntimeState =
+    createRuntimeState("disconnected");
   private serverSession: ServerSessionState = null;
 
   constructor({

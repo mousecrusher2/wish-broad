@@ -1136,6 +1136,47 @@ describe("WHEP WebRTC session", () => {
     await session.dispose({ notifyServer: false });
   });
 
+  it("clears stream state while transitioning from disconnected back to connecting", () => {
+    const onStatusChange = vi.fn();
+    const onStreamChange = vi.fn();
+    const session = createSession({ onStatusChange, onStreamChange });
+    const connection = peerConnection();
+    connection.connectionState = "connected";
+    connection.iceConnectionState = "connected";
+    connection.emit("connectionstatechange");
+    connection.emitTrack(new MockTrack());
+    expect(session.getSnapshot()).toMatchObject({
+      hasStream: true,
+      status: "connected",
+    });
+
+    connection.connectionState = "disconnected";
+    connection.iceConnectionState = "disconnected";
+    connection.emit("connectionstatechange");
+    expect(session.getSnapshot()).toMatchObject({
+      hasStream: false,
+      status: "disconnected",
+    });
+
+    connection.connectionState = "new";
+    connection.iceConnectionState = "new";
+    connection.emit("connectionstatechange");
+    expect(session.getSnapshot()).toMatchObject({
+      hasStream: false,
+      status: "connecting",
+    });
+    expect(onStatusChange.mock.calls.map(([status]) => status)).toEqual([
+      "connected",
+      "disconnected",
+      "connecting",
+    ]);
+    expect(onStreamChange.mock.calls.map(([hasStream]) => hasStream)).toEqual([
+      true,
+      false,
+    ]);
+    void session.dispose({ notifyServer: false });
+  });
+
   it.each([
     ["new", "new", "stable", "connecting"],
     ["checking", "connecting", "stable", "connecting"],
@@ -1189,6 +1230,116 @@ describe("WHEP WebRTC session", () => {
       true,
     ]);
     await session.dispose({ notifyServer: false });
+  });
+
+  it("clears playable state when the last remote track is removed", () => {
+    const video = videoElement();
+    const onStreamChange = vi.fn();
+    const session = new WHEPSession({
+      callbacks: { onStreamChange },
+      resourceUserId: "alice",
+      videoElement: video,
+    });
+    const connection = peerConnection();
+    connection.connectionState = "connected";
+    connection.iceConnectionState = "connected";
+    connection.emit("connectionstatechange");
+    const track = new MockTrack() as FakeTrack;
+    connection.emitTrack(track);
+
+    expect(session.getSnapshot().hasStream).toBe(true);
+    (video.srcObject as unknown as MockMediaStream).removeTrack(track);
+
+    expect(session.getSnapshot()).toMatchObject({
+      hasStream: false,
+      remoteTrackCount: 0,
+    });
+    expect(onStreamChange.mock.calls.map(([hasStream]) => hasStream)).toEqual([
+      true,
+      false,
+    ]);
+    void session.dispose({ notifyServer: false });
+  });
+
+  it("does not report a stream when disposing a connected session without tracks", async () => {
+    const onStreamChange = vi.fn();
+    const session = createSession({ onStreamChange });
+    const connection = peerConnection();
+    connection.connectionState = "connected";
+    connection.iceConnectionState = "connected";
+    connection.emit("connectionstatechange");
+
+    expect(session.getSnapshot().hasStream).toBe(false);
+    await session.dispose({ notifyServer: false });
+
+    expect(session.getSnapshot().hasStream).toBe(false);
+    expect(onStreamChange).not.toHaveBeenCalled();
+  });
+
+  it("registers media-track listeners only once for duplicate addtrack events", async () => {
+    const video = videoElement();
+    const session = new WHEPSession({
+      resourceUserId: "alice",
+      videoElement: video,
+    });
+    const connection = peerConnection();
+    connection.connectionState = "connected";
+    connection.iceConnectionState = "connected";
+    connection.emit("connectionstatechange");
+    const track = new MockTrack() as FakeTrack;
+    const addTrackListener = vi.spyOn(track, "addEventListener");
+    connection.emitTrack(track);
+    const stream = video.srcObject as unknown as MockMediaStream;
+
+    expect(addTrackListener).toHaveBeenCalledTimes(3);
+    const duplicateAddTrack = new Event("addtrack");
+    Object.defineProperty(duplicateAddTrack, "track", { value: track });
+    stream.dispatchEvent(duplicateAddTrack);
+
+    expect(addTrackListener).toHaveBeenCalledTimes(3);
+    await session.dispose({ notifyServer: false });
+  });
+
+  it("removes remote-track listeners once when the track ends and the session is disposed", async () => {
+    const session = createSession();
+    const connection = peerConnection();
+    const track = new MockTrack() as FakeTrack;
+    const removeTrackListener = vi.spyOn(track, "removeEventListener");
+    connection.emitTrack(track);
+
+    track.readyState = "ended";
+    track.dispatchEvent(new Event("ended"));
+    await session.dispose({ notifyServer: false });
+
+    expect(
+      removeTrackListener.mock.calls.map(([type]) => type).toSorted(),
+    ).toEqual(["ended", "mute", "unmute"]);
+    expect(removeTrackListener).toHaveBeenCalledTimes(3);
+  });
+
+  it("refreshes connection state when an ICE candidate error arrives", () => {
+    const onStatusChange = vi.fn();
+    const session = createSession({ onStatusChange });
+    const connection = peerConnection();
+    connection.connectionState = "failed";
+    connection.iceConnectionState = "failed";
+    const candidateError = new Event("icecandidateerror");
+    Object.assign(candidateError, {
+      errorCode: 701,
+      errorText: "candidate failed",
+      url: "stun:example.test",
+    });
+
+    connection.dispatchEvent(candidateError);
+
+    expect(session.getSnapshot().status).toBe("failed");
+    expect(onStatusChange).toHaveBeenCalledWith("failed");
+    expect(console.warn).toHaveBeenCalledWith("ICE candidate error:", {
+      errorCode: 701,
+      errorText: "candidate failed",
+      url: "stun:example.test",
+    });
+    void session.dispose({ notifyServer: false });
   });
 
   it("discovers media delivered before the connection becomes established", async () => {
