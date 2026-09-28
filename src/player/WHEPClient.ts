@@ -610,6 +610,8 @@ export class WHEPSession {
       }
 
       this.remoteStream.addTrack(event.track);
+      this.attachRemoteTrackListeners(event.track);
+      this.refreshStreamState();
       void this.videoElement.play().catch((error: Error) => {
         console.warn("Autoplay failed:", error);
       });

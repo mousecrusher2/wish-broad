@@ -132,6 +132,10 @@ stored live tracks it should expect. If playback negotiates fewer tracks than
 the ingest stored, the client treats that as an incomplete session and reconnects
 instead of accepting a degraded connection as healthy.
 
+The client registers mute, unmute, and ended listeners when the PeerConnection
+delivers a remote track. Calling `MediaStream.addTrack()` does not emit `addtrack`,
+so the client also refreshes playable stream state directly in the track handler.
+
 ## Frontend Recovery
 
 The React player owns a `WHEPPlaybackController` instance and explicitly remounts

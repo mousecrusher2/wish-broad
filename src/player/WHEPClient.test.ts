@@ -52,15 +52,25 @@ class MockMediaStream extends EventTarget {
   addTrack(track: FakeTrack): void {
     if (this.tracks.includes(track)) return;
     this.tracks.push(track);
-    this.dispatchTrackEvent("addtrack", track);
   }
 
   removeTrack(track: FakeTrack): void {
-    this.tracks.splice(this.tracks.indexOf(track), 1);
+    const index = this.tracks.indexOf(track);
+    if (index === -1) return;
+    this.tracks.splice(index, 1);
+  }
+
+  emitTrackAdded(track: FakeTrack): void {
+    this.addTrack(track);
+    this.dispatchTrackEvent("addtrack", track);
+  }
+
+  emitTrackRemoved(track: FakeTrack): void {
+    this.removeTrack(track);
     this.dispatchTrackEvent("removetrack", track);
   }
 
-  private dispatchTrackEvent(type: string, track: FakeTrack): void {
+  dispatchTrackEvent(type: string, track: FakeTrack): void {
     const event = new Event(type);
     Object.defineProperty(event, "track", { value: track });
     this.dispatchEvent(event);
@@ -873,7 +883,7 @@ describe("WHEP WebRTC session", () => {
     connection.iceConnectionState = "failed";
     connection.emit("iceconnectionstatechange");
     expect(onStreamChange).toHaveBeenLastCalledWith(false);
-    MockMediaStream.instances[0]?.removeTrack(track);
+    MockMediaStream.instances[0]?.emitTrackRemoved(track);
     expect(session.getSnapshot()).toMatchObject({
       expectedRemoteTrackCount: 1,
       remoteTrackCount: 0,
@@ -882,6 +892,40 @@ describe("WHEP WebRTC session", () => {
     await session.dispose({ notifyServer: false });
     expect(track.stop).not.toHaveBeenCalled();
     expect(video.srcObject).toBeNull();
+  });
+
+  it("shows a remote track that unmutes after the connection is established", async () => {
+    const onStreamChange = vi.fn();
+    const video = videoElement();
+    const session = new WHEPSession({
+      callbacks: { onStreamChange },
+      resourceUserId: "alice",
+      videoElement: video,
+    });
+    const connection = peerConnection();
+    const stream = video.srcObject as unknown as MockMediaStream;
+    const onAddTrack = vi.fn();
+    stream.addEventListener("addtrack", onAddTrack);
+    const track = new MockTrack();
+    track.muted = true;
+    connection.emitTrack(track);
+
+    expect(onAddTrack).not.toHaveBeenCalled();
+    connection.connectionState = "connected";
+    connection.iceConnectionState = "connected";
+    connection.emit("connectionstatechange");
+    expect(session.getSnapshot()).toMatchObject({
+      hasStream: false,
+      mutedTrackCount: 1,
+      remoteTrackCount: 1,
+      status: "connected",
+    });
+
+    track.muted = false;
+    track.dispatchEvent(new Event("unmute"));
+    expect(session.getSnapshot().hasStream).toBe(true);
+    expect(onStreamChange).toHaveBeenCalledExactlyOnceWith(true);
+    await session.dispose({ notifyServer: false });
   });
 
   it("counts every receiver but considers any live unmuted track playable", async () => {
@@ -929,7 +973,7 @@ describe("WHEP WebRTC session", () => {
     await session.dispose({ notifyServer: false });
   });
 
-  it("updates stream state when tracks are added to or removed from the remote stream", async () => {
+  it("updates stream state when the browser emits stream track events", async () => {
     const onStreamChange = vi.fn();
     const video = videoElement();
     const session = new WHEPSession({
@@ -944,13 +988,13 @@ describe("WHEP WebRTC session", () => {
     const stream = video.srcObject as unknown as MockMediaStream;
     const track = new MockTrack() as FakeTrack;
 
-    stream.addTrack(track);
+    stream.emitTrackAdded(track);
     expect(session.getSnapshot()).toMatchObject({
       hasStream: true,
       remoteTrackCount: 1,
       status: "connected",
     });
-    stream.removeTrack(track);
+    stream.emitTrackRemoved(track);
     expect(session.getSnapshot()).toMatchObject({
       hasStream: false,
       remoteTrackCount: 0,
@@ -1023,11 +1067,11 @@ describe("WHEP WebRTC session", () => {
     connection.emitTrack(track);
     track.readyState = "ended";
     track.dispatchEvent(new Event("ended"));
-    stream.removeTrack(track);
-    stream.addTrack(track);
+    stream.emitTrackRemoved(track);
+    stream.emitTrackAdded(track);
     track.readyState = "live";
     track.dispatchEvent(new Event("unmute"));
-    stream.removeTrack(track);
+    stream.emitTrackRemoved(track);
 
     expect(addListener.mock.calls.map(([type]) => type)).toEqual([
       "mute",
@@ -1067,7 +1111,7 @@ describe("WHEP WebRTC session", () => {
     const stream = MockMediaStream.instances.at(-1);
     if (!stream) throw new Error("Expected the session's remote stream");
     const existingTrack = new MockTrack() as FakeTrack;
-    stream.addTrack(existingTrack);
+    stream.emitTrackAdded(existingTrack);
     vi.spyOn(existingTrack, "removeEventListener").mockImplementation(
       () => undefined,
     );
@@ -1085,8 +1129,8 @@ describe("WHEP WebRTC session", () => {
     connection.emit("connectionstatechange");
     connection.emit("icecandidateerror");
     connection.emitTrack(new MockTrack());
-    stream.addTrack(new MockTrack());
-    stream.removeTrack(existingTrack);
+    stream.emitTrackAdded(new MockTrack());
+    stream.emitTrackRemoved(existingTrack);
 
     expect(onStatusChange).toHaveBeenCalledTimes(statusCallsBeforeDispose);
     expect(onStreamChange).toHaveBeenCalledTimes(streamCallsBeforeDispose);
@@ -1248,7 +1292,7 @@ describe("WHEP WebRTC session", () => {
     connection.emitTrack(track);
 
     expect(session.getSnapshot().hasStream).toBe(true);
-    (video.srcObject as unknown as MockMediaStream).removeTrack(track);
+    (video.srcObject as unknown as MockMediaStream).emitTrackRemoved(track);
 
     expect(session.getSnapshot()).toMatchObject({
       hasStream: false,
@@ -1374,7 +1418,7 @@ describe("WHEP WebRTC session", () => {
     const stream = video.srcObject as unknown as MockMediaStream;
     let cleanupThrew = false;
     try {
-      stream.removeTrack(new MockTrack());
+      stream.dispatchTrackEvent("removetrack", new MockTrack());
     } catch {
       cleanupThrew = true;
     }
