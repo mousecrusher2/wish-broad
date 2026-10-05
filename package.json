@@ -29,9 +29,9 @@
     "check:react": "react-doctor --yes --json --no-telemetry"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.60.2",
-    "@cloudflare/workers-types": "^5.20260926.1",
-    "@playwright/cli": "^0.1.21",
+    "@cloudflare/vite-plugin": "^1.62.4",
+    "@cloudflare/workers-types": "^5.20261002.1",
+    "@playwright/cli": "^0.1.22",
     "@rolldown/plugin-babel": "^0.2.4",
     "@stryker-mutator/core": "^10.0.0",
     "@stryker-mutator/vitest-runner": "^10.0.0",
@@ -44,8 +44,8 @@
     "eslint-plugin-better-tailwindcss": "^4.7.0",
     "fast-check": "^4.10.2",
     "jsdom": "^30.1.1",
-    "knip": "^6.38.0",
-    "oxlint": "^1.85.0",
+    "knip": "^6.39.0",
+    "oxlint": "^1.86.0",
     "oxlint-tsgolint": "^7.0.2003",
     "prettier": "^3.9.9",
     "prettier-plugin-tailwindcss": "^0.8.1",
@@ -53,12 +53,12 @@
     "rollup-plugin-visualizer": "^7.1.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vite": "^8.3.1",
-    "vitest": "^4.1.10",
-    "wrangler": "^4.141.0"
+    "vite": "^8.3.2",
+    "vitest": "^5.0.3",
+    "wrangler": "^4.146.0"
   },
   "dependencies": {
-    "hono": "^4.13.9",
+    "hono": "^4.13.12",
     "neverthrow": "^8.2.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
