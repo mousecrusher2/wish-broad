@@ -29,8 +29,8 @@
     "check:react": "react-doctor --yes --json --no-telemetry"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.62.4",
-    "@cloudflare/workers-types": "^5.20261002.1",
+    "@cloudflare/vite-plugin": "^1.62.5",
+    "@cloudflare/workers-types": "^5.20261004.1",
     "@playwright/cli": "^0.1.22",
     "@rolldown/plugin-babel": "^0.2.4",
     "@stryker-mutator/core": "^10.0.0",
@@ -55,10 +55,10 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.2",
     "vitest": "^5.0.3",
-    "wrangler": "^4.146.0"
+    "wrangler": "^4.147.0"
   },
   "dependencies": {
-    "hono": "^4.13.12",
+    "hono": "^4.13.13",
     "neverthrow": "^8.2.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
