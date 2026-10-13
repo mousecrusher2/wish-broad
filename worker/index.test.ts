@@ -219,6 +219,14 @@ class UnusedTracingSpan {
     return false;
   }
 
+  spanContext(): TracingSpanContext {
+    return {
+      traceId: "unused-trace-id",
+      spanId: "unused-span-id",
+      traceFlags: 0,
+    };
+  }
+
   setAttribute(
     _key: string,
     _value: boolean | number | string,
