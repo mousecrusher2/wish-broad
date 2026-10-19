@@ -29,8 +29,8 @@
     "check:react": "react-doctor --yes --json --no-telemetry"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.63.1",
-    "@cloudflare/workers-types": "^5.20261009.1",
+    "@cloudflare/vite-plugin": "^1.64.0",
+    "@cloudflare/workers-types": "^5.20261016.1",
     "@playwright/cli": "^0.1.22",
     "@rolldown/plugin-babel": "^0.2.4",
     "@stryker-mutator/core": "^10.0.0",
@@ -41,27 +41,27 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "babel-plugin-react-compiler": "^1.0.0",
-    "eslint-plugin-better-tailwindcss": "^4.9.0",
+    "eslint-plugin-better-tailwindcss": "^4.9.1",
     "fast-check": "^4.10.2",
-    "jsdom": "^30.1.2",
+    "jsdom": "^30.1.3",
     "knip": "^6.41.0",
-    "oxlint": "^1.87.0",
-    "oxlint-tsgolint": "^7.0.2003",
-    "prettier": "^3.9.9",
+    "oxlint": "^1.88.0",
+    "oxlint-tsgolint": "^7.0.2004",
+    "prettier": "^3.9.10",
     "prettier-plugin-tailwindcss": "^0.8.1",
-    "react-doctor": "^0.9.17",
+    "react-doctor": "^0.9.18",
     "rollup-plugin-visualizer": "^7.1.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
-    "vitest": "^5.0.3",
-    "wrangler": "^4.149.0"
+    "vitest": "^5.0.5",
+    "wrangler": "^4.151.0"
   },
   "dependencies": {
     "hono": "^4.13.13",
     "neverthrow": "^8.2.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "swr": "^2.5.1",
     "valibot": "^1.5.0"
   }
