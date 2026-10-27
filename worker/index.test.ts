@@ -300,6 +300,9 @@ function createExecutionContext(): ExecutionContext {
     abort() {
       throw new Error("Unexpected execution context abort in tests");
     },
+    mapVirtualHost() {
+      throw new Error("Unexpected execution context mapVirtualHost in tests");
+    },
     props: undefined,
     tracing: createUnusedTracing(),
   };
@@ -321,6 +324,9 @@ function createObservedExecutionContext(): {
       },
       abort() {
         throw new Error("Unexpected execution context abort in tests");
+      },
+      mapVirtualHost() {
+        throw new Error("Unexpected execution context mapVirtualHost in tests");
       },
       props: undefined,
       tracing: createUnusedTracing(),
