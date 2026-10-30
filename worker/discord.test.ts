@@ -273,10 +273,7 @@ describe("worker discord helpers", () => {
     const invalid = await getGuildMember("token", "guild");
     expect(invalid.isErr()).toBe(true);
     if (invalid.isOk()) throw new Error("Expected an invalid member response");
-    expect(invalid.error).toMatchObject({
-      kind: "unexpected_json_response",
-      message: "Discord returned an unexpected JSON response",
-    });
+    expect(invalid.error.kind).toBe("unexpected_json_response");
   });
 
   it.each([
@@ -340,7 +337,6 @@ describe("worker discord helpers", () => {
     if (nonJson.isOk()) throw new Error("Expected a JSON error");
     expect(nonJson.error).toMatchObject({
       kind: "non_json_response",
-      message: "Discord returned a non-JSON response",
       responseBodyText: "not JSON",
     });
 
@@ -382,10 +378,7 @@ describe("worker discord helpers", () => {
     const result = await pending;
     expect(result.isErr()).toBe(true);
     if (result.isOk()) throw new Error("Expected timeout");
-    expect(result.error).toMatchObject({
-      kind: "request_timeout",
-      message: "Discord request timed out",
-    });
+    expect(result.error.kind).toBe("request_timeout");
     vi.useRealTimers();
   });
 

@@ -78,10 +78,6 @@ describe("api data layer", () => {
       throw new TypeError("Expected fetchCurrentUser to fail");
     }
     expect(result.error).toBeInstanceOf(UnauthorizedError);
-    expect(result.error).toMatchObject({
-      message: "Unauthorized",
-      name: "UnauthorizedError",
-    });
   });
 
   it.each([

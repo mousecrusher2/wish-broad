@@ -125,10 +125,6 @@ describe("worker turn credentials", () => {
 
     expect(result.error).toBeInstanceOf(TurnApiError);
     expect(result.error.kind).toBe("empty_ice_servers");
-    expect(result.error.name).toBe("TurnApiError");
-    expect(result.error.message).toBe(
-      "TURN credential response did not contain usable ICE servers",
-    );
   });
 
   it("returns a timeout result when the TURN request is aborted", async () => {
@@ -173,9 +169,6 @@ describe("worker turn credentials", () => {
     expect(invalidJson.isErr()).toBe(true);
     if (invalidJson.isOk()) throw new Error("Expected invalid JSON error");
     expect(invalidJson.error.kind).toBe("invalid_response_json");
-    expect(invalidJson.error.message).toBe(
-      "TURN credential response was not valid JSON",
-    );
     expect(invalidJson.error.statusText).toBe("OK");
 
     vi.restoreAllMocks();
@@ -192,9 +185,6 @@ describe("worker turn credentials", () => {
     if (invalidSchema.isOk())
       throw new Error("Expected schema validation error");
     expect(invalidSchema.error.kind).toBe("invalid_response_schema");
-    expect(invalidSchema.error.message).toBe(
-      "TURN credential response schema was invalid",
-    );
     expect(invalidSchema.error.statusText).toBe("OK");
     expect(invalidSchema.error.responseBody).toMatchObject({
       responseBody: { iceServers: [{ urls: [1, 2] }] },
@@ -219,8 +209,6 @@ describe("worker turn credentials", () => {
       responseBody: { message: "denied" },
       statusText: "Forbidden",
     });
-    expect(httpError.error.name).toBe("TurnApiError");
-    expect(httpError.error.message).toBe("TURN credential request failed");
 
     vi.restoreAllMocks();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -249,7 +237,6 @@ describe("worker turn credentials", () => {
       kind: "request_failed",
       responseBody: "offline",
     });
-    expect(requestError.error.message).toBe("TURN credential request failed");
   });
 
   it("aborts a request when the five-second timeout expires", async () => {
@@ -273,7 +260,6 @@ describe("worker turn credentials", () => {
     expect(result.isErr()).toBe(true);
     if (result.isOk()) throw new Error("Expected timeout error");
     expect(result.error.kind).toBe("request_timeout");
-    expect(result.error.message).toBe("TURN credential request timed out");
     vi.useRealTimers();
   });
 

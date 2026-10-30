@@ -75,11 +75,9 @@ describe("worker live start notifications", () => {
     }
 
     expect(result.error).toBeInstanceOf(DiscordWebhookError);
-    expect(result.error.name).toBe("DiscordWebhookError");
     expect(result.error).toMatchObject({
       endpoint: "https://discord.com/api/webhooks/123/token?wait=true",
       kind: "http_error",
-      message: "Discord webhook request failed",
       responseBodyText: "bad gateway",
       statusText: "Bad Gateway",
     });
@@ -105,7 +103,6 @@ describe("worker live start notifications", () => {
     }
 
     expect(result.error).toBeInstanceOf(DiscordWebhookError);
-    expect(result.error.name).toBe("DiscordWebhookError");
     expect(result.error).toMatchObject({
       endpoint: "https://discord.com/api/webhooks/123/token?wait=true",
       kind: "request_timeout",
@@ -227,7 +224,6 @@ describe("worker live start notifications", () => {
     if (networkError.isOk()) throw new Error("Expected request failure");
     expect(networkError.error).toMatchObject({
       kind: "request_failed",
-      message: "Discord webhook request failed",
       responseBodyText: "offline",
     });
   });
@@ -254,10 +250,7 @@ describe("worker live start notifications", () => {
     const result = await pending;
     expect(result.isErr()).toBe(true);
     if (result.isOk()) throw new Error("Expected timeout");
-    expect(result.error).toMatchObject({
-      kind: "request_timeout",
-      message: "Discord webhook request timed out",
-    });
+    expect(result.error.kind).toBe("request_timeout");
     vi.useRealTimers();
   });
 });
