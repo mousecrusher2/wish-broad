@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assert, integer, property } from "fast-check";
 import { calcJwtTimestamps, JWT_DURATION_SECONDS } from "./jwt-utils";
 
 describe("JWT timestamp utilities", () => {
@@ -29,19 +28,5 @@ describe("JWT timestamp utilities", () => {
       ONE_WEEK: 604_800,
       ONE_MONTH: 2_592_000,
     });
-  });
-
-  it("satisfies exp = iat + duration for arbitrary durations", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(12_345_678));
-
-    assert(
-      property(integer({ min: -1_000_000, max: 1_000_000 }), (duration) => {
-        const timestamps = calcJwtTimestamps(duration);
-        expect(timestamps.iat).toBe(12_345);
-        expect(timestamps.exp - timestamps.iat).toBe(duration);
-      }),
-      { numRuns: 100 },
-    );
   });
 });

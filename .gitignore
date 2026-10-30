@@ -9,13 +9,10 @@ lerna-debug.log*
 
 node_modules
 .pnpm-store
-.stryker-tmp/
-stryker-tmp/
 dist
 dist-ssr
 *.tsbuildinfo
 *.local
-reports/mutation/
 
 # Editor directories and files
 .vscode/*
@@ -31,8 +28,6 @@ reports/mutation/
 
 .wrangler
 .dev.vars*
-
-.agents
 
 .playwright
 .claude

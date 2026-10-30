@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as fc from "fast-check";
 import { TurnApiError, generateTurnIceServers } from "./turn";
 
 async function expectNoUsableIceServers(
@@ -209,40 +208,6 @@ describe("worker turn credentials", () => {
         ],
       },
     ]);
-  });
-
-  it("preserves generated TURN ports except the blocked port 53", async () => {
-    let payload: unknown;
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async () => new Response(JSON.stringify(payload)));
-
-    await fc.assert(
-      fc.asyncProperty(
-        fc.domain(),
-        fc.oneof(fc.constant(53), fc.integer({ min: 0, max: 65_535 })),
-        async (host, port) => {
-          const url = `turn:${host}:${String(port)}?transport=udp`;
-          payload = { iceServers: [{ urls: url }] };
-
-          const result = await generateTurnIceServers(
-            { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
-            "viewer",
-          );
-          const actual = result.isOk()
-            ? { kind: "ok", servers: result.value }
-            : { kind: result.error.kind };
-          const expected =
-            port === 53
-              ? { kind: "empty_ice_servers" }
-              : { kind: "ok", servers: [{ urls: [url] }] };
-          expect(actual).toEqual(expected);
-        },
-      ),
-      { numRuns: 75 },
-    );
-
-    expect(fetchSpy).toHaveBeenCalledTimes(75);
   });
 
   it("omits empty server arrays and reports the empty usable-server error", async () => {

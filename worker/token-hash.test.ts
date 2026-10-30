@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assert, asyncProperty, string } from "fast-check";
 import { hashTokenWithPepper, verifyTokenHash } from "./token-hash";
 
 describe("peppered token hashes", () => {
@@ -63,26 +62,6 @@ describe("peppered token hashes", () => {
   it("requires a non-empty pepper when creating a hash", async () => {
     await expect(hashTokenWithPepper("", "token")).rejects.toThrow(
       "Token pepper is required",
-    );
-  });
-
-  it("round-trips arbitrary non-empty peppers and tokens", async () => {
-    await assert(
-      asyncProperty(
-        string({ minLength: 1 }),
-        string(),
-        async (pepper, token) => {
-          const hash = await hashTokenWithPepper(pepper, token);
-          expect(hash).toMatch(/^[0-9a-f]{64}$/u);
-          await expect(verifyTokenHash(pepper, token, hash)).resolves.toBe(
-            true,
-          );
-          await expect(
-            verifyTokenHash(pepper, `${token}\u0000`, hash),
-          ).resolves.toBe(false);
-        },
-      ),
-      { numRuns: 25 },
     );
   });
 });

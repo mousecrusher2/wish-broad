@@ -68,7 +68,6 @@ export function WHEPPlayer({
   }, [controller]);
 
   useEffect(() => {
-    // react-doctor-disable-next-line react-doctor/no-event-handler
     if (resourceUserId === null) {
       controller.disconnect();
       return;
@@ -90,7 +89,6 @@ export function WHEPPlayer({
     <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/70 shadow-2xl shadow-black/30">
       {/* Live streams have no separate captions track. Unmuted autoplay is intentional; WHEPClient handles rejection. */}
       {/* oxlint-disable jsx-a11y/media-has-caption */}
-      {/* react-doctor-disable-next-line react-doctor/no-autoplay-without-muted */}
       <video
         ref={videoRef}
         aria-label="ライブ配信プレイヤー"

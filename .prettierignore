@@ -1,7 +1,6 @@
 worker-configuration.d.ts
 *.md
 pnpm-lock.yaml
-skills-lock.json
 package-lock.json
 yarn.lock
 bun.lockb

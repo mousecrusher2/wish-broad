@@ -338,7 +338,6 @@ export function OBSStreamingInfo({
       return;
     }
 
-    // react-doctor-disable-next-line react-doctor/no-event-handler
     if (isOpen && !dialog.open) {
       dialog.showModal();
       return;
