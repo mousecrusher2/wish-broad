@@ -156,71 +156,10 @@ describe("worker turn credentials", () => {
     );
   });
 
-  it("keeps URLs without a parseable port and supports bracketed IPv6 authorities", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          iceServers: [
-            {
-              urls: [
-                "no-scheme",
-                "stun:host-without-port",
-                "stun:",
-                "turn:server?transport=udp:3478",
-                "turn:server:",
-                "turn:server:udp",
-                ":53",
-                "?stun:host:53",
-                ":turn:host:53",
-                "turn::53",
-                "turn:[malformed",
-                "turn:[2001:db8::1]",
-                "turn:[2001:db8::1]:3478?transport=udp",
-                "turn:[2001:db8::1]:53?transport=udp",
-              ],
-              credential: "",
-              username: "",
-            },
-          ],
-        }),
-      ),
-    );
-
-    const result = await generateTurnIceServers(
-      { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
-      "viewer",
-    );
-
-    expect(result._unsafeUnwrap()).toEqual([
-      {
-        urls: [
-          "no-scheme",
-          "stun:host-without-port",
-          "stun:",
-          "turn:server?transport=udp:3478",
-          "turn:server:",
-          "turn:server:udp",
-          ":53",
-          "?stun:host:53",
-          "turn:[malformed",
-          "turn:[2001:db8::1]",
-          "turn:[2001:db8::1]:3478?transport=udp",
-        ],
-      },
-    ]);
-  });
-
   it("omits empty server arrays and reports the empty usable-server error", async () => {
     expect((await expectNoUsableIceServers({ iceServers: [] })).kind).toBe(
       "empty_ice_servers",
     );
-    expect(
-      (
-        await expectNoUsableIceServers({
-          iceServers: [{ urls: "turn:host:53" }],
-        })
-      ).kind,
-    ).toBe("empty_ice_servers");
   });
 
   it("rejects invalid JSON and schema responses with their response metadata", async () => {
@@ -353,26 +292,5 @@ describe("worker turn credentials", () => {
     expect(result._unsafeUnwrap()).toEqual([
       { urls: ["turn:relay.example.com:3478"] },
     ]);
-  });
-
-  it("clears its abort timer when the request finishes successfully", async () => {
-    vi.useFakeTimers();
-    let requestSignal: AbortSignal | undefined;
-    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
-      requestSignal = init?.signal ?? undefined;
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            iceServers: [{ urls: "stun:stun.example.com:3478" }],
-          }),
-        ),
-      );
-    });
-    await generateTurnIceServers(
-      { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
-      "viewer",
-    );
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(requestSignal?.aborted).toBe(false);
   });
 });

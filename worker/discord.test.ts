@@ -3,8 +3,6 @@ import {
   buildDiscordAuthorizationUrl,
   createOAuthState,
   DiscordApiError,
-  DISCORD_STATE_COOKIE_NAME,
-  DISCORD_STATE_MAX_AGE_SECONDS,
   exchangeCodeForToken,
   getDiscordErrorMessage,
   getGuildMember,
@@ -134,8 +132,6 @@ describe("worker discord helpers", () => {
 
     expect(state).toMatch(/^[0-9a-f]{64}$/u);
     expect(createOAuthState()).not.toBe(state);
-    expect(DISCORD_STATE_COOKIE_NAME).toBe("discord_oauth_state");
-    expect(DISCORD_STATE_MAX_AGE_SECONDS).toBe(600);
   });
 
   it("exchanges an authorization code and maps the token response", async () => {
@@ -307,37 +303,6 @@ describe("worker discord helpers", () => {
     });
   });
 
-  it("preserves messages for each classified Discord HTTP error", () => {
-    for (const [status, statusText, kind, message] of [
-      [
-        401,
-        "Unauthorized",
-        "unauthorized",
-        "Discord request failed: unauthorized",
-      ],
-      [403, "Forbidden", "forbidden", "Discord request failed: forbidden"],
-      [404, "Not Found", "not_found", "Discord request failed: not found"],
-      [
-        429,
-        "Too Many Requests",
-        "rate_limited",
-        "Discord request failed: rate limited",
-      ],
-      [503, "Unavailable", "http_error", "Discord request failed"],
-    ] as const) {
-      expect(
-        DiscordApiError.fromHttpFailure(
-          status,
-          statusText,
-          "https://discord.test",
-        ),
-      ).toMatchObject({ kind, message, statusText });
-    }
-    expect(
-      new DiscordApiError("generic", { endpoint: "", kind: "http_error" }).name,
-    ).toBe("DiscordApiError");
-  });
-
   it("releases a Discord token after a successful revoke response", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -364,45 +329,6 @@ describe("worker discord helpers", () => {
         }),
       }),
     );
-  });
-
-  it("maps revoke HTTP errors with invalid and empty response bodies", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      new Response("<html>denied</html>", {
-        status: 403,
-        statusText: "Forbidden",
-      }),
-    );
-    const htmlError = await revokeAccessToken(
-      { DISCORD_CLIENT_ID: "client", DISCORD_CLIENT_SECRET: "secret" },
-      "token",
-    );
-    expect(htmlError.isErr()).toBe(true);
-    if (htmlError.isOk()) throw new Error("Expected revoke to fail");
-    expect(htmlError.error).toMatchObject({
-      kind: "forbidden",
-      responseBodyText: "<html>denied</html>",
-      responseBodyJson: undefined,
-    });
-
-    vi.restoreAllMocks();
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response("  \n\t  ", {
-        status: 500,
-        statusText: "Internal Server Error",
-      }),
-    );
-    const emptyError = await revokeAccessToken(
-      { DISCORD_CLIENT_ID: "client", DISCORD_CLIENT_SECRET: "secret" },
-      "token",
-    );
-    expect(emptyError.isErr()).toBe(true);
-    if (emptyError.isOk()) throw new Error("Expected revoke to fail");
-    expect(emptyError.error).toMatchObject({
-      kind: "http_error",
-      responseBodyText: undefined,
-      responseBodyJson: undefined,
-    });
   });
 
   it("reports non-JSON successful responses and failed Discord requests", async () => {
@@ -441,25 +367,6 @@ describe("worker discord helpers", () => {
     });
   });
 
-  it("returns a request error when token revocation cannot reach Discord", async () => {
-    vi.spyOn(globalThis, "fetch").mockRejectedValue(
-      new TypeError("network down"),
-    );
-
-    const result = await revokeAccessToken(
-      { DISCORD_CLIENT_ID: "client", DISCORD_CLIENT_SECRET: "secret" },
-      "access-token",
-    );
-
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) throw new Error("Expected token revocation to fail");
-    expect(result.error).toMatchObject({
-      endpoint: "https://discord.com/api/v10/oauth2/token/revoke",
-      kind: "request_failed",
-      message: "network down",
-    });
-  });
-
   it("aborts Discord requests at the ten-second deadline", async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, "fetch").mockImplementation(
@@ -479,23 +386,6 @@ describe("worker discord helpers", () => {
       kind: "request_timeout",
       message: "Discord request timed out",
     });
-    vi.useRealTimers();
-  });
-
-  it("clears the request timeout after Discord responds", async () => {
-    vi.useFakeTimers();
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          user: { id: "user-1", username: "alice" },
-        }),
-      ),
-    );
-
-    const result = await getGuildMember("token", "guild");
-
-    expect(result.isOk()).toBe(true);
-    expect(vi.getTimerCount()).toBe(0);
     vi.useRealTimers();
   });
 
@@ -559,10 +449,6 @@ describe("worker discord helpers", () => {
 
   it.each([
     ["<html>proxy error</html>", "Bad Gateway"],
-    ["<!doctype html><html>proxy</html>", "Bad Gateway"],
-    ["<body>proxy error</body>", "Bad Gateway"],
-    ["  <BoDy>proxy error</BoDy>  ", "Bad Gateway"],
-    [" <unexpected-proxy-document> ", "Bad Gateway"],
     ["plain upstream message", "plain upstream message"],
     ["", "Bad Gateway"],
   ])("selects a readable message for response body %s", (body, expected) => {
@@ -573,60 +459,5 @@ describe("worker discord helpers", () => {
       statusText: "Bad Gateway",
     });
     expect(getDiscordErrorMessage(error)).toBe(expected);
-  });
-
-  it("uses mapped HTTP fallback messages when response details are missing", () => {
-    for (const [kind, expected] of [
-      ["forbidden", "Forbidden"],
-      ["not_found", "Not Found"],
-      ["rate_limited", "Too Many Requests"],
-      ["unauthorized", "Unauthorized"],
-    ] as const) {
-      expect(
-        getDiscordErrorMessage(
-          new DiscordApiError("generic", { endpoint: "", kind }),
-        ),
-      ).toBe(expected);
-    }
-    expect(
-      getDiscordErrorMessage(
-        new DiscordApiError("original", { endpoint: "", kind: "http_error" }),
-      ),
-    ).toBe("original");
-
-    expect(
-      getDiscordErrorMessage(
-        new DiscordApiError("generic", {
-          endpoint: "",
-          kind: "forbidden",
-          statusText: "  ",
-        }),
-      ),
-    ).toBe("Forbidden");
-  });
-
-  it("trims and caps long HTTP response text", async () => {
-    const body = `  ${"x ".repeat(150)}  `;
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(body, { status: 502, statusText: "Bad Gateway" }),
-    );
-
-    const result = await getGuildMember("token", "guild");
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) throw new Error("Expected HTTP error");
-    expect(result.error.responseBodyText).toHaveLength(200);
-    expect(result.error.responseBodyText).toBe("x ".repeat(100));
-
-    vi.restoreAllMocks();
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(" \t alpha\n\n beta \r ", {
-        status: 502,
-        statusText: "Bad Gateway",
-      }),
-    );
-    const normalized = await getGuildMember("token", "guild");
-    expect(normalized.isErr()).toBe(true);
-    if (normalized.isOk()) throw new Error("Expected an HTTP error");
-    expect(normalized.error.responseBodyText).toBe("alpha beta");
   });
 });

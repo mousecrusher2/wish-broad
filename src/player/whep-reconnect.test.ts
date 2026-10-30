@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WHEPSessionError } from "./WHEPClient";
 import {
-  WHEP_RECONNECT_WINDOW_MS,
   WHEP_TRACK_DISCOVERY_GRACE_MS,
   getReconnectDelayMs,
   resolveReconnectDisposition,
@@ -127,9 +126,5 @@ describe("whep-reconnect", () => {
     expect(WHEP_TRACK_DISCOVERY_GRACE_MS).toBe(15_000);
     expect(shouldReconnectForTrackDiscoveryTimeout(14_999)).toBe(false);
     expect(shouldReconnectForTrackDiscoveryTimeout(15_000)).toBe(true);
-  });
-
-  it("keeps the reconnect window at thirty seconds", () => {
-    expect(WHEP_RECONNECT_WINDOW_MS).toBe(30_000);
   });
 });

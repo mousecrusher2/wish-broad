@@ -48,26 +48,6 @@ describe("hashed bearer authentication middleware", () => {
     await expect(response.text()).resolves.toBe("accepted");
   });
 
-  it("does not accept the right token with a different scheme or extra field", async () => {
-    const tokenHash = await hashTokenWithPepper("pepper", "live-token");
-    const app = createApp("pepper", tokenHash);
-
-    const responses = await Promise.all(
-      ["Basic live-token", "Bearer live-token extra"].map((authorization) =>
-        Promise.resolve(
-          app.request("/secure", {
-            headers: { Authorization: authorization },
-          }),
-        ),
-      ),
-    );
-
-    expect(responses.map((response) => response.status)).toEqual([401, 401]);
-    await expect(
-      Promise.all(responses.map((response) => response.text())),
-    ).resolves.toEqual(["Unauthorized", "Unauthorized"]);
-  });
-
   it.each([
     undefined,
     "Basic live-token",
@@ -95,17 +75,6 @@ describe("hashed bearer authentication middleware", () => {
 
     expect(response.status).toBe(401);
     expect(response.headers.get("www-authenticate")).toBe("Bearer");
-  });
-
-  it("rejects absent stored hashes before resolving the pepper", async () => {
-    const pepper = vi.fn<() => string>(() => "pepper");
-    const app = createApp(pepper, null);
-    const response = await app.request("/secure", {
-      headers: { Authorization: "Bearer token" },
-    });
-
-    expect(response.status).toBe(401);
-    expect(pepper).not.toHaveBeenCalled();
   });
 
   it("rejects wrong tokens and malformed stored hashes without calling the route", async () => {

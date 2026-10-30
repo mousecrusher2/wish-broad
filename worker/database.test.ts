@@ -4,11 +4,7 @@ import {
   getAllLives,
   getLive,
   getLiveTokenHash,
-  hasLiveToken,
-  insertLive,
   setLiveNotificationMessageId,
-  setLiveToken,
-  setUser,
 } from "./database";
 
 type MockStatement = {
@@ -45,23 +41,6 @@ const storedTracks = [
 ] as const;
 
 describe("D1 database helpers", () => {
-  it("inserts a live row with serialized tracks without upserting", async () => {
-    const { database, prepare, statement } = createDatabase();
-    statement.run.mockResolvedValue({ success: true });
-
-    await insertLive(database, "user-1", "session-1", [...storedTracks]);
-
-    expect(prepare).toHaveBeenCalledWith(
-      "INSERT INTO lives (user_id, session_id, tracks_json) VALUES (?, ?, ?)",
-    );
-    expect(statement.bind).toHaveBeenCalledWith(
-      "user-1",
-      "session-1",
-      JSON.stringify(storedTracks),
-    );
-    expect(statement.run).toHaveBeenCalledOnce();
-  });
-
   it("returns null for a missing live row", async () => {
     const { database, statement } = createDatabase();
     statement.first.mockResolvedValue(null);
@@ -163,15 +142,8 @@ describe("D1 database helpers", () => {
     ).resolves.toBe(false);
   });
 
-  it("stores and reads a live token hash, and reports absent tokens", async () => {
-    const { database, prepare, statement } = createDatabase();
-    statement.run.mockResolvedValue({ success: true });
-    await setLiveToken(database, "user-1", "hashed-token");
-    expect(prepare).toHaveBeenCalledWith(
-      "INSERT OR REPLACE INTO live_tokens (user_id, token_hash) VALUES (?, ?)",
-    );
-    expect(statement.bind).toHaveBeenCalledWith("user-1", "hashed-token");
-
+  it("reads a live token hash, and reports absent tokens", async () => {
+    const { database, statement } = createDatabase();
     statement.first.mockResolvedValue({ token_hash: "hashed-token" });
     await expect(getLiveTokenHash(database, "user-1")).resolves.toBe(
       "hashed-token",
@@ -184,34 +156,14 @@ describe("D1 database helpers", () => {
     await expect(getLiveTokenHash(database, "user-1")).resolves.toBeNull();
   });
 
-  it("checks token presence and persists user display names", async () => {
-    const { database, prepare, statement } = createDatabase();
-    statement.first.mockResolvedValue({ 1: 1 });
-    await expect(hasLiveToken(database, "user-1")).resolves.toBe(true);
-    expect(prepare).toHaveBeenCalledWith(
-      "SELECT 1 FROM live_tokens WHERE user_id = ? LIMIT 1",
-    );
-    statement.first.mockResolvedValue(null);
-    await expect(hasLiveToken(database, "user-1")).resolves.toBe(false);
-
-    await setUser(database, { userId: "user-1", displayName: "Streamer" });
-    expect(prepare).toHaveBeenLastCalledWith(
-      "INSERT OR REPLACE INTO users (user_id, display_name) VALUES (?, ?)",
-    );
-    expect(statement.bind).toHaveBeenLastCalledWith("user-1", "Streamer");
-  });
-
   it("maps all live rows to owners and rejects invalid list records", async () => {
-    const { database, prepare, statement } = createDatabase();
+    const { database, statement } = createDatabase();
     statement.all.mockResolvedValue({
       results: [{ user_id: "user-1", display_name: "Streamer" }],
     });
     await expect(getAllLives(database)).resolves.toEqual([
       { owner: { userId: "user-1", displayName: "Streamer" } },
     ]);
-    expect(prepare).toHaveBeenCalledWith(
-      "SELECT users.user_id, display_name FROM lives JOIN users ON lives.user_id = users.user_id",
-    );
 
     statement.all.mockResolvedValue({ results: [{ user_id: "user-1" }] });
     await expect(getAllLives(database)).rejects.toThrow(

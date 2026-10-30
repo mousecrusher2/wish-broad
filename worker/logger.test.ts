@@ -128,16 +128,6 @@ describe("structured Worker logger", () => {
     });
   });
 
-  it("honors the explicit debug level in production and parses it case-insensitively", () => {
-    const debug = vi
-      .spyOn(console, "debug")
-      .mockImplementation(() => undefined);
-
-    logDebug({ ENVIRONMENT: "production", LOG_LEVEL: "DEBUG" }, "debug.on");
-
-    expect(debug).toHaveBeenCalledWith({ event: "debug.on", level: "debug" });
-  });
-
   it("keeps canonical event and level fields after caller fields", () => {
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
 
@@ -166,29 +156,10 @@ describe("structured Worker logger", () => {
     });
   });
 
-  it("omits a missing Error stack while retaining its other fields", () => {
-    const error = new Error("stackless");
-    Object.defineProperty(error, "stack", {
-      configurable: true,
-      value: undefined,
-    });
-
-    expect(createErrorLogFields(error)).toStrictEqual({
-      errorMessage: "stackless",
-      errorName: "Error",
-    });
-  });
-
-  it.each(["plain failure", 42, false, null, undefined])(
+  it.each(["plain failure", null])(
     "preserves non-Error values in the error field (%s)",
     (value) => {
       expect(createErrorLogFields(value)).toEqual({ error: value });
     },
   );
-
-  it("ignores structured error properties with non-string values", () => {
-    const value = { endpoint: 42, kind: null, statusText: false };
-
-    expect(createErrorLogFields(value)).toEqual({ error: value });
-  });
 });

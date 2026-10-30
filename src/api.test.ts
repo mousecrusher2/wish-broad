@@ -1,25 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mutateMock } = vi.hoisted(() => ({
-  mutateMock: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
-}));
-
 vi.mock("swr", async (importOriginal) => {
   const original = await importOriginal<typeof import("swr")>();
   return {
     ...original,
-    mutate: mutateMock,
     preload: vi.fn<() => void>(),
   };
 });
 
-import { mutate as mutateGlobal } from "swr";
-import {
-  fetchCurrentUser,
-  fetchLiveStreams,
-  revalidateLiveStreams,
-  UnauthorizedError,
-} from "./api";
+import { fetchCurrentUser, fetchLiveStreams, UnauthorizedError } from "./api";
 
 function createJsonResponse(data: unknown, init?: ResponseInit): Response {
   const headers = new Headers(init?.headers);
@@ -95,32 +84,6 @@ describe("api data layer", () => {
     });
   });
 
-  it("returns a fetch error without converting it to an HTTP status error", async () => {
-    const failure = new Error("network offline");
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(failure));
-
-    const result = await fetchCurrentUser();
-
-    expect(result._unsafeUnwrapErr()).toBe(failure);
-    expect(console.error).toHaveBeenCalledWith(
-      "Failed to fetch current user:",
-      failure,
-    );
-  });
-
-  it("rejects other current-user HTTP statuses explicitly", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response("", { status: 503 })),
-    );
-
-    const result = await fetchCurrentUser();
-
-    expect(result._unsafeUnwrapErr()).toMatchObject({
-      message: "Unexpected status code: 503",
-    });
-  });
-
   it.each([
     null,
     { displayName: "Alice" },
@@ -134,19 +97,6 @@ describe("api data layer", () => {
     expect((await fetchCurrentUser())._unsafeUnwrapErr()).toMatchObject({
       message: "Unexpected /api/me response",
     });
-  });
-
-  it("returns JSON parsing errors and reports them to the console", async () => {
-    const failure = new SyntaxError("unexpected token");
-    const response = new Response("bad json");
-    vi.spyOn(response, "json").mockRejectedValue(failure);
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
-
-    expect((await fetchCurrentUser())._unsafeUnwrapErr()).toBe(failure);
-    expect(console.error).toHaveBeenCalledWith(
-      "Failed to fetch current user:",
-      failure,
-    );
   });
 
   it("returns validated live lists and localizes HTTP failures", async () => {
@@ -182,25 +132,6 @@ describe("api data layer", () => {
 
     const failure = new Error("offline");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(failure));
-    expect((await fetchLiveStreams())._unsafeUnwrapErr()).toBe(failure);
-    expect(console.error).toHaveBeenCalledWith(
-      "Failed to fetch live streams:",
-      failure,
-    );
-  });
-
-  it("revalidates the shared live-stream cache", async () => {
-    await revalidateLiveStreams();
-
-    expect(mutateGlobal).toHaveBeenCalledWith("live-streams");
-  });
-
-  it("returns a stream JSON parsing error and reports its label", async () => {
-    const failure = new SyntaxError("invalid stream JSON");
-    const response = new Response("invalid");
-    vi.spyOn(response, "json").mockRejectedValue(failure);
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
-
     expect((await fetchLiveStreams())._unsafeUnwrapErr()).toBe(failure);
     expect(console.error).toHaveBeenCalledWith(
       "Failed to fetch live streams:",

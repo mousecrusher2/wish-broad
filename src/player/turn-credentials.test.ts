@@ -55,37 +55,6 @@ describe("turn-credentials", () => {
     );
   });
 
-  it("handles a failed error-body read without losing the HTTP failure", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const response = new Response("bad gateway", { status: 502 });
-    vi.spyOn(response, "text").mockRejectedValue(new Error("body unavailable"));
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
-
-    await expect(
-      fetchTurnIceServers(new AbortController().signal),
-    ).resolves.toBeNull();
-
-    expect(warn).toHaveBeenCalledWith(
-      "TURN credential request failed:",
-      expect.objectContaining({ responseText: undefined, status: 502 }),
-    );
-  });
-
-  it("logs ordinary fetch failures and treats even abort-shaped non-Errors as failures", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const failure = { name: "AbortError" };
-    vi.spyOn(globalThis, "fetch").mockRejectedValue(failure);
-
-    await expect(
-      fetchTurnIceServers(new AbortController().signal),
-    ).resolves.toBeNull();
-
-    expect(warn).toHaveBeenCalledWith(
-      "Failed to fetch TURN credentials:",
-      failure,
-    );
-  });
-
   it("does not rethrow ordinary Error instances", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("offline"));

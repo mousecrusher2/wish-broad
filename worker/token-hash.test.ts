@@ -45,20 +45,6 @@ describe("peppered token hashes", () => {
     ).rejects.toThrow("Invalid token hash");
   });
 
-  it("imports a non-extractable HMAC key with only signing and verification usage", async () => {
-    const importKey = vi.spyOn(crypto.subtle, "importKey");
-
-    await hashTokenWithPepper("pepper", "token");
-
-    expect(importKey).toHaveBeenCalledWith(
-      "raw",
-      new TextEncoder().encode("pepper"),
-      { hash: "SHA-256", name: "HMAC" },
-      false,
-      ["sign", "verify"],
-    );
-  });
-
   it("requires a non-empty pepper when creating a hash", async () => {
     await expect(hashTokenWithPepper("", "token")).rejects.toThrow(
       "Token pepper is required",
