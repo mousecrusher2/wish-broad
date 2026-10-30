@@ -620,6 +620,11 @@ export class WHEPPlaybackController {
             return;
           }
         })
+        .catch((error: Error) => {
+          // Some browsers reject getStats() once dispose() has closed the
+          // PeerConnection mid-poll. Stall detection simply skips this tick.
+          console.warn("Failed to read WHEP receiver stats:", error);
+        })
         .finally(() => {
           pollInFlight = false;
         });
