@@ -27,10 +27,9 @@ export type DiscordOAuthToken = {
   refreshToken?: string | undefined;
 };
 
-const DISCORD_OAUTH_SCOPES = [
-  "identify",
-  "guilds.members.read",
-] satisfies readonly [string, string];
+// The guild member response already includes the user object, so `identify`
+// (which only unlocks /users/@me) is unnecessary.
+const DISCORD_OAUTH_SCOPE = "guilds.members.read";
 
 export const DISCORD_STATE_COOKIE_NAME = "discord_oauth_state";
 export const DISCORD_STATE_MAX_AGE_SECONDS = 60 * 10;
@@ -322,7 +321,7 @@ export function buildDiscordAuthorizationUrl(
   url.searchParams.set("client_id", env.DISCORD_CLIENT_ID);
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", DISCORD_OAUTH_SCOPES.join(" "));
+  url.searchParams.set("scope", DISCORD_OAUTH_SCOPE);
   url.searchParams.set("state", state);
   return url.toString();
 }

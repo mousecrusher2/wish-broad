@@ -49,6 +49,11 @@ Discord OAuth is an admission check, not the long-lived app session. The Worker
 uses the Discord access token only to verify membership in the configured guild,
 then revokes it and issues its own `authtoken` JWT cookie.
 
+The authorization request asks only for `guilds.members.read`. The membership
+check calls `GET /users/@me/guilds/{guild.id}/member`, whose guild member
+response already carries the user ID, username, global name, and nickname used
+for the app session, so `identify` (`/users/@me`) is not requested.
+
 The frontend does not gate initial rendering on a dedicated authentication
 check. The API module starts one-shot SWR preloads for the current user, live
 list, and live-token status, and the app bootstrap component subscribes to those

@@ -33,7 +33,7 @@ describe("worker discord helpers", () => {
       "https://example.com/login",
     );
     expect(url.searchParams.get("response_type")).toBe("code");
-    expect(url.searchParams.get("scope")).toBe("identify guilds.members.read");
+    expect(url.searchParams.get("scope")).toBe("guilds.members.read");
     expect(url.searchParams.get("state")).toBe("state-123");
   });
 
@@ -141,7 +141,7 @@ describe("worker discord helpers", () => {
           access_token: "access",
           expires_in: 3600,
           refresh_token: "refresh",
-          scope: "identify guilds.members.read",
+          scope: "guilds.members.read",
           token_type: "Bearer",
         }),
       ),
@@ -157,7 +157,7 @@ describe("worker discord helpers", () => {
       accessToken: "access",
       expiresIn: 3600,
       refreshToken: "refresh",
-      scope: "identify guilds.members.read",
+      scope: "guilds.members.read",
       tokenType: "Bearer",
     });
     expect(fetchSpy).toHaveBeenCalledWith(
@@ -191,7 +191,7 @@ describe("worker discord helpers", () => {
         JSON.stringify({
           access_token: "access",
           expires_in: 3600,
-          scope: "identify",
+          scope: "guilds.members.read",
           token_type: "Bearer",
         }),
       ),

@@ -472,7 +472,7 @@ describe("worker app", () => {
       ok<DiscordOAuthToken>({
         accessToken: "discord-access-token",
         expiresIn: 3600,
-        scope: "identify guilds.members.read",
+        scope: "guilds.members.read",
         tokenType: "Bearer",
       }),
     );
