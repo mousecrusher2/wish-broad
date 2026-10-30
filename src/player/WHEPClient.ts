@@ -43,10 +43,14 @@ type WHEPSessionLifecycle =
   | { cleanupPromise: Promise<void>; kind: "closingServerSession" }
   | { kind: "disposed" };
 
+// The session only swaps the playback source and starts playback, so it does
+// not need the rest of HTMLVideoElement.
+type WHEPVideoElement = Pick<HTMLVideoElement, "srcObject" | "play">;
+
 type WHEPSessionOptions = {
   callbacks?: WHEPSessionCallbacks;
   resourceUserId: string;
-  videoElement: HTMLVideoElement;
+  videoElement: WHEPVideoElement;
 };
 
 type ServerSessionState =
@@ -323,7 +327,7 @@ export class WHEPSession {
     () => void
   >();
   private readonly resourceUserId: string;
-  private readonly videoElement: HTMLVideoElement;
+  private readonly videoElement: WHEPVideoElement;
   private expectedRemoteTrackCount = 0;
   private lifecycle: WHEPSessionLifecycle = { kind: "active" };
   private maxRemoteTrackCount = 0;
