@@ -27,7 +27,7 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.65.0",
-    "@cloudflare/workers-types": "^5.20261025.1",
+    "@cloudflare/workers-types": "^5.20261027.1",
     "@playwright/cli": "^0.1.22",
     "@rolldown/plugin-babel": "^0.2.4",
     "@tailwindcss/vite": "^4.3.3",
@@ -45,10 +45,10 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5",
-    "wrangler": "^4.152.0"
+    "wrangler": "^4.153.0"
   },
   "dependencies": {
-    "hono": "^4.13.13",
+    "hono": "^4.13.14",
     "neverthrow": "^8.2.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
