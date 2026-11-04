@@ -26,18 +26,18 @@
     "format:check": "prettier --check ."
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.65.0",
-    "@cloudflare/workers-types": "^5.20261027.1",
-    "@playwright/cli": "^0.1.22",
-    "@rolldown/plugin-babel": "^0.2.4",
+    "@cloudflare/vite-plugin": "^1.66.0",
+    "@cloudflare/workers-types": "^5.20261101.1",
+    "@playwright/cli": "^0.1.23",
+    "@rolldown/plugin-babel": "^0.3.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "babel-plugin-react-compiler": "^1.0.0",
     "eslint-plugin-better-tailwindcss": "^4.10.0",
-    "knip": "^6.43.0",
-    "oxlint": "^1.89.0",
+    "knip": "^6.44.1",
+    "oxlint": "^1.90.0",
     "oxlint-tsgolint": "^7.0.2005",
     "prettier": "^3.9.10",
     "prettier-plugin-tailwindcss": "^0.8.1",
@@ -45,10 +45,10 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5",
-    "wrangler": "^4.153.0"
+    "wrangler": "^4.156.0"
   },
   "dependencies": {
-    "hono": "^4.13.14",
+    "hono": "^4.13.16",
     "neverthrow": "^8.2.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
