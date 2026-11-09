@@ -283,6 +283,7 @@ function createUnusedTracing(): Tracing {
     getActiveSpan: failUnusedTracingAccess,
     startActiveSpan: failUnusedTracingAccess,
     startSpan: failUnusedTracingAccess,
+    withActiveSpan: failUnusedTracingAccess,
     Span: UnusedTracingSpan,
   };
 }
