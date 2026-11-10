@@ -340,7 +340,7 @@ describe("SFU API", () => {
 
       const error = expectErr(await startPlay(env, "live-id", tracks));
       if (!(error instanceof SfuApiError))
-        throw new Error("Expected an SFU error");
+        throw new TypeError("Expected an SFU error");
       expect(error.kind).toBe(kind);
       const messages: Record<string, string> = {
         "missing SDP": "SFU response did not include SDP for playback",
