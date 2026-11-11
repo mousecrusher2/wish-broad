@@ -8,6 +8,29 @@ const DISCORD_WEBHOOK_TIMEOUT_MS = 5_000;
 type DiscordWebhookErrorKind =
   "request_failed" | "request_timeout" | "http_error";
 
+const REDACTED = "[redacted]";
+
+// Discord webhook URLs are `/api[/vN]/webhooks/{id}/{token}[/...]`, and the
+// token alone authorizes posting and deleting channel messages. Errors are
+// logged with their endpoint, so they only ever carry this redacted form.
+function redactWebhookUrl(webhookUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(webhookUrl);
+  } catch {
+    return REDACTED;
+  }
+
+  const segments = url.pathname.split("/");
+  const tokenIndex = segments.indexOf("webhooks") + 2;
+  if (tokenIndex < 2 || tokenIndex >= segments.length) {
+    return `${url.origin}/${REDACTED}`;
+  }
+
+  segments[tokenIndex] = REDACTED;
+  return `${url.origin}${segments.join("/")}${url.search}`;
+}
+
 export class DiscordWebhookError extends Error {
   readonly endpoint: string;
   readonly kind: DiscordWebhookErrorKind;
@@ -25,7 +48,7 @@ export class DiscordWebhookError extends Error {
   ) {
     super(message);
     this.name = "DiscordWebhookError";
-    this.endpoint = options.endpoint;
+    this.endpoint = redactWebhookUrl(options.endpoint);
     this.kind = options.kind;
     this.responseBodyText = options.responseBodyText;
     this.statusText = options.statusText;

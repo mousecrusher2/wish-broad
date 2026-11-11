@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createErrorLogFields } from "./logger";
 import {
   deleteLiveStartedNotification,
   DiscordWebhookError,
@@ -76,7 +77,7 @@ describe("worker live start notifications", () => {
 
     expect(result.error).toBeInstanceOf(DiscordWebhookError);
     expect(result.error).toMatchObject({
-      endpoint: "https://discord.com/api/webhooks/123/token?wait=true",
+      endpoint: "https://discord.com/api/webhooks/123/[redacted]?wait=true",
       kind: "http_error",
       responseBodyText: "bad gateway",
       statusText: "Bad Gateway",
@@ -104,9 +105,52 @@ describe("worker live start notifications", () => {
 
     expect(result.error).toBeInstanceOf(DiscordWebhookError);
     expect(result.error).toMatchObject({
-      endpoint: "https://discord.com/api/webhooks/123/token?wait=true",
+      endpoint: "https://discord.com/api/webhooks/123/[redacted]?wait=true",
       kind: "request_timeout",
     });
+  });
+
+  it("never exposes the webhook token in errors or their log fields", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("rate limited", { status: 429 }))
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockResolvedValueOnce(new Response("not found", { status: 404 }));
+    const env = {
+      NOTIFICATIONS_DISCORD_WEBHOOK_URL:
+        "https://discord.com/api/v10/webhooks/123/secret-token?thread_id=7",
+    };
+
+    const sendError = (
+      await sendLiveStartedNotification(env, "user-1", "https://example.com")
+    )._unsafeUnwrapErr();
+    const deleteError = (
+      await deleteLiveStartedNotification(env, 45n)
+    )._unsafeUnwrapErr();
+    const unrecognizedUrlError = (
+      await deleteLiveStartedNotification(
+        {
+          NOTIFICATIONS_DISCORD_WEBHOOK_URL: "https://example.com/secret-token",
+        },
+        45n,
+      )
+    )._unsafeUnwrapErr();
+
+    expect(sendError.endpoint).toBe(
+      "https://discord.com/api/v10/webhooks/123/[redacted]?thread_id=7&wait=true",
+    );
+    expect(deleteError.endpoint).toBe(
+      "https://discord.com/api/v10/webhooks/123/[redacted]/messages/45?thread_id=7",
+    );
+    expect(unrecognizedUrlError.endpoint).toBe(
+      "https://example.com/[redacted]",
+    );
+    expect(
+      JSON.stringify(
+        [sendError, deleteError, unrecognizedUrlError].map((error) =>
+          createErrorLogFields(error),
+        ),
+      ),
+    ).not.toContain("secret-token");
   });
 
   it("deletes a Discord webhook message by id", async () => {
