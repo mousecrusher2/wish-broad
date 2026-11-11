@@ -196,6 +196,18 @@ Playback recovery is viewer-driven and bounded. The frontend reconnects when the
 specific session loses expected tracks, stalls, or disconnects, but it gives up
 within a fixed window so ended streams do not appear to load forever.
 
+The window (75 seconds) must outlast the Worker's 60-second publisher reconnect
+grace period, because the viewer usually notices the stall a few seconds after
+OBS sent DELETE. The client treats the play endpoint's status as the source of
+truth for whether to keep waiting: a 503 means the broadcast still exists
+without a usable session, so the client keeps retrying with backoff, even on an
+initial load; a 404 means the broadcast has ended, so playback ends at once
+instead of retrying until the window expires. Other 5xx responses and network
+errors are retried only after a session was established, so a broken server
+still surfaces as an error on the initial load. If the window expires while the
+server keeps answering 503, playback ends with an error rather than "ended",
+because the Worker never confirmed that the broadcast was over.
+
 The stall check uses inbound `bytesReceived` per receiver as the required
 end-of-stream detector for the common publish-stop path. When a publisher ends a
 stream, the viewer commonly sees exactly this state: SFU session existence, ICE

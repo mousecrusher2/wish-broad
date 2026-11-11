@@ -21,6 +21,15 @@ describe("whep-reconnect", () => {
     ).toBe("ended");
     expect(
       resolveReconnectDisposition(
+        new WHEPSessionError("waiting for the publisher", {
+          kind: "resource_unavailable",
+          responseText: undefined,
+          stage: "post",
+        }),
+      ),
+    ).toBe("retry");
+    expect(
+      resolveReconnectDisposition(
         new WHEPSessionError("unauthorized", {
           kind: "client_request_error",
           responseText: undefined,

@@ -369,7 +369,8 @@ describe("WHEPSession", () => {
   it.each([
     [404, "resource_not_found"],
     [403, "client_request_error"],
-    [503, "server_request_error"],
+    [503, "resource_unavailable"],
+    [502, "server_request_error"],
     [200, "unexpected_response"],
   ] as const)(
     "fails with %i offer responses as %s without a session to delete",

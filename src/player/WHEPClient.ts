@@ -74,6 +74,7 @@ type WhepSessionResponse =
 
 type WHEPSessionErrorKind =
   | "resource_not_found"
+  | "resource_unavailable"
   | "client_request_error"
   | "server_request_error"
   | "unexpected_response"
@@ -129,6 +130,12 @@ export class WHEPSessionError extends Error {
     return this.kind === "resource_not_found";
   }
 
+  // The Worker answers 503 while the broadcast waits for its publisher to
+  // reconnect; 404 means the broadcast ended.
+  isUnavailable(): boolean {
+    return this.kind === "resource_unavailable";
+  }
+
   isClientRequestError(): boolean {
     return (
       this.kind === "resource_not_found" || this.kind === "client_request_error"
@@ -156,6 +163,8 @@ async function createResponseError(
   let kind: WHEPSessionErrorKind = "unexpected_response";
   if (response.status === 404) {
     kind = "resource_not_found";
+  } else if (response.status === 503) {
+    kind = "resource_unavailable";
   } else if (response.status >= 400 && response.status < 500) {
     kind = "client_request_error";
   } else if (response.status >= 500) {

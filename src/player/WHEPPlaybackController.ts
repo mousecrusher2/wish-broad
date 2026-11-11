@@ -60,6 +60,10 @@ function isNotFoundError(error: Error): boolean {
   return error instanceof WHEPSessionError && error.isNotFound();
 }
 
+function isUnavailableError(error: Error): boolean {
+  return error instanceof WHEPSessionError && error.isUnavailable();
+}
+
 function createConnectedPlaybackState(
   resourceUserId: string,
   hasStream: boolean,
@@ -104,7 +108,6 @@ export class WHEPPlaybackController {
   private pendingAttempt: PendingAttempt | null = null;
   private playbackMonitor: PlaybackMonitorState | null = null;
   private reconnectDeadlineAt: number | null = null;
-  private reconnectSawNotFound = false;
   private reconnectTimerId: number | null = null;
   private recoveryTimerId: number | null = null;
   private retryCount = 0;
@@ -222,7 +225,6 @@ export class WHEPPlaybackController {
   private clearReconnectState(): void {
     this.clearReconnectTimer();
     this.reconnectDeadlineAt = null;
-    this.reconnectSawNotFound = false;
     this.retryCount = 0;
   }
 
@@ -314,27 +316,25 @@ export class WHEPPlaybackController {
     mode: AttemptMode,
     resourceUserId: string,
   ): void {
-    if (mode === "initial") {
-      this.finalizePlayback(
-        isNotFoundError(error) ? "ended" : "error",
-        resourceUserId,
-        error,
-      );
+    // The Worker answers 404 only once the broadcast has ended; while the
+    // publisher reconnects it answers 503 instead. So 404 needs no retries.
+    if (isNotFoundError(error)) {
+      this.finalizePlayback("ended", resourceUserId);
       return;
     }
 
-    if (isNotFoundError(error)) {
-      this.reconnectSawNotFound = true;
+    // Wait for the publisher to reconnect, even on the initial load of a
+    // broadcast that is already waiting for it.
+    if (isUnavailableError(error)) {
       this.queueReconnect(resourceUserId);
       return;
     }
 
-    if (resolveReconnectDisposition(error) === "error") {
+    if (mode === "initial" || resolveReconnectDisposition(error) === "error") {
       this.finalizePlayback("error", resourceUserId, error);
       return;
     }
 
-    // resource_not_found was handled above; remaining dispositions retry.
     this.queueReconnect(resourceUserId);
   }
 
@@ -394,11 +394,9 @@ export class WHEPPlaybackController {
 
     if (now >= this.reconnectDeadlineAt) {
       this.finalizePlayback(
-        this.reconnectSawNotFound ? "ended" : "error",
+        "error",
         resourceUserId,
-        this.reconnectSawNotFound
-          ? undefined
-          : new Error("WHEP reconnect window expired"),
+        new Error("WHEP reconnect window expired"),
       );
       return;
     }
@@ -420,11 +418,9 @@ export class WHEPPlaybackController {
       const reconnectDeadlineAt = this.reconnectDeadlineAt;
       if (reconnectDeadlineAt === null || Date.now() >= reconnectDeadlineAt) {
         this.finalizePlayback(
-          this.reconnectSawNotFound ? "ended" : "error",
+          "error",
           resourceUserId,
-          this.reconnectSawNotFound
-            ? undefined
-            : new Error("WHEP reconnect window expired"),
+          new Error("WHEP reconnect window expired"),
         );
         return;
       }

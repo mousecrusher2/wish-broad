@@ -13,6 +13,10 @@ const ICE_FAILED = {
   connectionState: "failed",
   iceConnectionState: "failed",
 } as const;
+const ICE_CONNECTED = {
+  connectionState: "connected",
+  iceConnectionState: "connected",
+} as const;
 
 type ConnectionStates = Partial<{
   connectionState: RTCPeerConnectionState;
@@ -107,9 +111,12 @@ function lastPeer(): FakePeerConnection {
   return pc;
 }
 
-function mockPlayEndpoint(offerStatus = 201): RequestRecord[] {
+function mockPlayEndpoint(
+  offerStatus: number | ((postIndex: number) => number) = 201,
+): RequestRecord[] {
   const requests: RequestRecord[] = [];
   let sessionCount = 0;
+  let postCount = 0;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     const method = init?.method ?? "GET";
@@ -118,8 +125,11 @@ function mockPlayEndpoint(offerStatus = 201): RequestRecord[] {
     if (method !== "POST") {
       return new Response(null, { status: 200 });
     }
-    if (offerStatus !== 201) {
-      return new Response("unavailable", { status: offerStatus });
+    const status =
+      typeof offerStatus === "number" ? offerStatus : offerStatus(postCount);
+    postCount += 1;
+    if (status !== 201) {
+      return new Response("unavailable", { status });
     }
 
     sessionCount += 1;
@@ -223,7 +233,7 @@ describe("WHEPPlaybackController", () => {
   );
 
   it("handles a rejected offer once even though the session also reports failed", async () => {
-    const requests = mockPlayEndpoint(503);
+    const requests = mockPlayEndpoint(502);
     const { controller, snapshots } = createController();
 
     await controller.load("alice");
@@ -240,10 +250,7 @@ describe("WHEPPlaybackController", () => {
 
     await controller.load("alice");
     const first = lastPeer();
-    first.updateStates({
-      connectionState: "connected",
-      iceConnectionState: "connected",
-    });
+    first.updateStates(ICE_CONNECTED);
     // The established session is replaced after its recovery grace period.
     first.updateStates(ICE_FAILED);
     await vi.advanceTimersByTimeAsync(3_000);
@@ -264,5 +271,93 @@ describe("WHEPPlaybackController", () => {
       url: `${ORIGIN}/play/alice/session-2?mid=0`,
     });
     expect(snapshots.at(-1)?.playbackState.phase).toBe("reconnecting");
+  });
+
+  it("waits for the publisher on an initial load that gets 503", async () => {
+    const requests = mockPlayEndpoint((postIndex) =>
+      postIndex < 2 ? 503 : 201,
+    );
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+
+    expect(snapshots.at(-1)).toMatchObject({
+      isLoading: false,
+      playbackState: { phase: "reconnecting", resourceUserId: "alice" },
+    });
+    // Covers the 500 ms and 1 s backoffs before the second and third offers.
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() => {
+      expect(countPosts(requests)).toBe(3);
+      expect(lastPeer().remoteDescriptionApplied).toBe(true);
+    });
+    lastPeer().updateStates(ICE_CONNECTED);
+
+    expect(snapshots.at(-1)?.playbackState.phase).toBe("connected");
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("ends playback at once when a reconnect gets 404", async () => {
+    const requests = mockPlayEndpoint((postIndex) =>
+      postIndex === 0 ? 201 : 404,
+    );
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+    lastPeer().updateStates(ICE_CONNECTED);
+    lastPeer().updateStates(ICE_FAILED);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    await vi.waitFor(() => {
+      expect(snapshots.at(-1)?.playbackState.phase).toBe("ended");
+    });
+    expect(countPosts(requests)).toBe(2);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("keeps reconnecting through the publisher's 60 second grace period", async () => {
+    const publisherBackAt = Date.now() + 3_000 + 60_000;
+    const requests = mockPlayEndpoint((postIndex) =>
+      postIndex === 0 || Date.now() >= publisherBackAt ? 201 : 503,
+    );
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+    lastPeer().updateStates(ICE_CONNECTED);
+    lastPeer().updateStates(ICE_FAILED);
+    await vi.advanceTimersByTimeAsync(3_000 + 59_000);
+
+    expect(snapshots.at(-1)?.playbackState.phase).toBe("reconnecting");
+    const postsDuringGrace = countPosts(requests);
+
+    // Covers the maximum 2 s backoff once the publisher is back.
+    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.waitFor(() => {
+      expect(countPosts(requests)).toBeGreaterThan(postsDuringGrace);
+      expect(lastPeer().remoteDescriptionApplied).toBe(true);
+    });
+    lastPeer().updateStates(ICE_CONNECTED);
+
+    expect(snapshots.at(-1)?.playbackState.phase).toBe("connected");
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("gives up with an error when the server stays unavailable", async () => {
+    mockPlayEndpoint((postIndex) => (postIndex === 0 ? 201 : 503));
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+    lastPeer().updateStates(ICE_CONNECTED);
+    lastPeer().updateStates(ICE_FAILED);
+    await vi.advanceTimersByTimeAsync(3_000 + 74_000);
+    expect(snapshots.at(-1)?.playbackState.phase).toBe("reconnecting");
+
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(snapshots.at(-1)?.playbackState.phase).toBe("error");
+    expect(console.error).toHaveBeenCalledWith(
+      "WHEP playback failed:",
+      new Error("WHEP reconnect window expired"),
+    );
   });
 });

@@ -4,8 +4,11 @@ const WHEP_RECONNECT_BASE_DELAY_MS = 500;
 const WHEP_RECONNECT_MAX_DELAY_MS = 2_000;
 
 // Recovery is viewer-driven because the Worker does not continuously poll the
-// SFU. Keep retries bounded so a truly ended stream becomes visible quickly.
-export const WHEP_RECONNECT_WINDOW_MS = 30_000;
+// SFU. Keep retries bounded so a broken stream does not load forever. The
+// window must outlast the Worker's 60-second publisher reconnect grace period
+// (worker/live-end.ts), during which POST /play answers 503; when the period
+// ends without a reconnect, the Worker answers 404 and playback ends at once.
+export const WHEP_RECONNECT_WINDOW_MS = 75_000;
 
 // Receiver stats are the source of truth for media flow. Wait long enough for
 // all expected inbound RTP receivers to appear before declaring the WHEP session

@@ -14,7 +14,8 @@ OBSはWHIPで配信し、認証済みユーザーはブラウザからアプリ�
 - D1-backed live stream and token state
 - Authenticated TURN credential endpoint
 - Best-effort Discord live-start notifications
-- Broadcasts survive OBS reconnects for 60 seconds without re-notifying
+- Broadcasts survive OBS reconnects for 60 seconds without re-notifying, and
+  viewers keep waiting for the stream to come back
 
 ## Stack
 
