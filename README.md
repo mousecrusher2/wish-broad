@@ -84,7 +84,7 @@ Run the integrated Cloudflare/Vite dev server:
 pnpm dev:full
 ```
 
-`pnpm dev` is useful for frontend iteration, but it does not exactly match the production Worker bundle. Use Wrangler-based flows when validating Worker behavior, auth, or WebRTC paths.
+`pnpm dev` is useful for frontend iteration, but it does not exactly match the production Worker bundle. Use Wrangler-based flows when validating Worker behavior or WebRTC paths.
 
 ## Validation
 

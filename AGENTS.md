@@ -28,7 +28,7 @@ Use Valibot to validate untrusted JSON boundaries, and use `neverthrow` `Result`
 
 Vitest tests are committed for Worker routes and helpers, Discord OAuth, notifications, TURN credentials, frontend TURN parsing, and WHEP reconnect behavior. Add tests as `*.test.ts` or `*.test.tsx` near the feature they cover. Prefer focused tests around protocol edges, schema validation, retry/reconnect timing, and Worker response status/header behavior.
 
-Treat `pnpm test` and `pnpm check` as the minimum automated validation for code changes. For Worker/WebRTC changes, also manually verify the affected Wrangler flows: Discord login, `/api/me`, `/api/lives`, live token creation, WHIP publish through `/ingest/:userId`, WHEP playback through `/play/:userId`, TURN credential retrieval, and live start notification cleanup when relevant.
+Treat `pnpm test` and `pnpm check` as the minimum automated validation for code changes. For Worker/WebRTC changes, also manually verify the affected Wrangler flows: `/api/me`, `/api/lives`, live token creation, WHIP publish through `/ingest/:userId`, WHEP playback through `/play/:userId`, TURN credential retrieval, and live start notification cleanup when relevant.
 
 ## Commit & Pull Request Guidelines
 
