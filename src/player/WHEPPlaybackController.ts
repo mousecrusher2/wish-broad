@@ -338,6 +338,21 @@ export class WHEPPlaybackController {
     this.queueReconnect(resourceUserId);
   }
 
+  private failUnconnectedAttempt(
+    mode: AttemptMode,
+    resourceUserId: string,
+  ): void {
+    // ICE "failed" is terminal without an ICE restart. A session that never
+    // connected has no recovery timer or playback monitor watching it, so
+    // replace it like any other failed attempt instead of leaving the UI stuck.
+    this.disposeSession();
+    this.handleAttemptFailure(
+      new Error("WHEP ICE connection failed before playback connected"),
+      mode,
+      resourceUserId,
+    );
+  }
+
   private handleConnected(resourceUserId: string, session: WHEPSession): void {
     const currentAttemptId = this.attemptId;
     this.clearRecoveryTimer();
@@ -661,6 +676,9 @@ export class WHEPPlaybackController {
 
     const phase = mode === "retry" ? "reconnecting" : "connecting";
     let sessionWasConnected = false;
+    // Failures reported while start() is still running belong to start()'s own
+    // error result; only ICE failures after signaling succeeded are handled here.
+    let signalingCompleted = false;
 
     this.pendingAttempt = null;
     this.clearPlaybackMonitor();
@@ -681,6 +699,11 @@ export class WHEPPlaybackController {
           }
 
           if (!sessionWasConnected) {
+            if (status === "failed" && signalingCompleted) {
+              this.failUnconnectedAttempt(mode, resourceUserId);
+              return;
+            }
+
             this.updatePlaybackState(
               createPlaybackState(
                 resourceUserId,
@@ -728,9 +751,16 @@ export class WHEPPlaybackController {
         return;
       }
 
-      if (session.getSnapshot().status === "connected") {
+      signalingCompleted = true;
+      const { status } = session.getSnapshot();
+      if (status === "connected") {
         sessionWasConnected = true;
         this.handleConnected(resourceUserId, session);
+      } else if (
+        status === "failed" &&
+        this.isActiveSession(attemptId, session)
+      ) {
+        this.failUnconnectedAttempt(mode, resourceUserId);
       }
     } catch (error: unknown) {
       if (!(error instanceof Error && error.name === "AbortError")) {
