@@ -1,10 +1,13 @@
 import { describe, expect, it, vi, type Mock } from "vitest";
 import {
-  deleteLiveForSession,
+  endLive,
   getAllLives,
   getLive,
   getLiveTokenHash,
+  insertLive,
+  resumeLive,
   setLiveNotificationMessageId,
+  startLiveReconnectGrace,
 } from "./database";
 
 type MockStatement = {
@@ -40,6 +43,18 @@ const storedTracks = [
   },
 ] as const;
 
+function createLiveRow(overrides: Record<string, unknown> = {}) {
+  return {
+    broadcast_id: "broadcast-1",
+    grace_expires_at: null,
+    notification_message_id: null,
+    session_id: "session-1",
+    tracks_json: JSON.stringify(storedTracks),
+    user_id: "user-1",
+    ...overrides,
+  };
+}
+
 describe("D1 database helpers", () => {
   it("returns null for a missing live row", async () => {
     const { database, statement } = createDatabase();
@@ -50,21 +65,23 @@ describe("D1 database helpers", () => {
   });
 
   it.each([
-    [null, null],
+    [null, null, null],
     // Larger than Number.MAX_SAFE_INTEGER, like real Discord snowflakes.
-    ["1300000000000000123", 1_300_000_000_000_000_123n],
+    ["1300000000000000123", 1_300_000_000_000_000_123n, 1_700_000_060_000],
   ] as const)(
     "validates and normalizes live rows with notification id %s",
-    async (storedMessageId, notificationMessageId) => {
+    async (storedMessageId, notificationMessageId, graceExpiresAt) => {
       const { database, statement } = createDatabase();
-      statement.first.mockResolvedValue({
-        notification_message_id: storedMessageId,
-        user_id: "user-1",
-        session_id: "session-1",
-        tracks_json: JSON.stringify(storedTracks),
-      });
+      statement.first.mockResolvedValue(
+        createLiveRow({
+          grace_expires_at: graceExpiresAt,
+          notification_message_id: storedMessageId,
+        }),
+      );
 
       await expect(getLive(database, "user-1")).resolves.toEqual({
+        broadcastId: "broadcast-1",
+        graceExpiresAt,
         notificationMessageId,
         userId: "user-1",
         sessionId: "session-1",
@@ -77,12 +94,9 @@ describe("D1 database helpers", () => {
     "rejects a stored notification id of %s that is not decimal text",
     async (storedMessageId) => {
       const { database, statement } = createDatabase();
-      statement.first.mockResolvedValue({
-        notification_message_id: storedMessageId,
-        user_id: "user-1",
-        session_id: "session-1",
-        tracks_json: "[]",
-      });
+      statement.first.mockResolvedValue(
+        createLiveRow({ notification_message_id: storedMessageId }),
+      );
 
       await expect(getLive(database, "user-1")).rejects.toThrow(
         "Invalid D1 lives row",
@@ -101,64 +115,140 @@ describe("D1 database helpers", () => {
       "Invalid D1 lives row",
     );
 
-    statement.first.mockResolvedValue({
-      notification_message_id: null,
-      user_id: "user-1",
-      session_id: "session-1",
-      tracks_json: "not-json",
-    });
+    statement.first.mockResolvedValue(createLiveRow({ grace_expires_at: 1.5 }));
+    await expect(getLive(database, "user-1")).rejects.toThrow(
+      "Invalid D1 lives row",
+    );
+
+    statement.first.mockResolvedValue(
+      createLiveRow({ tracks_json: "not-json" }),
+    );
     await expect(getLive(database, "user-1")).rejects.toThrow(SyntaxError);
 
-    statement.first.mockResolvedValue({
-      notification_message_id: null,
-      user_id: "user-1",
-      session_id: "session-1",
-      tracks_json: JSON.stringify([{ ...storedTracks[0], location: "local" }]),
-    });
+    statement.first.mockResolvedValue(
+      createLiveRow({
+        tracks_json: JSON.stringify([
+          { ...storedTracks[0], location: "local" },
+        ]),
+      }),
+    );
     await expect(getLive(database, "user-1")).rejects.toThrow(
       "Invalid D1 lives.tracks_json",
     );
   });
 
-  it.each([
-    [
-      "UPDATE lives SET notification_message_id = ? WHERE user_id = ? AND session_id = ?",
-      "set",
-    ],
-    ["DELETE FROM lives WHERE user_id = ? AND session_id = ?", "delete"],
-  ] as const)("executes guarded live %s by session", async (sql, operation) => {
+  it("starts a broadcast with a fresh broadcast id", async () => {
     const { database, prepare, statement } = createDatabase();
     statement.run.mockResolvedValue({ meta: { changes: 1 } });
 
-    const result =
-      operation === "set"
-        ? await setLiveNotificationMessageId(
-            database,
-            "user-1",
-            "session-1",
-            45n,
-          )
-        : await deleteLiveForSession(database, "user-1", "session-1");
+    const broadcastId = await insertLive(database, "user-1", "session-1", [
+      ...storedTracks,
+    ]);
 
-    expect(result).toBe(true);
-    expect(prepare).toHaveBeenCalledWith(sql);
+    expect(broadcastId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(prepare).toHaveBeenCalledWith(
+      "INSERT INTO lives (user_id, broadcast_id, session_id, tracks_json) VALUES (?, ?, ?, ?)",
+    );
     expect(statement.bind).toHaveBeenCalledWith(
-      ...(operation === "set"
-        ? ["45", "user-1", "session-1"]
-        : ["user-1", "session-1"]),
+      "user-1",
+      broadcastId,
+      "session-1",
+      JSON.stringify(storedTracks),
     );
   });
 
-  it("returns false when guarded live updates or deletes change no row", async () => {
-    const { database, statement } = createDatabase();
-    statement.run.mockResolvedValue({ meta: { changes: 0 } });
+  it.each([
+    [
+      "notification",
+      "UPDATE lives SET notification_message_id = ? WHERE user_id = ? AND broadcast_id = ?",
+      ["45", "user-1", "broadcast-1"],
+    ],
+    [
+      "grace",
+      "UPDATE lives SET grace_expires_at = ? WHERE user_id = ? AND session_id = ? AND grace_expires_at IS NULL",
+      [1_700_000_060_000, "user-1", "session-1"],
+    ],
+    [
+      "resume",
+      "UPDATE lives SET session_id = ?, tracks_json = ?, grace_expires_at = NULL WHERE user_id = ? AND session_id = ? AND grace_expires_at IS NOT NULL",
+      ["session-2", JSON.stringify(storedTracks), "user-1", "session-1"],
+    ],
+  ] as const)(
+    "executes the guarded live %s update",
+    async (operation, sql, bindings) => {
+      const { database, prepare, statement } = createDatabase();
+      statement.run.mockResolvedValue({ meta: { changes: 1 } });
+      const run = {
+        grace: () =>
+          startLiveReconnectGrace(
+            database,
+            "user-1",
+            "session-1",
+            1_700_000_060_000,
+          ),
+        notification: () =>
+          setLiveNotificationMessageId(database, "user-1", "broadcast-1", 45n),
+        resume: () =>
+          resumeLive(database, "user-1", "session-1", "session-2", [
+            ...storedTracks,
+          ]),
+      }[operation];
 
-    await expect(
-      setLiveNotificationMessageId(database, "user-1", "old-session", 45n),
-    ).resolves.toBe(false);
-    await expect(
-      deleteLiveForSession(database, "user-1", "old-session"),
-    ).resolves.toBe(false);
+      await expect(run()).resolves.toBe(true);
+      expect(prepare).toHaveBeenCalledWith(sql);
+      expect(statement.bind).toHaveBeenCalledWith(...bindings);
+
+      statement.run.mockResolvedValue({ meta: { changes: 0 } });
+      await expect(run()).resolves.toBe(false);
+    },
+  );
+
+  it.each([null, 1_700_000_060_000])(
+    "ends a live only in the observed grace state %s",
+    async (graceExpiresAt) => {
+      const { database, prepare, statement } = createDatabase();
+      statement.first.mockResolvedValue({
+        notification_message_id: "1300000000000000123",
+      });
+
+      await expect(
+        endLive(database, {
+          graceExpiresAt,
+          sessionId: "session-1",
+          userId: "user-1",
+        }),
+      ).resolves.toEqual({ notificationMessageId: 1_300_000_000_000_000_123n });
+      expect(prepare).toHaveBeenCalledWith(
+        "DELETE FROM lives WHERE user_id = ? AND session_id = ? AND grace_expires_at IS ? RETURNING notification_message_id",
+      );
+      expect(statement.bind).toHaveBeenCalledWith(
+        "user-1",
+        "session-1",
+        graceExpiresAt,
+      );
+    },
+  );
+
+  it("reports when ending a live matched no row, or returned a bad row", async () => {
+    const { database, statement } = createDatabase();
+    const observed = {
+      graceExpiresAt: null,
+      sessionId: "session-1",
+      userId: "user-1",
+    };
+
+    statement.first.mockResolvedValue(null);
+    await expect(endLive(database, observed)).resolves.toBeNull();
+
+    statement.first.mockResolvedValue({ notification_message_id: null });
+    await expect(endLive(database, observed)).resolves.toEqual({
+      notificationMessageId: null,
+    });
+
+    statement.first.mockResolvedValue({ notification_message_id: 45 });
+    await expect(endLive(database, observed)).rejects.toThrow(
+      "Invalid D1 ended lives row",
+    );
   });
 
   it("reads a live token hash, and reports absent tokens", async () => {
@@ -175,17 +265,21 @@ describe("D1 database helpers", () => {
     await expect(getLiveTokenHash(database, "user-1")).resolves.toBeNull();
   });
 
-  it("maps all live rows to owners and rejects invalid list records", async () => {
-    const { database, statement } = createDatabase();
+  it("lists lives that are live or still within their grace period", async () => {
+    const { database, prepare, statement } = createDatabase();
     statement.all.mockResolvedValue({
       results: [{ user_id: "user-1", display_name: "Streamer" }],
     });
-    await expect(getAllLives(database)).resolves.toEqual([
+    await expect(getAllLives(database, 1_700_000_000_000)).resolves.toEqual([
       { owner: { userId: "user-1", displayName: "Streamer" } },
     ]);
+    expect(prepare).toHaveBeenCalledWith(
+      "SELECT users.user_id, display_name FROM lives JOIN users ON lives.user_id = users.user_id WHERE lives.grace_expires_at IS NULL OR lives.grace_expires_at > ?",
+    );
+    expect(statement.bind).toHaveBeenCalledWith(1_700_000_000_000);
 
     statement.all.mockResolvedValue({ results: [{ user_id: "user-1" }] });
-    await expect(getAllLives(database)).rejects.toThrow(
+    await expect(getAllLives(database, 1_700_000_000_000)).rejects.toThrow(
       "Invalid D1 live list row",
     );
   });

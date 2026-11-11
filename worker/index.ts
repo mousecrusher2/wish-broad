@@ -30,6 +30,7 @@ import {
 import { hashTokenWithPepper } from "./token-hash";
 import { generateTurnIceServers } from "./turn";
 import { createErrorLogFields, logError, logInfo, logWarn } from "./logger";
+import { LIVE_RECONNECT_GRACE_MS, scheduleLiveEnd } from "./live-end";
 
 type AppEnv = {
   Bindings: Bindings;
@@ -37,6 +38,9 @@ type AppEnv = {
     jwtPayload: JWTPayload;
   };
 };
+
+// Matches the player's maximum reconnect backoff.
+const LIVE_RECONNECTING_RETRY_AFTER_SECONDS = 2;
 
 const app = new HonoBase<AppEnv>({ router: new LinearRouter() });
 
@@ -126,6 +130,7 @@ function scheduleTrackClose(
 async function sendLiveStartNotification(
   c: Context<AppEnv>,
   userId: string,
+  broadcastId: string,
   sessionId: string,
   siteUrl: string,
 ): Promise<void> {
@@ -145,19 +150,20 @@ async function sendLiveStartNotification(
 
   const { messageId } = notificationResult.value;
 
-  // Notifications are tied to the exact live session. If that row has already
-  // disappeared, delete the Discord message instead of leaving an orphan.
+  // Notifications are tied to the broadcast, which survives OBS reconnects. If
+  // it has already ended, delete the Discord message instead of leaving an
+  // orphan.
   type PersistNotificationResult =
     { ok: true; saved: boolean } | { ok: false; error: Error };
   const persistResult: PersistNotificationResult = await db
-    .setLiveNotificationMessageId(c.env.LIVE_DB, userId, sessionId, messageId)
+    .setLiveNotificationMessageId(c.env.LIVE_DB, userId, broadcastId, messageId)
     .then((saved): PersistNotificationResult => ({ ok: true, saved }))
     .catch((error: Error): PersistNotificationResult => ({ ok: false, error }));
 
   if (!persistResult.ok) {
     logWarn(c.env, "live_notification.persist_failed", {
       ...createErrorLogFields(persistResult.error),
-      messageId,
+      messageId: messageId.toString(),
       sessionId,
       userId,
     });
@@ -171,11 +177,63 @@ async function sendLiveStartNotification(
   if (deleteResult.isErr()) {
     logWarn(c.env, "live_notification.orphan_delete_failed", {
       ...createErrorLogFields(deleteResult.error),
-      messageId,
+      messageId: messageId.toString(),
       sessionId,
       userId,
     });
   }
+}
+
+function scheduleNotificationDelete(
+  c: Context<AppEnv>,
+  messageId: bigint,
+  fields: { sessionId: string; userId: string },
+): void {
+  c.executionCtx.waitUntil(
+    deleteLiveStartedNotification(c.env, messageId).then((deleteResult) => {
+      if (deleteResult.isErr()) {
+        logWarn(c.env, "live_notification.delete_failed", {
+          ...createErrorLogFields(deleteResult.error),
+          ...fields,
+          messageId: messageId.toString(),
+        });
+      }
+    }),
+  );
+}
+
+type LiveEndReason = "reconnect_grace_expired" | "session_inactive";
+
+// Ends the broadcast only if its row is still exactly as observed, then removes
+// its start notification. Returns false when a concurrent request changed the
+// row first, for example OBS starting a reconnect grace period or resuming.
+async function endObservedLive(
+  c: Context<AppEnv>,
+  live: db.LiveRecord,
+  reason: LiveEndReason,
+): Promise<boolean> {
+  const ended = await db.endLive(c.env.LIVE_DB, live);
+  if (ended === null) {
+    return false;
+  }
+
+  const fields = { sessionId: live.sessionId, userId: live.userId };
+  logInfo(c.env, "live.ended", { ...fields, reason });
+  if (ended.notificationMessageId !== null) {
+    scheduleNotificationDelete(c, ended.notificationMessageId, fields);
+  }
+  return true;
+}
+
+function isInReconnectGrace(live: db.LiveRecord, now: number): boolean {
+  return live.graceExpiresAt !== null && live.graceExpiresAt > now;
+}
+
+function respondLiveReconnecting(c: Context<AppEnv>): Response {
+  // 503 tells viewers to keep retrying; 404 is reserved for an ended broadcast.
+  return c.text("Live stream is waiting for the publisher to reconnect", 503, {
+    "Retry-After": String(LIVE_RECONNECTING_RETRY_AFTER_SECONDS),
+  });
 }
 
 function isSdpContentType(contentType: string | undefined): boolean {
@@ -238,8 +296,8 @@ app.get("/ingest/:userId", async (c) => {
   return c.body(null, 204);
 });
 
-// WHIP ingest start. The Worker stores the resulting Calls session as the
-// current live row for this owner.
+// WHIP ingest start. A new ingest either resumes the owner's broadcast while it
+// waits for OBS to reconnect, or starts a new broadcast with a notification.
 app.post("/ingest/:userId", async (c) => {
   const { userId } = c.req.param();
   if (!isSdpContentType(c.req.header("content-type"))) {
@@ -251,11 +309,17 @@ app.post("/ingest/:userId", async (c) => {
     return c.text("SDP offer is required", 400);
   }
 
+  let resumableLive: db.LiveRecord | null = null;
   const existingLive = await db.getLive(c.env.LIVE_DB, userId);
-  if (existingLive) {
+  if (existingLive && isInReconnectGrace(existingLive, Date.now())) {
+    resumableLive = existingLive;
+  } else if (existingLive && existingLive.graceExpiresAt !== null) {
+    // The grace period passed but its scheduled end has not run (yet).
+    await endObservedLive(c, existingLive, "reconnect_grace_expired");
+  } else if (existingLive) {
     // Avoid global SFU sweeps in Workers. Only check the one row that blocks
-    // this ingest attempt, then remove it if Calls has already garbage-collected
-    // the underlying session.
+    // this ingest attempt, then end it if Calls has already garbage-collected
+    // the underlying session (for example after OBS crashed without DELETE).
     const isActiveResult = await isSessionActive(c.env, existingLive.sessionId);
     if (isActiveResult.isErr()) {
       logError(c.env, "ingest.session_activity_check_failed", {
@@ -270,33 +334,7 @@ app.post("/ingest/:userId", async (c) => {
       return c.text("A live stream is already active for this user", 400);
     }
 
-    const deleted = await db.deleteLiveForSession(
-      c.env.LIVE_DB,
-      userId,
-      existingLive.sessionId,
-    );
-    if (deleted) {
-      const notificationMessageId = existingLive.notificationMessageId;
-      if (
-        notificationMessageId !== null &&
-        notificationMessageId !== undefined
-      ) {
-        c.executionCtx.waitUntil(
-          deleteLiveStartedNotification(c.env, notificationMessageId).then(
-            (deleteResult) => {
-              if (deleteResult.isErr()) {
-                logWarn(c.env, "live_notification.delete_failed", {
-                  ...createErrorLogFields(deleteResult.error),
-                  messageId: notificationMessageId,
-                  sessionId: existingLive.sessionId,
-                  userId,
-                });
-              }
-            },
-          ),
-        );
-      }
-    }
+    await endObservedLive(c, existingLive, "session_inactive");
   }
 
   const ingestResult = await startIngest(c.env, userId, sdpOffer);
@@ -316,10 +354,42 @@ app.post("/ingest/:userId", async (c) => {
   }
 
   const result = ingestResult.value;
-  // The live row is a pointer to this exact Calls session and track set. OBS
-  // reconnects create new SDP, sessions, and mids, so stale rows must not be
-  // reused across ingests.
-  await db.insertLive(c.env.LIVE_DB, userId, result.sessionId, result.tracks);
+  const respondWithAnswer = () =>
+    c.body(result.sdpAnswer, 201, {
+      "content-type": "application/sdp",
+      etag: `"${result.sessionId}"`,
+      location: `/ingest/${userId}/${result.sessionId}`,
+    });
+
+  // The live row points at this exact Calls session and track set. OBS
+  // reconnects create new SDP, sessions, and mids, so a resume replaces them
+  // while keeping the broadcast and its start notification.
+  if (
+    resumableLive &&
+    (await db.resumeLive(
+      c.env.LIVE_DB,
+      userId,
+      resumableLive.sessionId,
+      result.sessionId,
+      result.tracks,
+    ))
+  ) {
+    logInfo(c.env, "ingest.resumed", {
+      previousSessionId: resumableLive.sessionId,
+      sessionId: result.sessionId,
+      userId,
+    });
+    return respondWithAnswer();
+  }
+
+  // Either there was nothing to resume, or the broadcast ended while this
+  // session was negotiated; start a new broadcast.
+  const broadcastId = await db.insertLive(
+    c.env.LIVE_DB,
+    userId,
+    result.sessionId,
+    result.tracks,
+  );
 
   const notifyParam = c.req.query("notify");
   if (notifyParam !== "false" && notifyParam !== "0") {
@@ -327,20 +397,17 @@ app.post("/ingest/:userId", async (c) => {
       sendLiveStartNotification(
         c,
         userId,
+        broadcastId,
         result.sessionId,
         createSiteRootLocation(c.req.url),
       ),
     );
   }
 
-  return c.body(result.sdpAnswer, 201, {
-    "content-type": "application/sdp",
-    etag: `"${result.sessionId}"`,
-    location: `/ingest/${userId}/${result.sessionId}`,
-  });
+  return respondWithAnswer();
 });
 
-// WHIP ingest end. Only the currently stored session can delete the live row.
+// WHIP ingest end. Only the currently stored session can end its ingest.
 app.get("/ingest/:userId/:sessionId", async () => {
   return new Response(null, { status: 204 });
 });
@@ -357,6 +424,11 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     return c.text("Session ID does not match the active live stream", 400);
   }
 
+  if (existingLive.graceExpiresAt !== null) {
+    // A repeated DELETE for an ingest that already ended.
+    return c.text("OK", 200);
+  }
+
   if (
     existingLive.tracks.length === 0 ||
     existingLive.tracks.some((track) => track.mid.length === 0)
@@ -364,18 +436,21 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     return c.text("Stored live track data is invalid", 500);
   }
 
-  const deleted = await db.deleteLiveForSession(
+  // OBS also sends DELETE right before it reconnects, which cannot be told
+  // apart from stopping the stream. Keep the broadcast and its notification
+  // for a grace period; a Workflow ends it unless a new ingest resumes it.
+  const graceExpiresAt = Date.now() + LIVE_RECONNECT_GRACE_MS;
+  const graceStarted = await db.startLiveReconnectGrace(
     c.env.LIVE_DB,
     userId,
     sessionId,
+    graceExpiresAt,
   );
-  if (!deleted) {
+  if (!graceStarted) {
     return c.text("Failed to delete the requested live stream", 400);
   }
 
-  // Delete the row immediately rather than keeping a pending-end state. Workers
-  // cannot reliably own timers, and the stored track locators are invalid once
-  // this ingest session is no longer current.
+  // The stored track locators are invalid once this ingest session ended.
   scheduleTrackClose(
     c,
     sessionId,
@@ -383,26 +458,19 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     `Failed to close live tracks for user ${userId}:`,
     `SFU reported track close errors for user ${userId}:`,
   );
-  if (
-    existingLive.notificationMessageId !== null &&
-    existingLive.notificationMessageId !== undefined
-  ) {
-    c.executionCtx.waitUntil(
-      deleteLiveStartedNotification(
-        c.env,
-        existingLive.notificationMessageId,
-      ).then((deleteResult) => {
-        if (deleteResult.isErr()) {
-          logWarn(c.env, "live_notification.delete_failed", {
-            ...createErrorLogFields(deleteResult.error),
-            messageId: existingLive.notificationMessageId,
-            sessionId,
-            userId,
-          });
-        }
-      }),
-    );
-  }
+  // If scheduling fails, requests that touch this owner end the broadcast
+  // after the deadline instead, and /api/lives already hides it.
+  c.executionCtx.waitUntil(
+    scheduleLiveEnd(c.env, { graceExpiresAt, sessionId, userId }).catch(
+      (error: unknown) => {
+        logError(c.env, "live_end.schedule_failed", {
+          ...createErrorLogFields(error),
+          sessionId,
+          userId,
+        });
+      },
+    ),
+  );
 
   return c.text("OK", 200);
 });
@@ -450,6 +518,23 @@ app.post("/play/:userId", async (c) => {
 
   const liveTrackRecord = await db.getLive(c.env.LIVE_DB, userId);
   const tracks = liveTrackRecord?.tracks ?? [];
+  if (liveTrackRecord && isInReconnectGrace(liveTrackRecord, Date.now())) {
+    // The stored tracks were closed when OBS sent DELETE. Viewers retry until
+    // OBS resumes the broadcast or the grace period ends it.
+    return respondLiveReconnecting(c);
+  }
+  if (liveTrackRecord && liveTrackRecord.graceExpiresAt !== null) {
+    // The grace period passed but its scheduled end has not run (yet). If the
+    // row changed meanwhile, OBS may have resumed just in time; let the viewer
+    // retry against the new state.
+    return (await endObservedLive(
+      c,
+      liveTrackRecord,
+      "reconnect_grace_expired",
+    ))
+      ? c.text(`Live stream not found: ${userId}`, 404)
+      : respondLiveReconnecting(c);
+  }
   if (liveTrackRecord) {
     // Playback names one live owner, so this is the cheapest safe point to
     // reconcile stale D1 state with Calls without scanning every live row.
@@ -466,34 +551,11 @@ app.post("/play/:userId", async (c) => {
       return c.text("Failed to verify live stream status", 502);
     }
     if (!isActiveResult.value) {
-      const deleted = await db.deleteLiveForSession(
-        c.env.LIVE_DB,
-        userId,
-        liveTrackRecord.sessionId,
-      );
-      if (deleted) {
-        const notificationMessageId = liveTrackRecord.notificationMessageId;
-        if (
-          notificationMessageId !== null &&
-          notificationMessageId !== undefined
-        ) {
-          c.executionCtx.waitUntil(
-            deleteLiveStartedNotification(c.env, notificationMessageId).then(
-              (deleteResult) => {
-                if (deleteResult.isErr()) {
-                  logWarn(c.env, "live_notification.delete_failed", {
-                    ...createErrorLogFields(deleteResult.error),
-                    messageId: notificationMessageId,
-                    sessionId: liveTrackRecord.sessionId,
-                    userId,
-                  });
-                }
-              },
-            ),
-          );
-        }
-      }
-      return c.text(`Live stream not found: ${userId}`, 404);
+      // If the row changed meanwhile (OBS sent DELETE or resumed), let the
+      // viewer retry against the new state instead of reporting an end.
+      return (await endObservedLive(c, liveTrackRecord, "session_inactive"))
+        ? c.text(`Live stream not found: ${userId}`, 404)
+        : respondLiveReconnecting(c);
     }
   }
 
@@ -513,34 +575,11 @@ app.post("/play/:userId", async (c) => {
       return c.text(`Live stream not found: ${userId}`, 404);
     }
     if (error instanceof SfuApiError && error.isSessionNotFound()) {
-      if (liveTrackRecord) {
-        const deleted = await db.deleteLiveForSession(
-          c.env.LIVE_DB,
-          userId,
-          liveTrackRecord.sessionId,
-        );
-        if (deleted) {
-          const notificationMessageId = liveTrackRecord.notificationMessageId;
-          if (
-            notificationMessageId !== null &&
-            notificationMessageId !== undefined
-          ) {
-            c.executionCtx.waitUntil(
-              deleteLiveStartedNotification(c.env, notificationMessageId).then(
-                (deleteResult) => {
-                  if (deleteResult.isErr()) {
-                    logWarn(c.env, "live_notification.delete_failed", {
-                      ...createErrorLogFields(deleteResult.error),
-                      messageId: notificationMessageId,
-                      sessionId: liveTrackRecord.sessionId,
-                      userId,
-                    });
-                  }
-                },
-              ),
-            );
-          }
-        }
+      if (
+        liveTrackRecord &&
+        !(await endObservedLive(c, liveTrackRecord, "session_inactive"))
+      ) {
+        return respondLiveReconnecting(c);
       }
       return c.text(`Live stream not found: ${userId}`, 404);
     }
@@ -741,7 +780,7 @@ app.get("/api/me/livetoken", async (c) => {
 app.get("/api/lives", async (c) => {
   // Keep listing cheap: do not poll Calls for every live row here. Stale rows are
   // reconciled when a user tries to ingest or play the specific stream.
-  const lives = await db.getAllLives(c.env.LIVE_DB);
+  const lives = await db.getAllLives(c.env.LIVE_DB, Date.now());
   return c.json(lives);
 });
 

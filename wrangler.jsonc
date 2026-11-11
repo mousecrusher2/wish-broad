@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "whip-worker",
-  "main": "worker/index.ts",
+  "main": "worker/main.ts",
   "compatibility_date": "2026-07-27",
   "workers_dev": false,
   "preview_urls": false,
@@ -41,6 +41,15 @@
       "binding": "LIVE_DB",
       "database_name": "broad-db",
       "database_id": "2d57ee62-6f7c-490a-974f-5df3b194a860",
+    },
+  ],
+  // Ends a broadcast once its OBS reconnect grace period passes. See
+  // worker/live-end.ts.
+  "workflows": [
+    {
+      "name": "whip-worker-live-end",
+      "binding": "LIVE_END_WORKFLOW",
+      "class_name": "LiveEndWorkflow",
     },
   ],
   "assets": {

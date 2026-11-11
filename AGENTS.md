@@ -4,7 +4,7 @@
 
 `src/` contains the React 19 + Vite client. App bootstrapping and auth flow live in `src/App.tsx`, `src/main.tsx`, `src/useAuth.ts`, and related `useX` hooks. UI components live in `src/components/`, while WHEP playback, reconnect behavior, TURN credential fetching, and PeerConnection session logic live in `src/player/`.
 
-`worker/` contains the Cloudflare Worker and Hono routes. `worker/index.ts` is the entrypoint and route composition layer; keep data access in `worker/database.ts`, Cloudflare Calls/SFU integration in `worker/sfu.ts`, Discord OAuth helpers in `worker/discord.ts` and `worker/discord-login.ts`, live notifications in `worker/notifications.ts`, TURN credential generation in `worker/turn.ts`, and token hashing/authentication helpers in their existing modules.
+`worker/` contains the Cloudflare Worker and Hono routes. `worker/main.ts` is the Worker entrypoint: it exports the Hono app and the Workflow classes, and is the only module that imports `cloudflare:workers`, so keep it thin. `worker/index.ts` is the route composition layer. Keep data access in `worker/database.ts`, Cloudflare Calls/SFU integration in `worker/sfu.ts`, Discord OAuth helpers in `worker/discord.ts` and `worker/discord-login.ts`, live notifications in `worker/notifications.ts`, the reconnect grace period and live-end Workflow body in `worker/live-end.ts`, TURN credential generation in `worker/turn.ts`, and token hashing/authentication helpers in their existing modules.
 
 Static assets live in `public/`. Treat `schema.sql` as the authoritative D1 schema for current development; migrations in `migrations/` record deployment history and must be kept aligned when table shape changes. `wrangler.jsonc` defines Worker bindings, secrets, assets, observability, and deployment settings. Generated Cloudflare binding types live in `worker-configuration.d.ts`, with app-facing aliases in `worker/types.ts`.
 
@@ -28,7 +28,7 @@ Use Valibot to validate untrusted JSON boundaries, and use `neverthrow` `Result`
 
 Vitest tests are committed for Worker routes and helpers, Discord OAuth, notifications, TURN credentials, frontend TURN parsing, and WHEP reconnect behavior. Add tests as `*.test.ts` or `*.test.tsx` near the feature they cover. Prefer focused tests around protocol edges, schema validation, retry/reconnect timing, and Worker response status/header behavior.
 
-Treat `pnpm test` and `pnpm check` as the minimum automated validation for code changes. For Worker/WebRTC changes, also manually verify the affected Wrangler flows: `/api/me`, `/api/lives`, live token creation, WHIP publish through `/ingest/:userId`, WHEP playback through `/play/:userId`, TURN credential retrieval, and live start notification cleanup when relevant.
+Treat `pnpm test` and `pnpm check` as the minimum automated validation for code changes. For Worker/WebRTC changes, also manually verify the affected Wrangler flows: `/api/me`, `/api/lives`, live token creation, WHIP publish through `/ingest/:userId`, WHEP playback through `/play/:userId`, TURN credential retrieval, and live start notification cleanup when relevant, including an OBS reconnect within the 60-second grace period (no second notification) and a stop that ends the broadcast after it.
 
 ## Commit & Pull Request Guidelines
 

@@ -35,6 +35,7 @@ export class DiscordWebhookError extends Error {
   readonly endpoint: string;
   readonly kind: DiscordWebhookErrorKind;
   readonly responseBodyText: string | undefined;
+  readonly status: number | undefined;
   readonly statusText: string | undefined;
 
   constructor(
@@ -43,6 +44,7 @@ export class DiscordWebhookError extends Error {
       endpoint: string;
       kind: DiscordWebhookErrorKind;
       responseBodyText?: string | undefined;
+      status?: number | undefined;
       statusText?: string | undefined;
     },
   ) {
@@ -51,7 +53,20 @@ export class DiscordWebhookError extends Error {
     this.endpoint = redactWebhookUrl(options.endpoint);
     this.kind = options.kind;
     this.responseBodyText = options.responseBodyText;
+    this.status = options.status;
     this.statusText = options.statusText;
+  }
+
+  /** Whether sending the same request again later could succeed. */
+  isRetryable(): boolean {
+    if (this.kind !== "http_error") {
+      // The request failed or timed out before Discord answered.
+      return true;
+    }
+
+    return (
+      this.status !== undefined && (this.status === 429 || this.status >= 500)
+    );
   }
 }
 
@@ -182,6 +197,7 @@ export async function sendLiveStartedNotification(
         endpoint,
         kind: "http_error",
         responseBodyText: trimResponseBody(responseText),
+        status: response.status,
         statusText: response.statusText,
       }),
     );
@@ -263,6 +279,7 @@ export async function deleteLiveStartedNotification(
       endpoint,
       kind: "http_error",
       responseBodyText: trimResponseBody(await response.text()),
+      status: response.status,
       statusText: response.statusText,
     }),
   );

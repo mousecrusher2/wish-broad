@@ -12,6 +12,16 @@ must survive requests lives in D1, while Cloudflare Calls owns the actual media
 sessions and track state. Avoid designs that require the Worker to run timers,
 poll all active sessions, or keep long-lived in-memory state.
 
+The one scheduled task is ending a broadcast once its OBS reconnect grace period
+passes (see Ingest Lifecycle). It runs as a Cloudflare Workflow instance
+(`LiveEndWorkflow`, exported from `worker/main.ts`) that sleeps until the
+deadline stored in D1, so nothing runs while no broadcast is waiting for OBS.
+The Workflow is only a trigger: `lives.grace_expires_at` is authoritative, and
+every request path treats a passed deadline as an ended broadcast, so a missed
+or failed Workflow only delays notification cleanup. A Durable Object alarm
+could replace it later without changing the row transitions; only
+`scheduleLiveEnd` and the Workflow body in `worker/live-end.ts` would move.
+
 Durable Objects and WebSocket notifications are intentionally deferred. A future
 DO migration could centralize live state and per-room notifications, but until
 then the client and normal HTTP requests are the practical triggers for
@@ -70,10 +80,19 @@ stores an HMAC of the token with `LIVE_TOKEN_PEPPER`, not the raw bearer token.
 
 ## Live Row Semantics
 
-Each `lives` row is a pointer to a specific Cloudflare Calls ingest session and
-its remote tracks. The stored `session_id`, `trackName`, and `mid` values are not
-stable across OBS reconnects. When a live session ends or is replaced, the row
-should be removed or replaced instead of retained as a pending state.
+Each `lives` row represents one broadcast of its owner. `broadcast_id` stays the
+same for the whole broadcast, while `session_id` and the stored `trackName` and
+`mid` values point at the current Cloudflare Calls ingest session. Those are not
+stable across OBS reconnects, so a reconnect replaces them in place instead of
+reusing stale locators. `grace_expires_at` is `NULL` while that ingest session
+is live and holds the reconnect deadline (Unix epoch milliseconds) after OBS
+sent DELETE.
+
+Row transitions are compare-and-set statements on the observed `session_id`
+and `grace_expires_at` rather than read-modify-write sequences. D1 offers no
+per-row lock, and a delayed request or Workflow must never end a broadcast that
+has since resumed or entered a new grace period. Resuming changes `session_id`,
+which is what turns an already scheduled end into a no-op.
 
 The Worker does not try to keep the D1 live list perfectly synchronized with the
 SFU. Full synchronization would require polling every live session, which is too
@@ -83,16 +102,33 @@ user/session, such as ingest start or playback start.
 
 ## Ingest Lifecycle
 
-`POST /ingest/:userId` is the authoritative live-start path. If a stale row
-exists, the Worker checks only that user's stored SFU session. Active sessions
-reject a second ingest; inactive sessions are removed before inserting the new
-session.
+`POST /ingest/:userId` is the authoritative live-start path:
 
-`DELETE /ingest/:userId/:sessionId` immediately removes the row for the matching
-session and schedules SFU track cleanup. This can make Discord notification
-deletion best-effort around OBS reconnects, because OBS may send DELETE while it
-is about to create a fresh ingest session. The tradeoff is deliberate: retaining
-invalid track locators would make playback and later cleanup less reliable.
+- If the owner's broadcast is within its grace period, the new Calls session
+  resumes it. The row's session and tracks are replaced, and no new start
+  notification is sent.
+- If the grace period already passed, or the stored session is no longer active
+  in Calls (OBS crashed without sending DELETE), that broadcast is ended, with
+  its row and notification removed, and a new broadcast starts.
+- If the stored session is still active, the second ingest is rejected. Only
+  that user's stored SFU session is checked.
+
+`DELETE /ingest/:userId/:sessionId` cannot tell an intentional stop from a
+reconnect, because OBS sends DELETE before every reconnect, including the
+frequent ones caused by unstable WHIP connections. Removing the broadcast here
+would delete and re-post the Discord notification on every reconnect, so DELETE
+starts a 60-second grace period instead. It closes the ingest tracks, keeps the
+row and the start notification, and schedules the live-end Workflow for the
+deadline. If no ingest resumed the broadcast by then, the Workflow removes the
+row and deletes the notification. The cost is that a deliberate stop removes
+the notification about a minute late. A repeated DELETE for the same session is
+accepted without starting another grace period.
+
+OBS still sends DELETE when its window is closed; only crashes and network loss
+skip it. Those are not polled for, because checking Calls throughout every
+broadcast would spend Workflow steps or requests on a rare case. They are
+detected when the next ingest or playback request for that owner finds the
+stored session inactive.
 
 ## Playback Lifecycle
 
@@ -100,6 +136,15 @@ invalid track locators would make playback and later cleanup less reliable.
 named live session before creating a playback session. This keeps `/api/lives`
 cheap and shifts stale-session detection to the operation that actually needs
 the session.
+
+While the broadcast is in its grace period, `POST /play/:userId` returns 503
+with `Retry-After` without calling Calls, because the stored tracks were closed
+by DELETE. A 404 therefore means the broadcast has ended. If a playback request
+finds the stored session inactive but cannot end the row because it changed in
+the meantime (OBS sent DELETE or resumed), it also answers 503 so the viewer
+retries against the new state. `/api/lives` keeps listing broadcasts in their
+grace period and hides ones whose deadline passed, even before the Workflow
+removed them.
 
 Playback DELETE requests close only the track mids embedded in the WHEP session
 URL returned by the Worker. The frontend must use that returned `Location`
@@ -170,9 +215,16 @@ the client must replace that session rather than accepting partial playback.
 ## Notifications
 
 Discord live-start notifications are best-effort. The Worker asks Discord to
-return the created message id so the message can be deleted when the matching
-live row is removed. Notification send/delete failures are logged but do not
-block ingest or playback cleanup.
+return the created message id so the message can be deleted when the broadcast
+ends. The id is stored by `broadcast_id`, not by ingest session, so a reconnect
+while the notification is still being sent does not orphan it. Message ids are
+64-bit snowflakes; D1 cannot bind JavaScript `bigint` values and would read an
+`INTEGER` back as a lossy `number`, so the id is stored as decimal text.
+
+Notification send/delete failures are logged but do not block ingest or
+playback cleanup. The live-end Workflow lets Workflows retry a delete that
+failed with a network error, timeout, 429, or 5xx; other failures, such as a
+message that was already deleted, are logged once.
 
 ## Deferred Work
 

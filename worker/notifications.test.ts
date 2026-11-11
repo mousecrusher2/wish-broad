@@ -80,8 +80,54 @@ describe("worker live start notifications", () => {
       endpoint: "https://discord.com/api/webhooks/123/[redacted]?wait=true",
       kind: "http_error",
       responseBodyText: "bad gateway",
+      status: 502,
       statusText: "Bad Gateway",
     });
+  });
+
+  it.each([
+    [404, false],
+    [401, false],
+    [429, true],
+    [500, true],
+    [503, true],
+  ])(
+    "classifies a %i delete response as retryable=%s",
+    async (status, retryable) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response("failed", { status }),
+      );
+
+      const error = (
+        await deleteLiveStartedNotification(
+          {
+            NOTIFICATIONS_DISCORD_WEBHOOK_URL:
+              "https://discord.com/api/webhooks/1/token",
+          },
+          9n,
+        )
+      )._unsafeUnwrapErr();
+
+      expect(error.status).toBe(status);
+      expect(error.isRetryable()).toBe(retryable);
+    },
+  );
+
+  it("treats network failures and timeouts as retryable", () => {
+    for (const kind of ["request_failed", "request_timeout"] as const) {
+      expect(
+        new DiscordWebhookError("failed", {
+          endpoint: "https://discord.com/api/webhooks/1/token",
+          kind,
+        }).isRetryable(),
+      ).toBe(true);
+    }
+    expect(
+      new DiscordWebhookError("invalid body", {
+        endpoint: "https://discord.com/api/webhooks/1/token",
+        kind: "http_error",
+      }).isRetryable(),
+    ).toBe(false);
   });
 
   it("returns a timeout result when the webhook request is aborted", async () => {

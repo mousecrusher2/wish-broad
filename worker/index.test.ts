@@ -2,28 +2,35 @@ import { sign, verify } from "hono/jwt";
 import { err, ok } from "neverthrow";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bindings } from "./types";
+import type { LiveRecord } from "./database";
+import type { LiveEndParams } from "./live-end";
 import type { DiscordGuildMember, DiscordOAuthToken } from "./discord";
 import type { StoredTrack } from "./sfu";
 import { LiveNotFoundError, SfuApiError } from "./sfu";
 import { hashTokenWithPepper } from "./token-hash";
 
 const dbMocks = vi.hoisted(() => ({
-  deleteLiveForSession: vi.fn<() => Promise<boolean>>(),
+  endLive:
+    vi.fn<() => Promise<{ notificationMessageId: bigint | null } | null>>(),
   getAllLives: vi.fn<() => Promise<unknown[]>>(),
   getLiveTokenHash: vi.fn<() => Promise<string | null>>(),
-  getLive: vi.fn<
-    () => Promise<{
-      notificationMessageId?: bigint | null | undefined;
-      userId: string;
-      sessionId: string;
-      tracks: StoredTrack[];
-    } | null>
-  >(),
+  getLive: vi.fn<() => Promise<LiveRecord | null>>(),
   hasLiveToken: vi.fn<() => Promise<boolean>>(),
-  insertLive: vi.fn<() => Promise<void>>(),
+  insertLive: vi.fn<() => Promise<string>>(),
+  resumeLive: vi.fn<() => Promise<boolean>>(),
   setLiveNotificationMessageId: vi.fn<() => Promise<boolean>>(),
   setLiveToken: vi.fn<() => Promise<void>>(),
   setUser: vi.fn<() => Promise<void>>(),
+  startLiveReconnectGrace: vi.fn<() => Promise<boolean>>(),
+}));
+
+const workflowMocks = vi.hoisted(() => ({
+  create:
+    vi.fn<
+      (
+        options?: WorkflowInstanceCreateOptions<LiveEndParams>,
+      ) => Promise<WorkflowInstance>
+    >(),
 }));
 
 const callsMocks = vi.hoisted(() => {
@@ -277,6 +284,24 @@ function failUnusedTracingAccess(): never {
   throw new Error("Unexpected tracing access in tests");
 }
 
+function failUnusedWorkflowAccess(): never {
+  throw new Error("Unexpected Workflow access in tests");
+}
+
+function createUnusedWorkflowInstance(): WorkflowInstance {
+  return {
+    delete: failUnusedWorkflowAccess,
+    id: "live-end-instance",
+    pause: failUnusedWorkflowAccess,
+    restart: failUnusedWorkflowAccess,
+    resume: failUnusedWorkflowAccess,
+    sendEvent: failUnusedWorkflowAccess,
+    status: failUnusedWorkflowAccess,
+    subscribe: failUnusedWorkflowAccess,
+    terminate: failUnusedWorkflowAccess,
+  };
+}
+
 function createUnusedTracing(): Tracing {
   return {
     enterSpan: failUnusedTracingAccess,
@@ -345,6 +370,12 @@ function createBindings(): Bindings {
     ENVIRONMENT: "production",
     JWT_SECRET: "test-jwt-secret",
     LIVE_DB: createUnusedD1Database(),
+    LIVE_END_WORKFLOW: {
+      create: workflowMocks.create,
+      createBatch: failUnusedWorkflowAccess,
+      deleteBatch: failUnusedWorkflowAccess,
+      get: failUnusedWorkflowAccess,
+    },
     LIVE_TOKEN_PEPPER: "test-live-token-pepper",
     LOG_LEVEL: "info",
     NOTIFICATIONS_DISCORD_WEBHOOK_URL:
@@ -423,17 +454,68 @@ function getSetCookieValue(response: Response, name: string): string {
   return cookie;
 }
 
+function createLive(overrides: Partial<LiveRecord> = {}): LiveRecord {
+  const sessionId = overrides.sessionId ?? "session-1";
+  return {
+    broadcastId: "broadcast-1",
+    graceExpiresAt: null,
+    notificationMessageId: null,
+    sessionId,
+    tracks: [
+      {
+        location: "remote",
+        mid: "0",
+        sessionId,
+        trackName: "video",
+      },
+    ],
+    userId: "user-1",
+    ...overrides,
+  };
+}
+
+async function requestIngestOffer(
+  env: Bindings,
+  executionContext: ExecutionContext,
+  query = "",
+): Promise<Response> {
+  return app.fetch(
+    new Request(`http://localhost/ingest/user-1${query}`, {
+      body: "offer-sdp",
+      headers: {
+        Authorization: "Bearer live-token",
+        "Content-Type": "application/sdp",
+      },
+      method: "POST",
+    }),
+    env,
+    executionContext,
+  );
+}
+
+async function requestIngestDelete(
+  env: Bindings,
+  executionContext: ExecutionContext,
+  sessionId = "session-1",
+): Promise<Response> {
+  return app.fetch(
+    new Request(`http://localhost/ingest/user-1/${sessionId}`, {
+      headers: { Authorization: "Bearer live-token" },
+      method: "DELETE",
+    }),
+    env,
+    executionContext,
+  );
+}
+
 async function expectPlayNotFoundAndCleanup(
   response: Response,
   env: Bindings,
+  live: LiveRecord,
 ): Promise<void> {
   expect(response.status).toBe(404);
   expect(await response.text()).toBe("Live stream not found: streamer-1");
-  expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
-    env.LIVE_DB,
-    "streamer-1",
-    "live-session",
-  );
+  expect(dbMocks.endLive).toHaveBeenCalledWith(env.LIVE_DB, live);
 }
 
 describe("worker app", () => {
@@ -449,7 +531,7 @@ describe("worker app", () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-    dbMocks.deleteLiveForSession.mockResolvedValue(true);
+    dbMocks.endLive.mockResolvedValue({ notificationMessageId: null });
     dbMocks.getAllLives.mockResolvedValue([]);
     dbMocks.getLiveTokenHash.mockResolvedValue(
       await hashTokenWithPepper("test-live-token-pepper", "live-token"),
@@ -457,9 +539,12 @@ describe("worker app", () => {
     dbMocks.getLive.mockResolvedValue(null);
     dbMocks.hasLiveToken.mockResolvedValue(false);
     dbMocks.setLiveToken.mockResolvedValue();
-    dbMocks.insertLive.mockResolvedValue();
+    dbMocks.insertLive.mockResolvedValue("broadcast-1");
+    dbMocks.resumeLive.mockResolvedValue(true);
     dbMocks.setLiveNotificationMessageId.mockResolvedValue(true);
     dbMocks.setUser.mockResolvedValue();
+    dbMocks.startLiveReconnectGrace.mockResolvedValue(true);
+    workflowMocks.create.mockResolvedValue(createUnusedWorkflowInstance());
 
     discordMocks.buildDiscordAuthorizationUrl.mockReset();
     discordMocks.buildDiscordAuthorizationUrl.mockImplementation(
@@ -1041,7 +1126,10 @@ describe("worker app", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual(lives);
-    expect(dbMocks.getAllLives).toHaveBeenCalledWith(env.LIVE_DB);
+    expect(dbMocks.getAllLives).toHaveBeenCalledWith(
+      env.LIVE_DB,
+      expect.any(Number),
+    );
   });
 
   it("logs unexpected errors from API handlers and returns a generic response", async () => {
@@ -1207,35 +1295,16 @@ describe("worker app", () => {
     const consoleInfoSpy = vi
       .spyOn(console, "info")
       .mockImplementation(() => {});
-    const staleTracks: StoredTrack[] = [
-      {
-        location: "remote",
-        mid: "0",
-        sessionId: "stale-session",
-        trackName: "video",
-      },
-    ];
-
-    dbMocks.getLive.mockResolvedValue({
+    const staleLive = createLive({
       notificationMessageId: 2n,
       sessionId: "stale-session",
-      tracks: staleTracks,
-      userId: "user-1",
     });
+
+    dbMocks.getLive.mockResolvedValue(staleLive);
+    dbMocks.endLive.mockResolvedValue({ notificationMessageId: 2n });
     callsMocks.isSessionActive.mockResolvedValue(ok(false));
 
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1", {
-        body: "offer-sdp",
-        headers: {
-          Authorization: "Bearer live-token",
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      execution.context,
-    );
+    const response = await requestIngestOffer(env, execution.context);
 
     expect(response.status).toBe(201);
     expect(consoleInfoSpy).toHaveBeenCalledWith(
@@ -1245,12 +1314,16 @@ describe("worker app", () => {
         userId: "user-1",
       }),
     );
-    expect(response.headers.get("protocol-version")).toBeNull();
-    expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "stale-session",
+    expect(consoleInfoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "live.ended",
+        reason: "session_inactive",
+        sessionId: "stale-session",
+      }),
     );
+    expect(response.headers.get("protocol-version")).toBeNull();
+    expect(dbMocks.endLive).toHaveBeenCalledWith(env.LIVE_DB, staleLive);
+    expect(dbMocks.resumeLive).not.toHaveBeenCalled();
     expect(callsMocks.startIngest).toHaveBeenCalledWith(
       env,
       "user-1",
@@ -1284,7 +1357,7 @@ describe("worker app", () => {
     expect(dbMocks.setLiveNotificationMessageId).toHaveBeenCalledWith(
       env.LIVE_DB,
       "user-1",
-      "new-session",
+      "broadcast-1",
       1n,
     );
     expect(response.headers.get("location")).toBe("/ingest/user-1/new-session");
@@ -1297,26 +1370,16 @@ describe("worker app", () => {
   it("does not clean up an ingest notification when stale-row deletion fails", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
-    dbMocks.getLive.mockResolvedValue({
-      notificationMessageId: 7n,
-      sessionId: "stale-session",
-      tracks: [],
-      userId: "user-1",
-    });
-    dbMocks.deleteLiveForSession.mockResolvedValue(false);
+    dbMocks.getLive.mockResolvedValue(
+      createLive({ notificationMessageId: 7n, sessionId: "stale-session" }),
+    );
+    dbMocks.endLive.mockResolvedValue(null);
     callsMocks.isSessionActive.mockResolvedValue(ok(false));
 
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1?notify=false", {
-        body: "offer-sdp",
-        headers: {
-          Authorization: "Bearer live-token",
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
+    const response = await requestIngestOffer(
       env,
       execution.context,
+      "?notify=false",
     );
 
     expect(response.status).toBe(201);
@@ -1324,6 +1387,116 @@ describe("worker app", () => {
       notificationsMocks.deleteLiveStartedNotification,
     ).not.toHaveBeenCalled();
     expect(execution.waitUntilPromises).toHaveLength(0);
+  });
+
+  it("resumes a broadcast in its reconnect grace period without notifying", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const consoleInfoSpy = vi
+      .spyOn(console, "info")
+      .mockImplementation(() => {});
+    dbMocks.getLive.mockResolvedValue(
+      createLive({
+        graceExpiresAt: 1_700_000_000_001,
+        notificationMessageId: 3n,
+        sessionId: "previous-session",
+      }),
+    );
+
+    const response = await requestIngestOffer(env, execution.context);
+
+    expect(response.status).toBe(201);
+    expect(await response.text()).toBe("answer-sdp");
+    expect(response.headers.get("location")).toBe("/ingest/user-1/new-session");
+    // The previous session's tracks were already closed by its DELETE, so the
+    // Calls session is not checked before resuming.
+    expect(callsMocks.isSessionActive).not.toHaveBeenCalled();
+    expect(dbMocks.resumeLive).toHaveBeenCalledWith(
+      env.LIVE_DB,
+      "user-1",
+      "previous-session",
+      "new-session",
+      [
+        {
+          location: "remote",
+          mid: "0",
+          sessionId: "new-session",
+          trackName: "video",
+        },
+      ],
+    );
+    expect(dbMocks.endLive).not.toHaveBeenCalled();
+    expect(dbMocks.insertLive).not.toHaveBeenCalled();
+    expect(execution.waitUntilPromises).toHaveLength(0);
+    expect(
+      notificationsMocks.sendLiveStartedNotification,
+    ).not.toHaveBeenCalled();
+    expect(consoleInfoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ingest.resumed",
+        previousSessionId: "previous-session",
+        sessionId: "new-session",
+        userId: "user-1",
+      }),
+    );
+  });
+
+  it("starts a new broadcast when the grace period ends during negotiation", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    dbMocks.getLive.mockResolvedValue(
+      createLive({
+        graceExpiresAt: 1_700_000_000_001,
+        sessionId: "previous-session",
+      }),
+    );
+    dbMocks.resumeLive.mockResolvedValue(false);
+
+    const response = await requestIngestOffer(env, execution.context);
+
+    expect(response.status).toBe(201);
+    expect(dbMocks.insertLive).toHaveBeenCalledWith(
+      env.LIVE_DB,
+      "user-1",
+      "new-session",
+      expect.any(Array),
+    );
+    await Promise.all(execution.waitUntilPromises);
+    expect(notificationsMocks.sendLiveStartedNotification).toHaveBeenCalled();
+    expect(dbMocks.setLiveNotificationMessageId).toHaveBeenCalledWith(
+      env.LIVE_DB,
+      "user-1",
+      "broadcast-1",
+      1n,
+    );
+  });
+
+  it("ends a broadcast whose grace period passed before starting a new one", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const expiredLive = createLive({
+      graceExpiresAt: 1_700_000_000_000,
+      notificationMessageId: 4n,
+      sessionId: "previous-session",
+    });
+    dbMocks.getLive.mockResolvedValue(expiredLive);
+    dbMocks.endLive.mockResolvedValue({ notificationMessageId: 4n });
+
+    const response = await requestIngestOffer(env, execution.context);
+
+    expect(response.status).toBe(201);
+    expect(callsMocks.isSessionActive).not.toHaveBeenCalled();
+    expect(dbMocks.endLive).toHaveBeenCalledWith(env.LIVE_DB, expiredLive);
+    expect(dbMocks.resumeLive).not.toHaveBeenCalled();
+    expect(dbMocks.insertLive).toHaveBeenCalled();
+    await Promise.all(execution.waitUntilPromises);
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).toHaveBeenCalledWith(env, 4n);
+    expect(notificationsMocks.sendLiveStartedNotification).toHaveBeenCalled();
   });
 
   it("schedules the live start notification via waitUntil", async () => {
@@ -1359,7 +1532,7 @@ describe("worker app", () => {
     expect(dbMocks.setLiveNotificationMessageId).toHaveBeenCalledWith(
       env.LIVE_DB,
       "user-1",
-      "new-session",
+      "broadcast-1",
       1n,
     );
     expect(
@@ -1471,7 +1644,7 @@ describe("worker app", () => {
         errorMessage: "database unavailable",
         event: "live_notification.persist_failed",
         level: "warn",
-        messageId: 1n,
+        messageId: "1",
         sessionId: "new-session",
         userId: "user-1",
       }),
@@ -1634,11 +1807,9 @@ describe("worker app", () => {
     const consoleErrorSpy = vi
       .spyOn(console, "error")
       .mockImplementation(() => {});
-    dbMocks.getLive.mockResolvedValue({
-      sessionId: "stale-session",
-      tracks: [],
-      userId: "user-1",
-    });
+    dbMocks.getLive.mockResolvedValue(
+      createLive({ sessionId: "stale-session" }),
+    );
     callsMocks.isSessionActive.mockResolvedValue(
       err(
         new SfuApiError("Calls request failed", {
@@ -1648,24 +1819,13 @@ describe("worker app", () => {
       ),
     );
 
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1", {
-        body: "offer-sdp",
-        headers: {
-          Authorization: "Bearer live-token",
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      createExecutionContext(),
-    );
+    const response = await requestIngestOffer(env, createExecutionContext());
 
     expect(response.status).toBe(502);
     expect(await response.text()).toBe(
       "Failed to verify ingest session status",
     );
-    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
+    expect(dbMocks.endLive).not.toHaveBeenCalled();
     expect(callsMocks.startIngest).not.toHaveBeenCalled();
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1762,38 +1922,18 @@ describe("worker app", () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
 
-    dbMocks.getLive.mockResolvedValue({
-      sessionId: "active-session",
-      tracks: [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "active-session",
-          trackName: "video",
-        },
-      ],
-      userId: "user-1",
-    });
+    dbMocks.getLive.mockResolvedValue(
+      createLive({ sessionId: "active-session" }),
+    );
     callsMocks.isSessionActive.mockResolvedValue(ok(true));
 
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1", {
-        body: "offer-sdp",
-        headers: {
-          Authorization: "Bearer live-token",
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      execution.context,
-    );
+    const response = await requestIngestOffer(env, execution.context);
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe(
       "A live stream is already active for this user",
     );
-    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
+    expect(dbMocks.endLive).not.toHaveBeenCalled();
     expect(callsMocks.startIngest).not.toHaveBeenCalled();
     expect(dbMocks.insertLive).not.toHaveBeenCalled();
     expect(
@@ -1808,18 +1948,7 @@ describe("worker app", () => {
 
     dbMocks.insertLive.mockRejectedValue(new Error("insert failed"));
 
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1", {
-        body: "offer-sdp",
-        headers: {
-          Authorization: "Bearer live-token",
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      execution.context,
-    );
+    const response = await requestIngestOffer(env, execution.context);
 
     expect(response.status).toBe(500);
     expect(await response.text()).toBe("Internal Server Error");
@@ -1829,36 +1958,17 @@ describe("worker app", () => {
     expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
-  it("closes publisher tracks before deleting an ingest session", async () => {
+  it("starts a reconnect grace period instead of ending the live on ingest delete", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
     const env = createBindings();
     const execution = createObservedExecutionContext();
     const consoleInfoSpy = vi
       .spyOn(console, "info")
       .mockImplementation(() => {});
-    const tracks: StoredTrack[] = [
-      {
-        location: "remote",
-        mid: "0",
-        sessionId: "session-1",
-        trackName: "video",
-      },
-    ];
+    const live = createLive({ notificationMessageId: 1n });
+    dbMocks.getLive.mockResolvedValue(live);
 
-    dbMocks.getLive.mockResolvedValue({
-      notificationMessageId: 1n,
-      sessionId: "session-1",
-      tracks,
-      userId: "user-1",
-    });
-
-    const request = new Request("http://localhost/ingest/user-1/session-1", {
-      headers: {
-        Authorization: "Bearer live-token",
-      },
-      method: "DELETE",
-    });
-
-    const response = await app.fetch(request, env, execution.context);
+    const response = await requestIngestDelete(env, execution.context);
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("OK");
@@ -1870,11 +1980,13 @@ describe("worker app", () => {
         userId: "user-1",
       }),
     );
-    expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
+    expect(dbMocks.startLiveReconnectGrace).toHaveBeenCalledWith(
       env.LIVE_DB,
       "user-1",
       "session-1",
+      1_700_000_060_000,
     );
+    expect(dbMocks.endLive).not.toHaveBeenCalled();
     expect(execution.waitUntilPromises).toHaveLength(2);
 
     await Promise.all(execution.waitUntilPromises);
@@ -1882,27 +1994,69 @@ describe("worker app", () => {
     expect(callsMocks.closeTracks).toHaveBeenCalledWith(
       env,
       "session-1",
-      tracks,
+      live.tracks,
     );
+    expect(workflowMocks.create).toHaveBeenCalledWith({
+      params: {
+        graceExpiresAt: 1_700_000_060_000,
+        sessionId: "session-1",
+        userId: "user-1",
+      },
+    });
+    // The start notification stays until the grace period ends the broadcast.
     expect(
       notificationsMocks.deleteLiveStartedNotification,
-    ).toHaveBeenCalledWith(env, 1n);
+    ).not.toHaveBeenCalled();
+  });
+
+  it("logs when the end of a reconnect grace period cannot be scheduled", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    dbMocks.getLive.mockResolvedValue(createLive());
+    workflowMocks.create.mockRejectedValue(new Error("workflow unavailable"));
+
+    const response = await requestIngestDelete(env, execution.context);
+
+    expect(response.status).toBe(200);
+    await Promise.all(execution.waitUntilPromises);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorMessage: "workflow unavailable",
+        event: "live_end.schedule_failed",
+        level: "error",
+        sessionId: "session-1",
+        userId: "user-1",
+      }),
+    );
+  });
+
+  it("accepts a repeated ingest delete during the grace period", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    dbMocks.getLive.mockResolvedValue(
+      createLive({ graceExpiresAt: 1_700_000_060_000 }),
+    );
+
+    const response = await requestIngestDelete(env, execution.context);
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("OK");
+    expect(dbMocks.startLiveReconnectGrace).not.toHaveBeenCalled();
+    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
+    expect(workflowMocks.create).not.toHaveBeenCalled();
+    expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
   it("rejects ingest deletion when there is no live row", async () => {
     const env = createBindings();
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1/session-1", {
-        headers: { Authorization: "Bearer live-token" },
-        method: "DELETE",
-      }),
-      env,
-      createExecutionContext(),
-    );
+    const response = await requestIngestDelete(env, createExecutionContext());
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe("No live stream found for this user");
-    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
+    expect(dbMocks.startLiveReconnectGrace).not.toHaveBeenCalled();
     expect(callsMocks.closeTracks).not.toHaveBeenCalled();
   });
 
@@ -1913,40 +2067,17 @@ describe("worker app", () => {
       .spyOn(console, "warn")
       .mockImplementation(() => {});
 
-    dbMocks.getLive.mockResolvedValue({
-      notificationMessageId: 1n,
-      sessionId: "session-1",
-      tracks: [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "session-1",
-          trackName: "video",
-        },
-      ],
-      userId: "user-1",
-    });
+    dbMocks.getLive.mockResolvedValue(createLive());
     callsMocks.closeTracks.mockResolvedValue(
       ok({
         tracks: [{ mid: "0" }, { errorCode: "failed_to_close", mid: "1" }],
       }),
     );
 
-    const request = new Request("http://localhost/ingest/user-1/session-1", {
-      headers: {
-        Authorization: "Bearer live-token",
-      },
-      method: "DELETE",
-    });
-
-    const response = await app.fetch(request, env, execution.context);
+    const response = await requestIngestDelete(env, execution.context);
 
     expect(response.status).toBe(200);
-    expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "session-1",
-    );
+    expect(dbMocks.startLiveReconnectGrace).toHaveBeenCalled();
 
     await Promise.all(execution.waitUntilPromises);
 
@@ -1961,28 +2092,17 @@ describe("worker app", () => {
         sessionId: "session-1",
       }),
     );
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).toHaveBeenCalledWith(env, 1n);
+    expect(workflowMocks.create).toHaveBeenCalled();
   });
 
   it("returns success when ingest close says tracks are already gone", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
+    const consoleWarnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => {});
 
-    dbMocks.getLive.mockResolvedValue({
-      notificationMessageId: 1n,
-      sessionId: "session-1",
-      tracks: [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "session-1",
-          trackName: "video",
-        },
-      ],
-      userId: "user-1",
-    });
+    dbMocks.getLive.mockResolvedValue(createLive());
     callsMocks.closeTracks.mockResolvedValue(
       err(
         new SfuApiError("SFU request failed: session not found", {
@@ -1993,57 +2113,26 @@ describe("worker app", () => {
       ),
     );
 
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1/session-1", {
-        headers: {
-          Authorization: "Bearer live-token",
-        },
-        method: "DELETE",
-      }),
-      env,
-      execution.context,
-    );
+    const response = await requestIngestDelete(env, execution.context);
 
     expect(response.status).toBe(200);
-    expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "session-1",
-    );
-
     await Promise.all(execution.waitUntilPromises);
-
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).toHaveBeenCalledWith(env, 1n);
+    expect(workflowMocks.create).toHaveBeenCalled();
+    expect(consoleWarnSpy).not.toHaveBeenCalled();
   });
 
   it("rejects ingest deletion when the session id does not match", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
 
-    dbMocks.getLive.mockResolvedValue({
-      sessionId: "actual-session",
-      tracks: [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "actual-session",
-          trackName: "video",
-        },
-      ],
-      userId: "user-1",
-    });
+    dbMocks.getLive.mockResolvedValue(
+      createLive({ sessionId: "actual-session" }),
+    );
 
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1/other-session", {
-        headers: {
-          Authorization: "Bearer live-token",
-        },
-        method: "DELETE",
-      }),
+    const response = await requestIngestDelete(
       env,
       execution.context,
+      "other-session",
     );
 
     expect(response.status).toBe(400);
@@ -2051,145 +2140,77 @@ describe("worker app", () => {
       "Session ID does not match the active live stream",
     );
     expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
+    expect(dbMocks.startLiveReconnectGrace).not.toHaveBeenCalled();
+    expect(workflowMocks.create).not.toHaveBeenCalled();
     expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
-  it("returns 500 when stored live track data is invalid on ingest delete", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-
-    dbMocks.getLive.mockResolvedValue({
-      sessionId: "session-1",
-      tracks: [
+  it.each<[string, StoredTrack[]]>([
+    [
+      "an empty track mid",
+      [
         {
           location: "remote",
           mid: "0",
           sessionId: "session-1",
-          trackName: "video",
+          trackName: "a",
         },
-        {
-          location: "remote",
-          mid: "",
-          sessionId: "session-1",
-          trackName: "video",
-        },
+        { location: "remote", mid: "", sessionId: "session-1", trackName: "b" },
       ],
-      userId: "user-1",
-    });
+    ],
+    ["no tracks", []],
+  ])(
+    "returns 500 when stored live track data has %s on ingest delete",
+    async (_label, tracks) => {
+      const env = createBindings();
+      const execution = createObservedExecutionContext();
+      dbMocks.getLive.mockResolvedValue(createLive({ tracks }));
 
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1/session-1", {
-        headers: {
-          Authorization: "Bearer live-token",
-        },
-        method: "DELETE",
-      }),
-      env,
-      execution.context,
-    );
+      const response = await requestIngestDelete(env, execution.context);
 
-    expect(response.status).toBe(500);
-    expect(await response.text()).toBe("Stored live track data is invalid");
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(0);
-  });
+      expect(response.status).toBe(500);
+      expect(await response.text()).toBe("Stored live track data is invalid");
+      expect(callsMocks.closeTracks).not.toHaveBeenCalled();
+      expect(dbMocks.startLiveReconnectGrace).not.toHaveBeenCalled();
+      expect(execution.waitUntilPromises).toHaveLength(0);
+    },
+  );
 
-  it("rejects stored ingest state with no tracks", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    dbMocks.getLive.mockResolvedValue({
-      sessionId: "session-1",
-      tracks: [],
-      userId: "user-1",
-    });
-
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1/session-1", {
-        headers: { Authorization: "Bearer live-token" },
-        method: "DELETE",
-      }),
-      env,
-      execution.context,
-    );
-
-    expect(response.status).toBe(500);
-    expect(await response.text()).toBe("Stored live track data is invalid");
-    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(0);
-  });
-
-  it("does not schedule ingest close when deleting the live row fails", async () => {
+  it("does not schedule ingest close when the grace period cannot start", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
 
-    dbMocks.getLive.mockResolvedValue({
-      notificationMessageId: 1n,
-      sessionId: "session-1",
-      tracks: [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "session-1",
-          trackName: "video",
-        },
-      ],
-      userId: "user-1",
-    });
-    dbMocks.deleteLiveForSession.mockResolvedValue(false);
-
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1/session-1", {
-        headers: {
-          Authorization: "Bearer live-token",
-        },
-        method: "DELETE",
-      }),
-      env,
-      execution.context,
+    dbMocks.getLive.mockResolvedValue(
+      createLive({ notificationMessageId: 1n }),
     );
+    dbMocks.startLiveReconnectGrace.mockResolvedValue(false);
+
+    const response = await requestIngestDelete(env, execution.context);
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe(
       "Failed to delete the requested live stream",
     );
     expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
+    expect(workflowMocks.create).not.toHaveBeenCalled();
     expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
   it("returns 404 and cleans up when a stored play session is inactive", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
-    const liveTracks: StoredTrack[] = [
-      {
-        location: "remote",
-        mid: "0",
-        sessionId: "live-session",
-        trackName: "video",
-      },
-    ];
-
-    dbMocks.getLive.mockResolvedValue({
+    const live = createLive({
       notificationMessageId: 1n,
       sessionId: "live-session",
-      tracks: liveTracks,
       userId: "streamer-1",
     });
+
+    dbMocks.getLive.mockResolvedValue(live);
+    dbMocks.endLive.mockResolvedValue({ notificationMessageId: 1n });
     callsMocks.isSessionActive.mockResolvedValue(ok(false));
 
     const response = await requestPlayOffer(env, execution.context);
-    await expectPlayNotFoundAndCleanup(response, env);
+    await expectPlayNotFoundAndCleanup(response, env, live);
     await Promise.all(execution.waitUntilPromises);
     expect(
       notificationsMocks.deleteLiveStartedNotification,
@@ -2197,30 +2218,73 @@ describe("worker app", () => {
     expect(callsMocks.startPlay).not.toHaveBeenCalled();
   });
 
-  it("does not delete a stale playback notification when row deletion fails", async () => {
+  it("asks viewers to retry when an inactive play session's row changed meanwhile", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
-    dbMocks.getLive.mockResolvedValue({
+    const live = createLive({
       notificationMessageId: 12n,
       sessionId: "live-session",
-      tracks: [],
       userId: "streamer-1",
     });
-    dbMocks.deleteLiveForSession.mockResolvedValue(false);
+    dbMocks.getLive.mockResolvedValue(live);
+    dbMocks.endLive.mockResolvedValue(null);
     callsMocks.isSessionActive.mockResolvedValue(ok(false));
 
     const response = await requestPlayOffer(env, execution.context);
 
-    expect(response.status).toBe(404);
-    expect(dbMocks.deleteLiveForSession).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "streamer-1",
-      "live-session",
-    );
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("2");
+    expect(dbMocks.endLive).toHaveBeenCalledWith(env.LIVE_DB, live);
     expect(
       notificationsMocks.deleteLiveStartedNotification,
     ).not.toHaveBeenCalled();
     expect(execution.waitUntilPromises).toHaveLength(0);
+  });
+
+  it("asks viewers to retry while the publisher may still reconnect", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const env = createBindings();
+    dbMocks.getLive.mockResolvedValue(
+      createLive({
+        graceExpiresAt: 1_700_000_000_001,
+        sessionId: "live-session",
+        userId: "streamer-1",
+      }),
+    );
+
+    const response = await requestPlayOffer(env);
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("2");
+    expect(await response.text()).toBe(
+      "Live stream is waiting for the publisher to reconnect",
+    );
+    expect(callsMocks.isSessionActive).not.toHaveBeenCalled();
+    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    expect(dbMocks.endLive).not.toHaveBeenCalled();
+  });
+
+  it("ends a live whose reconnect grace period passed and returns 404", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const live = createLive({
+      graceExpiresAt: 1_700_000_000_000,
+      notificationMessageId: 5n,
+      sessionId: "live-session",
+      userId: "streamer-1",
+    });
+    dbMocks.getLive.mockResolvedValue(live);
+    dbMocks.endLive.mockResolvedValue({ notificationMessageId: 5n });
+
+    const response = await requestPlayOffer(env, execution.context);
+
+    await expectPlayNotFoundAndCleanup(response, env, live);
+    expect(callsMocks.isSessionActive).not.toHaveBeenCalled();
+    await Promise.all(execution.waitUntilPromises);
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).toHaveBeenCalledWith(env, 5n);
   });
 
   it("returns a logged 502 when Calls cannot verify a play session", async () => {
@@ -2228,11 +2292,9 @@ describe("worker app", () => {
     const consoleErrorSpy = vi
       .spyOn(console, "error")
       .mockImplementation(() => {});
-    dbMocks.getLive.mockResolvedValue({
-      sessionId: "live-session",
-      tracks: [],
-      userId: "streamer-1",
-    });
+    dbMocks.getLive.mockResolvedValue(
+      createLive({ sessionId: "live-session", userId: "streamer-1" }),
+    );
     callsMocks.isSessionActive.mockResolvedValue(
       err(
         new SfuApiError("Calls request failed", {
@@ -2270,7 +2332,7 @@ describe("worker app", () => {
 
     expect(response.status).toBe(404);
     expect(await response.text()).toBe("Live stream not found: streamer-1");
-    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
+    expect(dbMocks.endLive).not.toHaveBeenCalled();
   });
 
   it("logs unexpected playback negotiation errors and returns 502", async () => {
@@ -2299,21 +2361,14 @@ describe("worker app", () => {
   it("returns 404 and cleans up when SFU loses the live during play start", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
-    const liveTracks: StoredTrack[] = [
-      {
-        location: "remote",
-        mid: "0",
-        sessionId: "live-session",
-        trackName: "video",
-      },
-    ];
-
-    dbMocks.getLive.mockResolvedValue({
+    const live = createLive({
       notificationMessageId: 1n,
       sessionId: "live-session",
-      tracks: liveTracks,
       userId: "streamer-1",
     });
+
+    dbMocks.getLive.mockResolvedValue(live);
+    dbMocks.endLive.mockResolvedValue({ notificationMessageId: 1n });
     callsMocks.startPlay.mockResolvedValue(
       err(
         new SfuApiError("SFU request failed: session not found", {
@@ -2325,23 +2380,24 @@ describe("worker app", () => {
     );
 
     const response = await requestPlayOffer(env, execution.context);
-    await expectPlayNotFoundAndCleanup(response, env);
+    await expectPlayNotFoundAndCleanup(response, env, live);
     await Promise.all(execution.waitUntilPromises);
     expect(
       notificationsMocks.deleteLiveStartedNotification,
     ).toHaveBeenCalledWith(env, 1n);
   });
 
-  it("does not clean the notification if the live row cannot be deleted after SFU loss", async () => {
+  it("asks viewers to retry if the live row changed when SFU lost the session", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
-    dbMocks.getLive.mockResolvedValue({
-      notificationMessageId: 14n,
-      sessionId: "live-session",
-      tracks: [],
-      userId: "streamer-1",
-    });
-    dbMocks.deleteLiveForSession.mockResolvedValue(false);
+    dbMocks.getLive.mockResolvedValue(
+      createLive({
+        notificationMessageId: 14n,
+        sessionId: "live-session",
+        userId: "streamer-1",
+      }),
+    );
+    dbMocks.endLive.mockResolvedValue(null);
     callsMocks.startPlay.mockResolvedValue(
       err(
         new SfuApiError("Session not found", {
@@ -2353,8 +2409,10 @@ describe("worker app", () => {
 
     const response = await requestPlayOffer(env, execution.context);
 
-    expect(response.status).toBe(404);
-    expect(await response.text()).toBe("Live stream not found: streamer-1");
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe(
+      "Live stream is waiting for the publisher to reconnect",
+    );
     expect(
       notificationsMocks.deleteLiveStartedNotification,
     ).not.toHaveBeenCalled();
@@ -2382,7 +2440,7 @@ describe("worker app", () => {
       [],
       "viewer-offer",
     );
-    expect(dbMocks.deleteLiveForSession).not.toHaveBeenCalled();
+    expect(dbMocks.endLive).not.toHaveBeenCalled();
   });
 
   it("returns 400 for an empty WHEP offer", async () => {
@@ -2514,11 +2572,13 @@ describe("worker app", () => {
       },
     ];
 
-    dbMocks.getLive.mockResolvedValue({
-      sessionId: "live-session",
-      tracks: liveTracks,
-      userId: "streamer-1",
-    });
+    dbMocks.getLive.mockResolvedValue(
+      createLive({
+        sessionId: "live-session",
+        tracks: liveTracks,
+        userId: "streamer-1",
+      }),
+    );
     callsMocks.startPlay.mockResolvedValue(
       err(
         new SfuApiError("SFU request failed: unprocessable content", {
@@ -2561,11 +2621,13 @@ describe("worker app", () => {
       },
     ];
 
-    dbMocks.getLive.mockResolvedValue({
-      sessionId: "live-session",
-      tracks: liveTracks,
-      userId: "streamer-1",
-    });
+    dbMocks.getLive.mockResolvedValue(
+      createLive({
+        sessionId: "live-session",
+        tracks: liveTracks,
+        userId: "streamer-1",
+      }),
+    );
     callsMocks.isSessionActive.mockResolvedValue(ok(true));
 
     const response = await app.fetch(
@@ -2621,11 +2683,13 @@ describe("worker app", () => {
       },
     ];
 
-    dbMocks.getLive.mockResolvedValue({
-      sessionId: "live-session",
-      tracks: liveTracks,
-      userId: "streamer-1",
-    });
+    dbMocks.getLive.mockResolvedValue(
+      createLive({
+        sessionId: "live-session",
+        tracks: liveTracks,
+        userId: "streamer-1",
+      }),
+    );
     callsMocks.startPlay.mockResolvedValue(
       ok({
         sdpAnswer: "viewer-counter-offer-sdp",

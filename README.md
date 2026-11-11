@@ -14,6 +14,7 @@ OBSはWHIPで配信し、認証済みユーザーはブラウザからアプリ�
 - D1-backed live stream and token state
 - Authenticated TURN credential endpoint
 - Best-effort Discord live-start notifications
+- Broadcasts survive OBS reconnects for 60 seconds without re-notifying
 
 ## Stack
 
@@ -22,6 +23,7 @@ OBSはWHIPで配信し、認証済みユーザーはブラウザからアプリ�
 - Hono
 - Cloudflare Workers
 - Cloudflare D1
+- Cloudflare Workflows
 - Cloudflare Realtime SFU / Calls
 - SWR
 - Valibot
@@ -31,7 +33,7 @@ OBSはWHIPで配信し、認証済みユーザーはブラウザからアプリ�
 ## Requirements
 
 - Node.js and pnpm
-- Cloudflare account with Workers, D1, and Realtime SFU/Calls access
+- Cloudflare account with Workers, D1, Workflows, and Realtime SFU/Calls access
 - Discord application for OAuth
 - Discord guild used as the viewer allowlist
 - Discord webhook for live notifications
@@ -113,11 +115,11 @@ Build and deploy with Wrangler:
 pnpm deploy
 ```
 
-Production secrets must be configured in Cloudflare before deployment. The Worker expects the D1 binding named `LIVE_DB` and the required secrets listed above.
+Production secrets must be configured in Cloudflare before deployment. The Worker expects the D1 binding named `LIVE_DB` and the required secrets listed above. Apply pending D1 migrations before deploying code that depends on them. The `LIVE_END_WORKFLOW` Workflow binding is created by `wrangler deploy` from `wrangler.jsonc`.
 
 ## Architecture Notes
 
-The Worker is intentionally stateless. Durable state lives in D1, while media session state is owned by Cloudflare Realtime SFU. The app avoids designs that require Workers to run timers, poll all live sessions, or keep long-lived in-memory state.
+The Worker is intentionally stateless. Durable state lives in D1, while media session state is owned by Cloudflare Realtime SFU. The app avoids designs that require Workers to run timers, poll all live sessions, or keep long-lived in-memory state. The one scheduled task is a Cloudflare Workflow that ends a broadcast once its 60-second OBS reconnect grace period passes; it only runs while a broadcast is waiting for OBS.
 
 Viewing is intentionally authenticated and app-specific. TURN discovery is provided through `/api/turn-credentials`, not generic WHEP `OPTIONS`/`Link` discovery. The playback client waits for local ICE gathering before POST/PATCH because the current SFU path is effectively non-trickle.
 
