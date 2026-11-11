@@ -1,11 +1,13 @@
 -- D1 schema snapshot.
 -- One live row exists per owner. user_id is also the live id, and tracks_json is
 -- the StoredTrack array for the exact Cloudflare Calls ingest session.
+-- notification_message_id is a Discord snowflake stored as decimal text because
+-- it does not fit in a JavaScript number.
 CREATE TABLE IF NOT EXISTS lives (
     user_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     tracks_json TEXT NOT NULL,
-    notification_message_id INTEGER
+    notification_message_id TEXT
 );
 
 -- Publisher tokens are stored as HMAC hashes, not raw bearer tokens. Each user

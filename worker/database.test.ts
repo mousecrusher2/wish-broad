@@ -49,26 +49,44 @@ describe("D1 database helpers", () => {
     expect(statement.bind).toHaveBeenCalledWith("user-1");
   });
 
-  it.each([null, undefined, 123n, 123])(
+  it.each([
+    [null, null],
+    // Larger than Number.MAX_SAFE_INTEGER, like real Discord snowflakes.
+    ["1300000000000000123", 1_300_000_000_000_000_123n],
+  ] as const)(
     "validates and normalizes live rows with notification id %s",
-    async (notificationMessageId) => {
+    async (storedMessageId, notificationMessageId) => {
       const { database, statement } = createDatabase();
       statement.first.mockResolvedValue({
-        notification_message_id: notificationMessageId,
+        notification_message_id: storedMessageId,
         user_id: "user-1",
         session_id: "session-1",
         tracks_json: JSON.stringify(storedTracks),
       });
 
       await expect(getLive(database, "user-1")).resolves.toEqual({
-        notificationMessageId:
-          notificationMessageId === null || notificationMessageId === undefined
-            ? null
-            : 123n,
+        notificationMessageId,
         userId: "user-1",
         sessionId: "session-1",
         tracks: storedTracks,
       });
+    },
+  );
+
+  it.each(["not-an-id", "", 123, 123n])(
+    "rejects a stored notification id of %s that is not decimal text",
+    async (storedMessageId) => {
+      const { database, statement } = createDatabase();
+      statement.first.mockResolvedValue({
+        notification_message_id: storedMessageId,
+        user_id: "user-1",
+        session_id: "session-1",
+        tracks_json: "[]",
+      });
+
+      await expect(getLive(database, "user-1")).rejects.toThrow(
+        "Invalid D1 lives row",
+      );
     },
   );
 
@@ -78,13 +96,13 @@ describe("D1 database helpers", () => {
       user_id: "user-1",
       session_id: "session-1",
       tracks_json: "[]",
-      notification_message_id: "not-an-id",
     });
     await expect(getLive(database, "user-1")).rejects.toThrow(
       "Invalid D1 lives row",
     );
 
     statement.first.mockResolvedValue({
+      notification_message_id: null,
       user_id: "user-1",
       session_id: "session-1",
       tracks_json: "not-json",
@@ -92,6 +110,7 @@ describe("D1 database helpers", () => {
     await expect(getLive(database, "user-1")).rejects.toThrow(SyntaxError);
 
     statement.first.mockResolvedValue({
+      notification_message_id: null,
       user_id: "user-1",
       session_id: "session-1",
       tracks_json: JSON.stringify([{ ...storedTracks[0], location: "local" }]),
@@ -125,7 +144,7 @@ describe("D1 database helpers", () => {
     expect(prepare).toHaveBeenCalledWith(sql);
     expect(statement.bind).toHaveBeenCalledWith(
       ...(operation === "set"
-        ? [45n, "user-1", "session-1"]
+        ? ["45", "user-1", "session-1"]
         : ["user-1", "session-1"]),
     );
   });

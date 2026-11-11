@@ -19,8 +19,8 @@ type LiveTrackRecord = {
 
 function createLiveTrackRowSchema() {
   return v.object({
-    notification_message_id: v.optional(
-      v.nullish(v.union([v.number(), v.bigint()])),
+    notification_message_id: v.nullable(
+      v.pipe(v.string(), v.regex(/^[0-9]+$/u)),
     ),
     user_id: v.string(),
     session_id: v.string(),
@@ -141,8 +141,7 @@ export async function getLive(
 
   return {
     notificationMessageId:
-      row.notification_message_id === null ||
-      row.notification_message_id === undefined
+      row.notification_message_id === null
         ? null
         : BigInt(row.notification_message_id),
     userId: row.user_id,
@@ -157,11 +156,12 @@ export async function setLiveNotificationMessageId(
   sessionId: string,
   notificationMessageId: bigint,
 ): Promise<boolean> {
+  // D1 cannot bind bigint values; the column stores the snowflake as text.
   const result = await database
     .prepare(
       "UPDATE lives SET notification_message_id = ? WHERE user_id = ? AND session_id = ?",
     )
-    .bind(notificationMessageId, userId, sessionId)
+    .bind(notificationMessageId.toString(), userId, sessionId)
     .run();
 
   return result.meta.changes > 0;
