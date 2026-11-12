@@ -8,7 +8,8 @@ interoperability.
 ## Runtime Model
 
 The Worker is treated as stateless request handling glue. Durable state that
-must survive requests lives in D1, while Cloudflare Calls owns the actual media
+must survive requests lives in D1, while Cloudflare Realtime SFU (formerly
+Cloudflare Calls, hence the `CALLS_*` secret names) owns the actual media
 sessions and track state. Avoid designs that require the Worker to run timers,
 poll all active sessions, or keep long-lived in-memory state.
 
@@ -82,7 +83,7 @@ stores an HMAC of the token with `LIVE_TOKEN_PEPPER`, not the raw bearer token.
 
 Each `lives` row represents one broadcast of its owner. `broadcast_id` stays the
 same for the whole broadcast, while `session_id` and the stored `trackName` and
-`mid` values point at the current Cloudflare Calls ingest session. Those are not
+`mid` values point at the current SFU ingest session. Those are not
 stable across OBS reconnects, so a reconnect replaces them in place instead of
 reusing stale locators. `grace_expires_at` is `NULL` while that ingest session
 is live and holds the reconnect deadline (Unix epoch milliseconds) after OBS
@@ -104,11 +105,11 @@ user/session, such as ingest start or playback start.
 
 `POST /ingest/:userId` is the authoritative live-start path:
 
-- If the owner's broadcast is within its grace period, the new Calls session
+- If the owner's broadcast is within its grace period, the new SFU session
   resumes it. The row's session and tracks are replaced, and no new start
   notification is sent.
 - If the grace period already passed, or the stored session is no longer active
-  in Calls (OBS crashed without sending DELETE), that broadcast is ended, with
+  in the SFU (OBS crashed without sending DELETE), that broadcast is ended, with
   its row and notification removed, and a new broadcast starts.
 - If the stored session is still active, the second ingest is rejected. Only
   that user's stored SFU session is checked.
@@ -125,7 +126,7 @@ the notification about a minute late. A repeated DELETE for the same session is
 accepted without starting another grace period.
 
 OBS still sends DELETE when its window is closed; only crashes and network loss
-skip it. Those are not polled for, because checking Calls throughout every
+skip it. Those are not polled for, because checking the SFU throughout every
 broadcast would spend Workflow steps or requests on a rare case. They are
 detected when the next ingest or playback request for that owner finds the
 stored session inactive.
@@ -138,7 +139,7 @@ cheap and shifts stale-session detection to the operation that actually needs
 the session.
 
 While the broadcast is in its grace period, `POST /play/:userId` returns 503
-with `Retry-After` without calling Calls, because the stored tracks were closed
+with `Retry-After` without calling the SFU, because the stored tracks were closed
 by DELETE. A 404 therefore means the broadcast has ended. If a playback request
 finds the stored session inactive but cannot end the row because it changed in
 the meantime (OBS sent DELETE or resumed), it also answers 503 so the viewer
@@ -152,7 +153,7 @@ instead of reconstructing a session URL from D1 data.
 
 The frontend also waits for an in-flight WHEP registration to resolve during
 cleanup. A viewer can disconnect while `POST /play/:userId` is still in flight;
-if Calls creates the session before the abort is observed, the returned
+if the SFU creates the session before the abort is observed, the returned
 `Location` is still needed so the client can DELETE the playback session.
 
 ## WHEP Client Decisions
@@ -203,9 +204,10 @@ truth for whether to keep waiting: a 503 means the broadcast still exists
 without a usable session, so the client keeps retrying with backoff, even on an
 initial load; a 404 means the broadcast has ended, so playback ends at once
 instead of retrying until the window expires. Other 5xx responses and network
-errors are retried only after a session was established, so a broken server
-still surfaces as an error on the initial load. If the window expires while the
-server keeps answering 503, playback ends with an error rather than "ended",
+errors fail the initial attempt, so a broken server still surfaces as an error
+on the initial load. They are retried only once the client is already
+reconnecting, whether after an established session dropped or while waiting out
+503 responses. If the window expires while the server keeps answering 503, playback ends with an error rather than "ended",
 because the Worker never confirmed that the broadcast was over.
 
 The stall check uses inbound `bytesReceived` per receiver as the required
@@ -225,6 +227,10 @@ only one receiver, the playback session is incomplete even if ICE is connected;
 the client must replace that session rather than accepting partial playback.
 
 ## Notifications
+
+A start notification is sent when `POST /ingest/:userId` starts a new
+broadcast, unless the ingest URL carries `notify=false` or `notify=0`. Resuming
+a broadcast never sends one.
 
 Discord live-start notifications are best-effort. The Worker asks Discord to
 return the created message id so the message can be deleted when the broadcast

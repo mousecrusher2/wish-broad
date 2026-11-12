@@ -10,31 +10,34 @@ OBSはWHIPで配信し、認証済みユーザーはブラウザからアプリ�
 - Per-user OBS ingest URL and bearer live token
 - WHIP ingest endpoint for OBS
 - Authenticated playback flow inspired by WHEP
-- Cloudflare Calls / Realtime SFU session management
+- Cloudflare Realtime SFU session management
 - D1-backed live stream and token state
 - Authenticated TURN credential endpoint
-- Best-effort Discord live-start notifications
+- Best-effort Discord live-start notifications, skippable per stream with
+  `?notify=false` on the ingest URL
 - Broadcasts survive OBS reconnects for 60 seconds without re-notifying, and
   viewers keep waiting for the stream to come back
 
 ## Stack
 
-- React 19
-- Vite
+- React 19 with React Compiler
+- Vite with the Cloudflare Vite plugin
+- Tailwind CSS v4
 - Hono
 - Cloudflare Workers
 - Cloudflare D1
 - Cloudflare Workflows
-- Cloudflare Realtime SFU / Calls
+- Cloudflare Realtime SFU and TURN (formerly Calls)
 - SWR
 - Valibot
 - neverthrow
 - Vitest
+- oxlint, Knip, and Prettier
 
 ## Requirements
 
 - Node.js and pnpm
-- Cloudflare account with Workers, D1, Workflows, and Realtime SFU/Calls access
+- Cloudflare account with Workers, D1, Workflows, Realtime SFU, and Realtime TURN access
 - Discord application for OAuth
 - Discord guild used as the viewer allowlist
 - Discord webhook for live notifications
@@ -65,29 +68,25 @@ TURN_KEY_API_TOKEN
 TURN_KEY_ID
 ```
 
-Non-secret runtime variables are configured in `wrangler.jsonc`. Keep binding names aligned across `wrangler.jsonc`, `.dev.vars`, and `worker/types.ts`.
+Non-secret runtime variables are configured in `wrangler.jsonc`. Keep binding names aligned between `wrangler.jsonc` and `.dev.vars`, and run `pnpm cf-typegen` after changing bindings to regenerate `worker-configuration.d.ts`.
 
 ## Development
 
-Run the Vite client:
+Start the dev server:
 
 ```sh
 pnpm dev
 ```
 
-Run a local Worker session:
+The Cloudflare Vite plugin runs the Worker in the local `workerd` runtime next to the client, so the API, ingest, and playback routes are served from the same origin during development.
+
+Build and serve the production bundle locally:
 
 ```sh
-pnpm dev:worker
+pnpm preview
 ```
 
-Run the integrated Cloudflare/Vite dev server:
-
-```sh
-pnpm dev:full
-```
-
-`pnpm dev` is useful for frontend iteration, but it does not exactly match the production Worker bundle. Use Wrangler-based flows when validating Worker behavior or WebRTC paths.
+Use `pnpm preview` when validating behavior that depends on the production bundle.
 
 ## Validation
 
