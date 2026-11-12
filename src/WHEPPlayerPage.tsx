@@ -11,6 +11,7 @@ import {
   useLiveStreams,
   useSuspenseCurrentUser,
 } from "./api";
+import { buttonClasses, surfaceClasses } from "./components/styles";
 
 type PlayerSelection = {
   resourceUserId: string;
@@ -22,14 +23,14 @@ function CurrentUserGreeting() {
 
   if (currentUserResult.isErr()) {
     return (
-      <p className="text-sm text-amber-100">ユーザー情報を取得できません</p>
+      <p className="text-sm text-amber-200">ユーザー情報を取得できません</p>
     );
   }
 
   return (
     <p className="truncate text-sm text-cyan-50/90">
       ようこそ、
-      <span className="font-semibold">
+      <span className="font-semibold text-white">
         {currentUserResult.value.displayName}
       </span>{" "}
       さん
@@ -39,7 +40,7 @@ function CurrentUserGreeting() {
 
 function CurrentUserGreetingFallback() {
   return (
-    <p className="truncate text-sm text-cyan-50/75">ユーザー情報を確認中...</p>
+    <p className="truncate text-sm text-cyan-50/80">ユーザー情報を確認中...</p>
   );
 }
 
@@ -125,13 +126,11 @@ function WHEPPlayerPageContent() {
 
   return (
     <div className="min-h-screen">
-      <header className="border-b border-cyan-200/20 bg-cyan-950/92 shadow-[0_10px_20px_-16px_rgba(8,145,178,0.38)] backdrop-blur-sm">
-        <div className="flex flex-col gap-2 px-4 py-3 md:flex-row md:items-center md:justify-between md:px-6 xl:px-8">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-white md:text-3xl">
-              ANGOU BROADCAST
-            </h1>
-          </div>
+      <header className="border-b border-cyan-200/15 bg-cyan-950/90 backdrop-blur-sm">
+        <div className="flex flex-col gap-2 px-4 py-2.5 md:flex-row md:items-center md:justify-between md:px-6 xl:px-8">
+          <h1 className="text-xl font-semibold tracking-tight text-white md:text-2xl">
+            ANGOU BROADCAST
+          </h1>
           <nav className="flex flex-wrap items-center gap-3">
             <div className="min-h-5 w-full min-w-0 md:w-auto md:max-w-64">
               <Suspense fallback={<CurrentUserGreetingFallback />}>
@@ -145,15 +144,12 @@ function WHEPPlayerPageContent() {
               onClick={() => {
                 setIsObsSettingsOpen(true);
               }}
-              className="inline-flex items-center justify-center rounded-full bg-cyan-300 px-4 py-2 text-sm font-semibold whitespace-nowrap text-slate-950 shadow-[0_14px_26px_-18px_rgba(34,211,238,0.95)] transition hover:bg-cyan-200"
+              className={buttonClasses("primary", "sm")}
             >
               📺 OBS配信設定
             </button>
             <form method="POST" action="/logout">
-              <button
-                type="submit"
-                className="inline-flex items-center justify-center rounded-full border border-rose-400/30 bg-rose-500/90 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-400"
-              >
+              <button type="submit" className={buttonClasses("danger", "sm")}>
                 ログアウト
               </button>
             </form>
@@ -170,7 +166,7 @@ function WHEPPlayerPageContent() {
         />
 
         <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-          <section className="rounded-4xl border border-white/10 bg-slate-900/70 p-6 shadow-xl shadow-black/20 backdrop-blur-sm lg:w-xs lg:flex-none">
+          <section className={`p-4 lg:w-80 lg:flex-none ${surfaceClasses}`}>
             <StreamSelectionPanel
               resource={resource}
               onResourceChange={handleResourceChange}

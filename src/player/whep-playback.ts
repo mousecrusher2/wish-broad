@@ -80,13 +80,12 @@ export function createPlaybackState(
   };
 }
 
-export function getPlaybackPhaseMessage(
-  phase: WHEPPlaybackPhase,
-): string | null {
+export function getPlaybackPhaseMessage(phase: WHEPPlaybackPhase): string {
   switch (phase) {
     case "idle":
+      return "未接続";
     case "connected":
-      return null;
+      return "接続済み";
     case "connecting":
       return "接続中...";
     case "reconnecting":

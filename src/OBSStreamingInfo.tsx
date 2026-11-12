@@ -1,26 +1,19 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useCurrentUser, useLiveToken } from "./api";
+import {
+  buttonClasses,
+  fieldLabelClasses,
+  headingClasses,
+  inputClasses,
+  insetClasses,
+} from "./components/styles";
 
 type LiveTokenState = ReturnType<typeof useLiveToken>["state"];
 type CopyStatus = "url" | "token" | null;
 
-const fieldLabelClasses =
-  "mb-2 block text-sm font-semibold tracking-wide text-slate-200";
-const fieldInputClasses =
-  "w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-sm text-slate-100 shadow-inner shadow-black/20 outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20";
 const inlineFieldClasses = "flex flex-col gap-3 sm:flex-row";
-const copyButtonClasses =
-  "inline-flex items-center justify-center whitespace-nowrap rounded-full bg-slate-800 px-4 py-3 text-sm font-semibold text-slate-100 transition hover:bg-slate-700";
-const subtleCardClasses =
-  "rounded-2xl border border-white/10 bg-slate-950/30 p-5 shadow-inner shadow-black/20";
-const primaryButtonClasses =
-  "inline-flex items-center justify-center rounded-full bg-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-300";
-const warningButtonClasses =
-  "inline-flex items-center justify-center rounded-full bg-amber-400 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-amber-300";
-const neutralButtonClasses =
-  "inline-flex items-center justify-center rounded-full border border-slate-600 bg-slate-800 px-5 py-3 text-sm font-semibold text-slate-100 transition hover:bg-slate-700";
-const dangerButtonClasses =
-  "inline-flex items-center justify-center rounded-full bg-rose-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-rose-400";
+const copyButtonClasses = buttonClasses("secondary");
+const actionRowClasses = "flex flex-wrap gap-3";
 
 function StreamingUrlSection({
   copyStatus,
@@ -45,7 +38,7 @@ function StreamingUrlSection({
   }
 
   return (
-    <div className="space-y-2">
+    <div>
       <label htmlFor="streaming-url" className={fieldLabelClasses}>
         配信URL (Server):
       </label>
@@ -56,7 +49,7 @@ function StreamingUrlSection({
           value={streamingUrl ?? ""}
           placeholder={placeholder}
           readOnly
-          className={fieldInputClasses}
+          className={inputClasses}
         />
         <button
           onClick={() => {
@@ -64,7 +57,7 @@ function StreamingUrlSection({
               void copyToClipboard(streamingUrl, "url");
             }
           }}
-          className={`${copyButtonClasses} disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400`}
+          className={copyButtonClasses}
           disabled={!streamingUrl}
           type="button"
         >
@@ -76,7 +69,7 @@ function StreamingUrlSection({
 }
 
 function LoadingTokenState() {
-  return <p className="text-sm text-amber-200">読み込み中...</p>;
+  return <p className="text-sm text-slate-400">読み込み中...</p>;
 }
 
 function ErrorTokenState({
@@ -87,9 +80,13 @@ function ErrorTokenState({
   onRetry: () => void;
 }>) {
   return (
-    <div className="flex flex-col gap-3">
-      <p className="text-sm text-rose-200">❌ {message}</p>
-      <button onClick={onRetry} type="button" className={dangerButtonClasses}>
+    <div className="flex flex-col items-start gap-3">
+      <p className="text-sm leading-6 text-rose-200">❌ {message}</p>
+      <button
+        onClick={onRetry}
+        type="button"
+        className={buttonClasses("danger")}
+      >
         再試行
       </button>
     </div>
@@ -100,13 +97,13 @@ function EmptyTokenState({
   onCreateToken,
 }: Readonly<{ onCreateToken: () => void }>) {
   return (
-    <div className="flex flex-col gap-4">
-      <p className="text-sm font-medium text-amber-100">
+    <div className="flex flex-col items-start gap-4">
+      <p className="text-sm font-medium text-amber-200">
         ⚠️ Bearerトークンが発行されていません
       </p>
       <button
         onClick={onCreateToken}
-        className={primaryButtonClasses}
+        className={buttonClasses("primary")}
         type="button"
       >
         🔑 Bearerトークンを発行
@@ -119,7 +116,6 @@ function VisibleTokenField({
   token,
   copyStatus,
   copyToClipboard,
-  onHideToken,
 }: Readonly<{
   token: string;
   copyStatus: CopyStatus;
@@ -127,34 +123,24 @@ function VisibleTokenField({
     text: string,
     type: Exclude<CopyStatus, null>,
   ) => Promise<void>;
-  onHideToken: () => void;
 }>) {
   return (
-    <div className="flex flex-col gap-3">
-      <div className={inlineFieldClasses}>
-        <input
-          aria-label="Bearerトークン"
-          type="text"
-          value={token}
-          readOnly
-          className={fieldInputClasses}
-        />
-        <button
-          onClick={() => {
-            void copyToClipboard(token, "token");
-          }}
-          className={copyButtonClasses}
-          type="button"
-        >
-          {copyStatus === "token" ? "✅ コピー済み" : "📋 コピー"}
-        </button>
-      </div>
+    <div className={inlineFieldClasses}>
+      <input
+        aria-label="Bearerトークン"
+        type="text"
+        value={token}
+        readOnly
+        className={inputClasses}
+      />
       <button
-        onClick={onHideToken}
-        className={neutralButtonClasses}
+        onClick={() => {
+          void copyToClipboard(token, "token");
+        }}
+        className={copyButtonClasses}
         type="button"
       >
-        🙈 非表示
+        {copyStatus === "token" ? "✅ コピー済み" : "📋 コピー"}
       </button>
     </div>
   );
@@ -182,7 +168,7 @@ function AvailableTokenState({
 }>) {
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-sm font-medium text-emerald-200">
+      <p className="text-sm font-medium text-emerald-300">
         ✅ Bearerトークンが発行済みです
       </p>
       {token && showToken && (
@@ -190,30 +176,40 @@ function AvailableTokenState({
           token={token}
           copyStatus={copyStatus}
           copyToClipboard={copyToClipboard}
-          onHideToken={onHideToken}
         />
-      )}
-      {token && !showToken && (
-        <button
-          onClick={onShowToken}
-          className={neutralButtonClasses}
-          type="button"
-        >
-          👁️ トークンを表示
-        </button>
       )}
       {!token && (
         <p className="text-sm leading-6 text-slate-300">
           既存のトークンは再表示できません。必要な場合は新しいトークンを発行してください。
         </p>
       )}
-      <button
-        onClick={onCreateToken}
-        className={warningButtonClasses}
-        type="button"
-      >
-        🔄 新しいトークンを発行
-      </button>
+      <div className={actionRowClasses}>
+        {token && showToken && (
+          <button
+            onClick={onHideToken}
+            className={buttonClasses("secondary")}
+            type="button"
+          >
+            🙈 非表示
+          </button>
+        )}
+        {token && !showToken && (
+          <button
+            onClick={onShowToken}
+            className={buttonClasses("secondary")}
+            type="button"
+          >
+            👁️ トークンを表示
+          </button>
+        )}
+        <button
+          onClick={onCreateToken}
+          className={buttonClasses("warning")}
+          type="button"
+        >
+          🔄 新しいトークンを発行
+        </button>
+      </div>
     </div>
   );
 }
@@ -283,32 +279,30 @@ function TokenSection({
   ) => Promise<void>;
 }>) {
   return (
-    <div className="space-y-2">
-      <div className={subtleCardClasses}>
-        <p className={fieldLabelClasses}>Bearerトークン (Stream Key):</p>
-        {error ? (
-          <ErrorTokenState message={error} onRetry={onRetry} />
-        ) : (
-          <TokenStateContent
-            state={state}
-            showToken={showToken}
-            onCreateToken={onCreateToken}
-            onShowToken={onShowToken}
-            onHideToken={onHideToken}
-            copyStatus={copyStatus}
-            copyToClipboard={copyToClipboard}
-          />
-        )}
-      </div>
+    <div className={`p-5 ${insetClasses}`}>
+      <p className={fieldLabelClasses}>Bearerトークン (Stream Key):</p>
+      {error ? (
+        <ErrorTokenState message={error} onRetry={onRetry} />
+      ) : (
+        <TokenStateContent
+          state={state}
+          showToken={showToken}
+          onCreateToken={onCreateToken}
+          onShowToken={onShowToken}
+          onHideToken={onHideToken}
+          copyStatus={copyStatus}
+          copyToClipboard={copyToClipboard}
+        />
+      )}
     </div>
   );
 }
 
 function OBSInstructions() {
   return (
-    <div className="rounded-2xl border border-white/10 bg-slate-950/30 p-5 shadow-inner shadow-black/20">
-      <h4 className="text-lg font-semibold text-white">📖 OBS設定方法</h4>
-      <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm leading-7 text-slate-300">
+    <div className={`p-5 ${insetClasses}`}>
+      <h3 className="text-base font-semibold text-white">📖 OBS設定方法</h3>
+      <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-sm leading-6 text-slate-300 marker:text-slate-400">
         <li>OBSを開き、「設定」→「配信」を選択</li>
         <li>サービス: 「WHIP」を選択</li>
         <li>サーバー: 上記の配信URLをコピー</li>
@@ -376,27 +370,19 @@ export function OBSStreamingInfo({
       aria-labelledby={titleId}
       closedby="any"
       onClose={onClose}
-      className="fixed top-1/2 right-auto left-1/2 z-50 m-0 max-h-[calc(100vh-1.5rem)] w-195 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 -translate-y-1/2 overflow-visible rounded-[1.75rem] border-0 bg-transparent p-0 text-inherit shadow-2xl shadow-black/45 backdrop:bg-slate-50/30 backdrop:backdrop-blur-[20px] backdrop:backdrop-saturate-145"
+      className="fixed top-1/2 right-auto left-1/2 z-50 m-0 max-h-[calc(100dvh-2rem)] w-2xl max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 overflow-visible rounded-2xl border-0 bg-transparent p-0 text-inherit shadow-2xl shadow-black/60 backdrop:bg-slate-950/70 backdrop:backdrop-blur-sm"
     >
-      <div className="max-h-[calc(100vh-1.5rem)] overflow-auto rounded-[1.75rem] border border-white/15 bg-[rgb(30_41_59/0.86)] p-6 shadow-[0_28px_80px_-24px_rgba(0,0,0,0.75),inset_0_1px_0_rgba(255,255,255,0.16)] [backdrop-filter:blur(34px)_saturate(140%)]">
-        <div className="space-y-6">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-sm font-medium tracking-[0.3em] text-cyan-300/80 uppercase">
-                Broadcast Setup
-              </p>
-              <h2
-                id={titleId}
-                className="mt-2 text-2xl font-semibold tracking-tight text-white"
-              >
-                OBS配信設定
-              </h2>
-            </div>
+      <div className="max-h-[calc(100dvh-2rem)] overflow-auto rounded-2xl border border-white/15 bg-slate-900 p-6 sm:p-8">
+        <div className="flex flex-col gap-6">
+          <div className="flex items-center justify-between gap-4">
+            <h2 id={titleId} className={headingClasses}>
+              OBS配信設定
+            </h2>
             <button
               type="button"
               aria-label="OBS配信設定を閉じる"
               onClick={onClose}
-              className="inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-slate-400/50 bg-slate-900 text-slate-50 shadow-sm shadow-black/20 transition hover:border-slate-200/65 hover:bg-slate-800 hover:text-white"
+              className={`shrink-0 ${buttonClasses("secondary", "icon")}`}
             >
               <svg aria-hidden="true" className="size-4" viewBox="0 0 16 16">
                 <path

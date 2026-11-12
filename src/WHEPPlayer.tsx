@@ -9,7 +9,7 @@ type WHEPPlayerSnapshot = WHEPPlaybackControllerSnapshot;
 
 function VideoPlaceholder({ message }: Readonly<{ message: string }>) {
   return (
-    <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm leading-7 text-slate-400">
+    <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm leading-6 text-slate-400">
       {message}
     </div>
   );
@@ -86,7 +86,7 @@ export function WHEPPlayer({
   };
 
   return (
-    <div className="relative overflow-hidden rounded-[1.75rem] border border-white/10 bg-black/70 shadow-2xl shadow-black/30">
+    <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black/80 shadow-xl shadow-black/25">
       {/* Live streams have no separate captions track. Unmuted autoplay is intentional; WHEPClient handles rejection. */}
       {/* oxlint-disable jsx-a11y/media-has-caption */}
       <video
