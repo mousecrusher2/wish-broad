@@ -4,7 +4,7 @@ vi.mock("swr", async (importOriginal) => {
   const original = await importOriginal<typeof import("swr")>();
   return {
     ...original,
-    preload: vi.fn<() => void>(),
+    preload: vi.fn<() => undefined>(),
   };
 });
 
@@ -21,7 +21,6 @@ function createJsonResponse(data: unknown, init?: ResponseInit): Response {
 
 describe("api data layer", () => {
   beforeEach(() => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.clearAllMocks();
   });
 
@@ -37,9 +36,7 @@ describe("api data layer", () => {
     );
     vi.stubGlobal("fetch", fetch);
 
-    const result = await fetchCurrentUser();
-
-    expect(result._unsafeUnwrap()).toEqual({
+    await expect(fetchCurrentUser()).resolves.toEqual({
       displayName: "Alice",
       userId: "user-1",
     });
@@ -54,16 +51,12 @@ describe("api data layer", () => {
       vi.fn(() => Promise.resolve(new Response("failed", { status: 500 }))),
     );
 
-    const result = await fetchLiveStreams();
-
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) {
-      throw new TypeError("Expected fetchLiveStreams to fail");
-    }
-    expect(result.error).not.toBeInstanceOf(UnauthorizedError);
+    await expect(fetchLiveStreams()).rejects.not.toBeInstanceOf(
+      UnauthorizedError,
+    );
   });
 
-  it("returns unauthorized when an API response is 401", async () => {
+  it("throws UnauthorizedError when an API response is 401", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() =>
@@ -71,13 +64,7 @@ describe("api data layer", () => {
       ),
     );
 
-    const result = await fetchCurrentUser();
-
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) {
-      throw new TypeError("Expected fetchCurrentUser to fail");
-    }
-    expect(result.error).toBeInstanceOf(UnauthorizedError);
+    await expect(fetchCurrentUser()).rejects.toBeInstanceOf(UnauthorizedError);
   });
 
   it.each([
@@ -90,7 +77,7 @@ describe("api data layer", () => {
       vi.fn().mockResolvedValue(createJsonResponse(payload)),
     );
 
-    expect((await fetchCurrentUser())._unsafeUnwrapErr()).toMatchObject({
+    await expect(fetchCurrentUser()).rejects.toMatchObject({
       message: "Unexpected /api/me response",
     });
   });
@@ -101,7 +88,7 @@ describe("api data layer", () => {
       .fn<typeof globalThis.fetch>()
       .mockResolvedValue(createJsonResponse(streams));
     vi.stubGlobal("fetch", fetchMock);
-    expect((await fetchLiveStreams())._unsafeUnwrap()).toEqual(streams);
+    await expect(fetchLiveStreams()).resolves.toEqual(streams);
     expect(fetchMock).toHaveBeenCalledWith("/api/lives", {
       credentials: "include",
     });
@@ -110,7 +97,7 @@ describe("api data layer", () => {
       "fetch",
       vi.fn().mockResolvedValue(new Response("", { status: 503 })),
     );
-    expect((await fetchLiveStreams())._unsafeUnwrapErr()).toMatchObject({
+    await expect(fetchLiveStreams()).rejects.toMatchObject({
       message: "配信リストの取得に失敗しました",
     });
   });
@@ -122,16 +109,12 @@ describe("api data layer", () => {
         .fn()
         .mockResolvedValue(createJsonResponse([{ owner: { userId: "u" } }])),
     );
-    expect((await fetchLiveStreams())._unsafeUnwrapErr()).toMatchObject({
+    await expect(fetchLiveStreams()).rejects.toMatchObject({
       message: "Unexpected live streams response",
     });
 
     const failure = new Error("offline");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(failure));
-    expect((await fetchLiveStreams())._unsafeUnwrapErr()).toBe(failure);
-    expect(console.error).toHaveBeenCalledWith(
-      "Failed to fetch live streams:",
-      failure,
-    );
+    await expect(fetchLiveStreams()).rejects.toBe(failure);
   });
 });

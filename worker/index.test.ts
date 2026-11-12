@@ -1,5 +1,4 @@
 import { sign, verify } from "hono/jwt";
-import { err, ok } from "neverthrow";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bindings } from "./types";
 import type { LiveRecord } from "./database";
@@ -8,6 +7,7 @@ import type { DiscordGuildMember, DiscordOAuthToken } from "./discord";
 import type { StoredTrack } from "./sfu";
 import { LiveNotFoundError, SfuApiError } from "./sfu";
 import { hashTokenWithPepper } from "./token-hash";
+import { TurnApiError } from "./turn";
 
 const dbMocks = vi.hoisted(() => ({
   endLive:
@@ -159,7 +159,8 @@ vi.mock("./notifications", () => ({
     notificationsMocks.deleteLiveStartedNotification,
   sendLiveStartedNotification: notificationsMocks.sendLiveStartedNotification,
 }));
-vi.mock("./turn", () => ({
+vi.mock("./turn", async () => ({
+  ...(await vi.importActual<typeof import("./turn")>("./turn")),
   generateTurnIceServers: turnMocks.generateTurnIceServers,
 }));
 
@@ -554,83 +555,73 @@ describe("worker app", () => {
     discordMocks.createOAuthState.mockReset();
     discordMocks.createOAuthState.mockReturnValue("oauth-state");
     discordMocks.exchangeCodeForToken.mockReset();
-    discordMocks.exchangeCodeForToken.mockResolvedValue(
-      ok<DiscordOAuthToken>({
-        accessToken: "discord-access-token",
-        expiresIn: 3600,
-        scope: "guilds.members.read",
-        tokenType: "Bearer",
-      }),
-    );
+    discordMocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "discord-access-token",
+      expiresIn: 3600,
+      scope: "guilds.members.read",
+      tokenType: "Bearer",
+    } satisfies DiscordOAuthToken);
     discordMocks.getDiscordErrorMessage.mockReset();
     discordMocks.getDiscordErrorMessage.mockReturnValue(
       "Discord request failed",
     );
     discordMocks.getGuildMember.mockReset();
-    discordMocks.getGuildMember.mockResolvedValue(
-      ok<DiscordGuildMember>({
-        nick: null,
-        user: {
-          discriminator: null,
-          global_name: "Alice",
-          id: "user-1",
-          username: "alice",
-        },
-      }),
-    );
+    discordMocks.getGuildMember.mockResolvedValue({
+      nick: null,
+      user: {
+        discriminator: null,
+        global_name: "Alice",
+        id: "user-1",
+        username: "alice",
+      },
+    } satisfies DiscordGuildMember);
     discordMocks.revokeAccessToken.mockReset();
-    discordMocks.revokeAccessToken.mockResolvedValue(ok(undefined));
+    discordMocks.revokeAccessToken.mockResolvedValue(undefined);
 
-    callsMocks.closeTracks.mockResolvedValue(ok({}));
-    callsMocks.isSessionActive.mockResolvedValue(ok(true));
-    callsMocks.renegotiateSession.mockResolvedValue(ok(new Response(null)));
+    callsMocks.closeTracks.mockResolvedValue({});
+    callsMocks.isSessionActive.mockResolvedValue(true);
+    callsMocks.renegotiateSession.mockResolvedValue(undefined);
     callsMocks.startIngest.mockReset();
-    callsMocks.startIngest.mockResolvedValue(
-      ok({
-        sdpAnswer: "answer-sdp",
-        sessionId: "new-session",
-        tracks: [
-          {
-            location: "remote",
-            mid: "0",
-            sessionId: "new-session",
-            trackName: "video",
-          },
-        ],
-      }),
-    );
+    callsMocks.startIngest.mockResolvedValue({
+      sdpAnswer: "answer-sdp",
+      sessionId: "new-session",
+      tracks: [
+        {
+          location: "remote",
+          mid: "0",
+          sessionId: "new-session",
+          trackName: "video",
+        },
+      ],
+    });
     callsMocks.startPlay.mockReset();
-    callsMocks.startPlay.mockResolvedValue(
-      ok({
-        sdpAnswer: "viewer-answer-sdp",
-        sessionId: "viewer-session",
-        sdpType: "answer",
-        tracks: [
-          {
-            location: "remote",
-            mid: "0",
-            sessionId: "viewer-session",
-            trackName: "video",
-          },
-        ],
-      }),
-    );
+    callsMocks.startPlay.mockResolvedValue({
+      sdpAnswer: "viewer-answer-sdp",
+      sessionId: "viewer-session",
+      sdpType: "answer",
+      tracks: [
+        {
+          location: "remote",
+          mid: "0",
+          sessionId: "viewer-session",
+          trackName: "video",
+        },
+      ],
+    });
     notificationsMocks.deleteLiveStartedNotification.mockReset();
     notificationsMocks.deleteLiveStartedNotification.mockResolvedValue(
-      ok(undefined),
+      undefined,
     );
     notificationsMocks.sendLiveStartedNotification.mockReset();
-    notificationsMocks.sendLiveStartedNotification.mockResolvedValue(
-      ok({ messageId: 1n }),
-    );
+    notificationsMocks.sendLiveStartedNotification.mockResolvedValue({
+      messageId: 1n,
+    });
     turnMocks.generateTurnIceServers.mockReset();
-    turnMocks.generateTurnIceServers.mockResolvedValue(
-      ok([
-        {
-          urls: ["stun:stun.cloudflare.com:3478"],
-        },
-      ]),
-    );
+    turnMocks.generateTurnIceServers.mockResolvedValue([
+      {
+        urls: ["stun:stun.cloudflare.com:3478"],
+      },
+    ]);
   });
 
   it("redirects to Discord when login starts", async () => {
@@ -756,14 +747,12 @@ describe("worker app", () => {
   });
 
   it("maps OAuth token exchange errors to a logged 502 response", async () => {
-    discordMocks.exchangeCodeForToken.mockResolvedValue(
-      err(
-        new discordMocks.DiscordApiError("token exchange failed", {
-          endpoint: "https://discord.com/api/oauth2/token",
-          kind: "http_error",
-          statusText: "Bad Gateway",
-        }),
-      ),
+    discordMocks.exchangeCodeForToken.mockRejectedValue(
+      new discordMocks.DiscordApiError("token exchange failed", {
+        endpoint: "https://discord.com/api/oauth2/token",
+        kind: "http_error",
+        statusText: "Bad Gateway",
+      }),
     );
 
     const response = await requestLoginCallback(createBindings(), {
@@ -865,17 +854,15 @@ describe("worker app", () => {
   ] as const)(
     "chooses the best available Discord display name",
     async (nick, globalName, username, displayName) => {
-      discordMocks.getGuildMember.mockResolvedValue(
-        ok<DiscordGuildMember>({
-          nick,
-          user: {
-            discriminator: null,
-            global_name: globalName,
-            id: "user-1",
-            username,
-          },
-        }),
-      );
+      discordMocks.getGuildMember.mockResolvedValue({
+        nick,
+        user: {
+          discriminator: null,
+          global_name: globalName,
+          id: "user-1",
+          username,
+        },
+      } satisfies DiscordGuildMember);
 
       const response = await requestLoginCallback(createBindings(), {
         code: "auth-code",
@@ -891,14 +878,12 @@ describe("worker app", () => {
   );
 
   it("keeps successful login when Discord token revocation fails", async () => {
-    discordMocks.revokeAccessToken.mockResolvedValue(
-      err(
-        new discordMocks.DiscordApiError("revocation failed", {
-          endpoint: "https://discord.com/api/oauth2/token/revoke",
-          kind: "http_error",
-          statusText: "Bad Gateway",
-        }),
-      ),
+    discordMocks.revokeAccessToken.mockRejectedValue(
+      new discordMocks.DiscordApiError("revocation failed", {
+        endpoint: "https://discord.com/api/oauth2/token/revoke",
+        kind: "http_error",
+        statusText: "Bad Gateway",
+      }),
     );
 
     const response = await requestLoginCallback(createBindings(), {
@@ -922,14 +907,12 @@ describe("worker app", () => {
   it("rejects Discord login when the user is not in the authorized guild", async () => {
     const env = createBindings();
 
-    discordMocks.getGuildMember.mockResolvedValue(
-      err(
-        new discordMocks.DiscordApiError("Discord request failed: not found", {
-          endpoint: `https://discord.com/api/v10/users/@me/guilds/${env.AUTHORIZED_GUILD_ID}/member`,
-          kind: "not_found",
-          statusText: "Not Found",
-        }),
-      ),
+    discordMocks.getGuildMember.mockRejectedValue(
+      new discordMocks.DiscordApiError("Discord request failed: not found", {
+        endpoint: `https://discord.com/api/v10/users/@me/guilds/${env.AUTHORIZED_GUILD_ID}/member`,
+        kind: "not_found",
+        statusText: "Not Found",
+      }),
     );
 
     const response = await app.fetch(
@@ -976,14 +959,12 @@ describe("worker app", () => {
       const endpoint = matchingEndpoint
         ? `https://discord.com/api/v10/users/@me/guilds/${env.AUTHORIZED_GUILD_ID}/member`
         : "https://discord.com/api/v10/users/@me/guilds/another-guild/member";
-      discordMocks.getGuildMember.mockResolvedValue(
-        err(
-          new discordMocks.DiscordApiError("member lookup failed", {
-            endpoint,
-            kind,
-            statusText: "Forbidden",
-          }),
-        ),
+      discordMocks.getGuildMember.mockRejectedValue(
+        new discordMocks.DiscordApiError("member lookup failed", {
+          endpoint,
+          kind,
+          statusText: "Forbidden",
+        }),
       );
 
       const response = await requestLoginCallback(env, {
@@ -1220,8 +1201,10 @@ describe("worker app", () => {
     const consoleErrorSpy = vi
       .spyOn(console, "error")
       .mockImplementation(() => {});
-    turnMocks.generateTurnIceServers.mockResolvedValue(
-      err({
+    turnMocks.generateTurnIceServers.mockRejectedValue(
+      new TurnApiError("TURN credential request timed out", {
+        endpoint:
+          "https://rtc.live.cloudflare.com/v1/turn/keys/key/credentials",
         kind: "request_timeout",
       }),
     );
@@ -1247,8 +1230,12 @@ describe("worker app", () => {
 
   it("maps non-timeout TURN credential failures to 502", async () => {
     const env = createBindings();
-    turnMocks.generateTurnIceServers.mockResolvedValue(
-      err({ kind: "request_failed" }),
+    turnMocks.generateTurnIceServers.mockRejectedValue(
+      new TurnApiError("TURN credential request failed", {
+        endpoint:
+          "https://rtc.live.cloudflare.com/v1/turn/keys/key/credentials",
+        kind: "request_failed",
+      }),
     );
 
     const response = await app.fetch(
@@ -1302,7 +1289,7 @@ describe("worker app", () => {
 
     dbMocks.getLive.mockResolvedValue(staleLive);
     dbMocks.endLive.mockResolvedValue({ notificationMessageId: 2n });
-    callsMocks.isSessionActive.mockResolvedValue(ok(false));
+    callsMocks.isSessionActive.mockResolvedValue(false);
 
     const response = await requestIngestOffer(env, execution.context);
 
@@ -1374,7 +1361,7 @@ describe("worker app", () => {
       createLive({ notificationMessageId: 7n, sessionId: "stale-session" }),
     );
     dbMocks.endLive.mockResolvedValue(null);
-    callsMocks.isSessionActive.mockResolvedValue(ok(false));
+    callsMocks.isSessionActive.mockResolvedValue(false);
 
     const response = await requestIngestOffer(
       env,
@@ -1548,8 +1535,8 @@ describe("worker app", () => {
       .spyOn(console, "warn")
       .mockImplementation(() => {});
 
-    notificationsMocks.sendLiveStartedNotification.mockResolvedValue(
-      err(new Error("webhook failed")),
+    notificationsMocks.sendLiveStartedNotification.mockRejectedValue(
+      new Error("webhook failed"),
     );
 
     const response = await app.fetch(
@@ -1810,13 +1797,11 @@ describe("worker app", () => {
     dbMocks.getLive.mockResolvedValue(
       createLive({ sessionId: "stale-session" }),
     );
-    callsMocks.isSessionActive.mockResolvedValue(
-      err(
-        new SfuApiError("Calls request failed", {
-          endpoint: "/sessions/stale-session",
-          kind: "request_failed",
-        }),
-      ),
+    callsMocks.isSessionActive.mockRejectedValue(
+      new SfuApiError("Calls request failed", {
+        endpoint: "/sessions/stale-session",
+        kind: "request_failed",
+      }),
     );
 
     const response = await requestIngestOffer(env, createExecutionContext());
@@ -1842,15 +1827,13 @@ describe("worker app", () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
 
-    callsMocks.startIngest.mockResolvedValue(
-      err(
-        new SfuApiError("SFU request failed: unprocessable content", {
-          endpoint: "/tracks/new",
-          kind: "unprocessable_content",
-          responseBody: "Malformed SDP offer",
-          statusText: "Unprocessable Content",
-        }),
-      ),
+    callsMocks.startIngest.mockRejectedValue(
+      new SfuApiError("SFU request failed: unprocessable content", {
+        endpoint: "/tracks/new",
+        kind: "unprocessable_content",
+        responseBody: "Malformed SDP offer",
+        statusText: "Unprocessable Content",
+      }),
     );
 
     const response = await app.fetch(
@@ -1880,15 +1863,13 @@ describe("worker app", () => {
       .spyOn(console, "error")
       .mockImplementation(() => {});
 
-    callsMocks.startIngest.mockResolvedValue(
-      err(
-        new SfuApiError("SFU request failed", {
-          endpoint: "/sessions/new",
-          kind: "http_error",
-          responseBody: "SFU auth failed",
-          statusText: "Unauthorized",
-        }),
-      ),
+    callsMocks.startIngest.mockRejectedValue(
+      new SfuApiError("SFU request failed", {
+        endpoint: "/sessions/new",
+        kind: "http_error",
+        responseBody: "SFU auth failed",
+        statusText: "Unauthorized",
+      }),
     );
 
     const response = await app.fetch(
@@ -1925,7 +1906,7 @@ describe("worker app", () => {
     dbMocks.getLive.mockResolvedValue(
       createLive({ sessionId: "active-session" }),
     );
-    callsMocks.isSessionActive.mockResolvedValue(ok(true));
+    callsMocks.isSessionActive.mockResolvedValue(true);
 
     const response = await requestIngestOffer(env, execution.context);
 
@@ -2068,11 +2049,9 @@ describe("worker app", () => {
       .mockImplementation(() => {});
 
     dbMocks.getLive.mockResolvedValue(createLive());
-    callsMocks.closeTracks.mockResolvedValue(
-      ok({
-        tracks: [{ mid: "0" }, { errorCode: "failed_to_close", mid: "1" }],
-      }),
-    );
+    callsMocks.closeTracks.mockResolvedValue({
+      tracks: [{ mid: "0" }, { errorCode: "failed_to_close", mid: "1" }],
+    });
 
     const response = await requestIngestDelete(env, execution.context);
 
@@ -2103,14 +2082,12 @@ describe("worker app", () => {
       .mockImplementation(() => {});
 
     dbMocks.getLive.mockResolvedValue(createLive());
-    callsMocks.closeTracks.mockResolvedValue(
-      err(
-        new SfuApiError("SFU request failed: session not found", {
-          endpoint: "/tracks/close",
-          kind: "session_not_found",
-          statusText: "Not Found",
-        }),
-      ),
+    callsMocks.closeTracks.mockRejectedValue(
+      new SfuApiError("SFU request failed: session not found", {
+        endpoint: "/tracks/close",
+        kind: "session_not_found",
+        statusText: "Not Found",
+      }),
     );
 
     const response = await requestIngestDelete(env, execution.context);
@@ -2207,7 +2184,7 @@ describe("worker app", () => {
 
     dbMocks.getLive.mockResolvedValue(live);
     dbMocks.endLive.mockResolvedValue({ notificationMessageId: 1n });
-    callsMocks.isSessionActive.mockResolvedValue(ok(false));
+    callsMocks.isSessionActive.mockResolvedValue(false);
 
     const response = await requestPlayOffer(env, execution.context);
     await expectPlayNotFoundAndCleanup(response, env, live);
@@ -2228,7 +2205,7 @@ describe("worker app", () => {
     });
     dbMocks.getLive.mockResolvedValue(live);
     dbMocks.endLive.mockResolvedValue(null);
-    callsMocks.isSessionActive.mockResolvedValue(ok(false));
+    callsMocks.isSessionActive.mockResolvedValue(false);
 
     const response = await requestPlayOffer(env, execution.context);
 
@@ -2295,13 +2272,11 @@ describe("worker app", () => {
     dbMocks.getLive.mockResolvedValue(
       createLive({ sessionId: "live-session", userId: "streamer-1" }),
     );
-    callsMocks.isSessionActive.mockResolvedValue(
-      err(
-        new SfuApiError("Calls request failed", {
-          endpoint: "/sessions/live-session",
-          kind: "request_failed",
-        }),
-      ),
+    callsMocks.isSessionActive.mockRejectedValue(
+      new SfuApiError("Calls request failed", {
+        endpoint: "/sessions/live-session",
+        kind: "request_failed",
+      }),
     );
 
     const response = await requestPlayOffer(env);
@@ -2324,9 +2299,7 @@ describe("worker app", () => {
 
   it("maps a missing live from the playback negotiator to 404", async () => {
     const env = createBindings();
-    callsMocks.startPlay.mockResolvedValue(
-      err(new LiveNotFoundError("streamer-1")),
-    );
+    callsMocks.startPlay.mockRejectedValue(new LiveNotFoundError("streamer-1"));
 
     const response = await requestPlayOffer(env);
 
@@ -2335,13 +2308,39 @@ describe("worker app", () => {
     expect(dbMocks.endLive).not.toHaveBeenCalled();
   });
 
-  it("logs unexpected playback negotiation errors and returns 502", async () => {
+  it("leaves non-SFU playback errors to the unhandled error handler", async () => {
     const env = createBindings();
     const consoleErrorSpy = vi
       .spyOn(console, "error")
       .mockImplementation(() => {});
-    callsMocks.startPlay.mockResolvedValue(
-      err(new Error("unexpected playback error")),
+    callsMocks.startPlay.mockRejectedValue(
+      new TypeError("unexpected playback error"),
+    );
+
+    const response = await requestPlayOffer(env);
+
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe("Internal Server Error");
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorMessage: "unexpected playback error",
+        event: "worker.unhandled_error",
+        level: "error",
+      }),
+    );
+  });
+
+  it("logs SFU playback negotiation errors and returns 502", async () => {
+    const env = createBindings();
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    callsMocks.startPlay.mockRejectedValue(
+      new SfuApiError("SFU request failed", {
+        endpoint: "/tracks/new",
+        kind: "http_error",
+        statusText: "Internal Server Error",
+      }),
     );
 
     const response = await requestPlayOffer(env);
@@ -2350,7 +2349,7 @@ describe("worker app", () => {
     expect(await response.text()).toBe("Failed to negotiate playback session");
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        errorMessage: "unexpected playback error",
+        errorMessage: "SFU request failed",
         event: "play.negotiation_failed",
         level: "error",
         viewerUserId: "viewer-1",
@@ -2369,14 +2368,12 @@ describe("worker app", () => {
 
     dbMocks.getLive.mockResolvedValue(live);
     dbMocks.endLive.mockResolvedValue({ notificationMessageId: 1n });
-    callsMocks.startPlay.mockResolvedValue(
-      err(
-        new SfuApiError("SFU request failed: session not found", {
-          endpoint: "/tracks/new",
-          kind: "session_not_found",
-          statusText: "Not Found",
-        }),
-      ),
+    callsMocks.startPlay.mockRejectedValue(
+      new SfuApiError("SFU request failed: session not found", {
+        endpoint: "/tracks/new",
+        kind: "session_not_found",
+        statusText: "Not Found",
+      }),
     );
 
     const response = await requestPlayOffer(env, execution.context);
@@ -2398,13 +2395,11 @@ describe("worker app", () => {
       }),
     );
     dbMocks.endLive.mockResolvedValue(null);
-    callsMocks.startPlay.mockResolvedValue(
-      err(
-        new SfuApiError("Session not found", {
-          endpoint: "/tracks/new",
-          kind: "session_not_found",
-        }),
-      ),
+    callsMocks.startPlay.mockRejectedValue(
+      new SfuApiError("Session not found", {
+        endpoint: "/tracks/new",
+        kind: "session_not_found",
+      }),
     );
 
     const response = await requestPlayOffer(env, execution.context);
@@ -2421,13 +2416,11 @@ describe("worker app", () => {
 
   it("returns 404 when the SFU loses playback for an owner with no stored row", async () => {
     const env = createBindings();
-    callsMocks.startPlay.mockResolvedValue(
-      err(
-        new SfuApiError("Session not found", {
-          endpoint: "/tracks/new",
-          kind: "session_not_found",
-        }),
-      ),
+    callsMocks.startPlay.mockRejectedValue(
+      new SfuApiError("Session not found", {
+        endpoint: "/tracks/new",
+        kind: "session_not_found",
+      }),
     );
 
     const response = await requestPlayOffer(env);
@@ -2579,15 +2572,13 @@ describe("worker app", () => {
         userId: "streamer-1",
       }),
     );
-    callsMocks.startPlay.mockResolvedValue(
-      err(
-        new SfuApiError("SFU request failed: unprocessable content", {
-          endpoint: "/tracks/new",
-          kind: "unprocessable_content",
-          responseBody: "Malformed SDP offer",
-          statusText: "Unprocessable Content",
-        }),
-      ),
+    callsMocks.startPlay.mockRejectedValue(
+      new SfuApiError("SFU request failed: unprocessable content", {
+        endpoint: "/tracks/new",
+        kind: "unprocessable_content",
+        responseBody: "Malformed SDP offer",
+        statusText: "Unprocessable Content",
+      }),
     );
 
     const response = await app.fetch(
@@ -2628,7 +2619,7 @@ describe("worker app", () => {
         userId: "streamer-1",
       }),
     );
-    callsMocks.isSessionActive.mockResolvedValue(ok(true));
+    callsMocks.isSessionActive.mockResolvedValue(true);
 
     const response = await app.fetch(
       new Request("http://localhost/play/streamer-1", {
@@ -2690,21 +2681,19 @@ describe("worker app", () => {
         userId: "streamer-1",
       }),
     );
-    callsMocks.startPlay.mockResolvedValue(
-      ok({
-        sdpAnswer: "viewer-counter-offer-sdp",
-        sessionId: "viewer-session",
-        sdpType: "offer",
-        tracks: [
-          {
-            location: "remote",
-            mid: "0",
-            sessionId: "viewer-session",
-            trackName: "video",
-          },
-        ],
-      }),
-    );
+    callsMocks.startPlay.mockResolvedValue({
+      sdpAnswer: "viewer-counter-offer-sdp",
+      sessionId: "viewer-session",
+      sdpType: "offer",
+      tracks: [
+        {
+          location: "remote",
+          mid: "0",
+          sessionId: "viewer-session",
+          trackName: "video",
+        },
+      ],
+    });
 
     const response = await app.fetch(
       new Request("http://localhost/play/streamer-1", {
@@ -2826,11 +2815,9 @@ describe("worker app", () => {
       .spyOn(console, "warn")
       .mockImplementation(() => {});
 
-    callsMocks.closeTracks.mockResolvedValue(
-      ok({
-        tracks: [{ errorCode: "failed_to_close", mid: "0" }],
-      }),
-    );
+    callsMocks.closeTracks.mockResolvedValue({
+      tracks: [{ errorCode: "failed_to_close", mid: "0" }],
+    });
 
     const response = await app.fetch(
       new Request("http://localhost/play/streamer-1/viewer-session?mid=0", {
@@ -2908,15 +2895,13 @@ describe("worker app", () => {
   it("returns SFU client errors for invalid WHEP answers", async () => {
     const env = createBindings();
 
-    callsMocks.renegotiateSession.mockResolvedValue(
-      err(
-        new SfuApiError("SFU request failed: unprocessable content", {
-          endpoint: "/renegotiate",
-          kind: "unprocessable_content",
-          responseBody: "Malformed SDP answer",
-          statusText: "Unprocessable Content",
-        }),
-      ),
+    callsMocks.renegotiateSession.mockRejectedValue(
+      new SfuApiError("SFU request failed: unprocessable content", {
+        endpoint: "/renegotiate",
+        kind: "unprocessable_content",
+        responseBody: "Malformed SDP answer",
+        statusText: "Unprocessable Content",
+      }),
     );
 
     const response = await app.fetch(
@@ -2939,9 +2924,7 @@ describe("worker app", () => {
   it("returns 204 after successful WHEP renegotiation", async () => {
     const env = createBindings();
 
-    callsMocks.renegotiateSession.mockResolvedValue(
-      ok(new Response(null, { status: 200 })),
-    );
+    callsMocks.renegotiateSession.mockResolvedValue(undefined);
 
     const response = await app.fetch(
       new Request("http://localhost/play/streamer-1/viewer-session", {
@@ -2969,13 +2952,11 @@ describe("worker app", () => {
     const consoleErrorSpy = vi
       .spyOn(console, "error")
       .mockImplementation(() => {});
-    callsMocks.renegotiateSession.mockResolvedValue(
-      err(
-        new SfuApiError("unexpected renegotiation error", {
-          endpoint: "/renegotiate",
-          kind: "request_failed",
-        }),
-      ),
+    callsMocks.renegotiateSession.mockRejectedValue(
+      new SfuApiError("unexpected renegotiation error", {
+        endpoint: "/renegotiate",
+        kind: "request_failed",
+      }),
     );
 
     const response = await app.fetch(

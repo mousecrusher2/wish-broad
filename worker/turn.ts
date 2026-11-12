@@ -1,4 +1,3 @@
-import { err, ok, type Result } from "neverthrow";
 import * as v from "valibot";
 import type { Bindings } from "./types";
 
@@ -14,7 +13,7 @@ type TurnCredentialsResponse = {
   iceServers: RawIceServer[];
 };
 
-type TurnIceServer = {
+export type TurnIceServer = {
   urls: string[];
   username?: string;
   credential?: string;
@@ -156,102 +155,104 @@ function filterIceServerUrls(iceServer: RawIceServer): TurnIceServer | null {
   };
 }
 
+/**
+ * @throws {TurnApiError} When the request fails or times out before Cloudflare
+ * answers.
+ */
 async function fetchTurnCredentials(
   endpoint: string,
   init: RequestInit,
-): Promise<Result<Response, TurnApiError>> {
+): Promise<Response> {
   const abortController = new AbortController();
   const timeoutId = setTimeout(() => {
     abortController.abort();
   }, TURN_FETCH_TIMEOUT_MS);
 
-  return fetch(endpoint, {
-    ...init,
-    signal: abortController.signal,
-  })
-    .then((response) => ok(response))
-    .catch((error: unknown) =>
-      err(
-        new TurnApiError(
-          isAbortError(error)
-            ? "TURN credential request timed out"
-            : "TURN credential request failed",
-          {
-            endpoint,
-            kind: isAbortError(error) ? "request_timeout" : "request_failed",
-            responseBody:
-              error instanceof Error ? error.message : String(error),
-          },
-        ),
-      ),
-    )
-    .finally(() => {
-      clearTimeout(timeoutId);
+  try {
+    return await fetch(endpoint, {
+      ...init,
+      signal: abortController.signal,
     });
+  } catch (error: unknown) {
+    const timedOut = isAbortError(error);
+    throw new TurnApiError(
+      timedOut
+        ? "TURN credential request timed out"
+        : "TURN credential request failed",
+      {
+        endpoint,
+        kind: timedOut ? "request_timeout" : "request_failed",
+        responseBody: error instanceof Error ? error.message : String(error),
+      },
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
+/**
+ * @throws {TurnApiError} When Cloudflare answers with an HTTP error or a body
+ * that is not the expected JSON.
+ */
 async function parseTurnCredentialsResponse(
   endpoint: string,
   response: Response,
-): Promise<Result<TurnCredentialsResponse, TurnApiError>> {
+): Promise<TurnCredentialsResponse> {
   if (!response.ok) {
-    const responseBody = await response
+    const responseBody: unknown = await response
       .json()
       .catch(() => response.text().catch(() => null));
-    return err(
-      new TurnApiError("TURN credential request failed", {
-        endpoint,
-        kind: "http_error",
-        responseBody,
-        statusText: response.statusText,
-      }),
-    );
+    throw new TurnApiError("TURN credential request failed", {
+      endpoint,
+      kind: "http_error",
+      responseBody,
+      statusText: response.statusText,
+    });
   }
 
-  const responseBody = await response
-    .json()
-    .then((value: unknown) => ok(value))
-    .catch((error: Error) =>
-      err(
-        new TurnApiError("TURN credential response was not valid JSON", {
-          endpoint,
-          kind: "invalid_response_json",
-          responseBody: error.message,
-          statusText: response.statusText,
-        }),
-      ),
-    );
-  if (responseBody.isErr()) {
-    return err(responseBody.error);
+  let responseBody: unknown;
+  try {
+    responseBody = await response.json();
+  } catch (error: unknown) {
+    throw new TurnApiError("TURN credential response was not valid JSON", {
+      endpoint,
+      kind: "invalid_response_json",
+      responseBody: error instanceof Error ? error.message : String(error),
+      statusText: response.statusText,
+    });
   }
 
   const parsedResponse = v.safeParse(
     getTurnCredentialsResponseSchema(),
-    responseBody.value,
+    responseBody,
   );
   if (!parsedResponse.success) {
-    return err(
-      new TurnApiError("TURN credential response schema was invalid", {
-        endpoint,
-        kind: "invalid_response_schema",
-        responseBody: {
-          issues: parsedResponse.issues,
-          responseBody: responseBody.value,
-        },
-        statusText: response.statusText,
-      }),
-    );
+    throw new TurnApiError("TURN credential response schema was invalid", {
+      endpoint,
+      kind: "invalid_response_schema",
+      responseBody: {
+        issues: parsedResponse.issues,
+        responseBody,
+      },
+      statusText: response.statusText,
+    });
   }
 
-  return ok(parsedResponse.output);
+  return parsedResponse.output;
 }
 
+/**
+ * Generate short-lived TURN credentials for one viewer.
+ *
+ * @throws {TurnApiError} When the credentials cannot be generated or contain
+ * no ICE server that browsers can use.
+ */
 export async function generateTurnIceServers(
   env: TurnEnv,
   customIdentifier: string,
-): Promise<Result<TurnIceServer[], TurnApiError>> {
+): Promise<TurnIceServer[]> {
   const endpoint = `https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`;
-  const responseResult = await fetchTurnCredentials(endpoint, {
+  const response = await fetchTurnCredentials(endpoint, {
     body: JSON.stringify({
       customIdentifier,
       ttl: TURN_CREDENTIAL_TTL_SECONDS,
@@ -262,33 +263,21 @@ export async function generateTurnIceServers(
     },
     method: "POST",
   });
-  if (responseResult.isErr()) {
-    return err(responseResult.error);
-  }
+  const credentials = await parseTurnCredentialsResponse(endpoint, response);
 
-  const parsedResponseResult = await parseTurnCredentialsResponse(
-    endpoint,
-    responseResult.value,
-  );
-  if (parsedResponseResult.isErr()) {
-    return err(parsedResponseResult.error);
-  }
-
-  const iceServers = parsedResponseResult.value.iceServers
+  const iceServers = credentials.iceServers
     .map(filterIceServerUrls)
     .filter((iceServer) => iceServer !== null);
   if (iceServers.length === 0) {
-    return err(
-      new TurnApiError(
-        "TURN credential response did not contain usable ICE servers",
-        {
-          endpoint,
-          kind: "empty_ice_servers",
-          responseBody: parsedResponseResult.value,
-        },
-      ),
+    throw new TurnApiError(
+      "TURN credential response did not contain usable ICE servers",
+      {
+        endpoint,
+        kind: "empty_ice_servers",
+        responseBody: credentials,
+      },
     );
   }
 
-  return ok(iceServers);
+  return iceServers;
 }

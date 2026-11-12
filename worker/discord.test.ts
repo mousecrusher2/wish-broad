@@ -9,6 +9,20 @@ import {
   revokeAccessToken,
 } from "./discord";
 
+async function catchDiscordError(
+  promise: Promise<unknown>,
+): Promise<DiscordApiError> {
+  try {
+    await promise;
+  } catch (error: unknown) {
+    if (error instanceof DiscordApiError) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("Expected a DiscordApiError");
+}
+
 describe("worker discord helpers", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -37,7 +51,7 @@ describe("worker discord helpers", () => {
     expect(url.searchParams.get("state")).toBe("state-123");
   });
 
-  it("returns an error result when token exchange returns a non-JSON error body", async () => {
+  it("throws when token exchange returns a non-JSON error body", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("<html>rate limited</html>", {
         headers: {
@@ -48,21 +62,18 @@ describe("worker discord helpers", () => {
       }),
     );
 
-    const result = await exchangeCodeForToken(
-      {
-        DISCORD_CLIENT_ID: "client-id",
-        DISCORD_CLIENT_SECRET: "client-secret",
-      },
-      "auth-code",
-      "https://example.com/login",
+    const error = await catchDiscordError(
+      exchangeCodeForToken(
+        {
+          DISCORD_CLIENT_ID: "client-id",
+          DISCORD_CLIENT_SECRET: "client-secret",
+        },
+        "auth-code",
+        "https://example.com/login",
+      ),
     );
 
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) {
-      throw new Error("Expected token exchange to fail");
-    }
-
-    expect(result.error).toMatchObject({
+    expect(error).toMatchObject({
       endpoint: "https://discord.com/api/v10/oauth2/token",
       kind: "rate_limited",
       responseBodyText: "<html>rate limited</html>",
@@ -70,7 +81,7 @@ describe("worker discord helpers", () => {
     });
   });
 
-  it("returns an error result when token revocation fails", async () => {
+  it("throws when token revocation fails", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ message: "bad gateway" }), {
         headers: {
@@ -81,20 +92,17 @@ describe("worker discord helpers", () => {
       }),
     );
 
-    const result = await revokeAccessToken(
-      {
-        DISCORD_CLIENT_ID: "client-id",
-        DISCORD_CLIENT_SECRET: "client-secret",
-      },
-      "discord-access-token",
+    const error = await catchDiscordError(
+      revokeAccessToken(
+        {
+          DISCORD_CLIENT_ID: "client-id",
+          DISCORD_CLIENT_SECRET: "client-secret",
+        },
+        "discord-access-token",
+      ),
     );
 
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) {
-      throw new Error("Expected token revocation to fail");
-    }
-
-    expect(result.error).toMatchObject({
+    expect(error).toMatchObject({
       endpoint: "https://discord.com/api/v10/oauth2/token/revoke",
       kind: "http_error",
       statusText: "Bad Gateway",
@@ -102,26 +110,23 @@ describe("worker discord helpers", () => {
     });
   });
 
-  it("returns a timeout error result when the Discord request is aborted", async () => {
+  it("throws a timeout error when the Discord request is aborted", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(
       new DOMException("The operation was aborted", "AbortError"),
     );
 
-    const result = await exchangeCodeForToken(
-      {
-        DISCORD_CLIENT_ID: "client-id",
-        DISCORD_CLIENT_SECRET: "client-secret",
-      },
-      "auth-code",
-      "https://example.com/login",
+    const error = await catchDiscordError(
+      exchangeCodeForToken(
+        {
+          DISCORD_CLIENT_ID: "client-id",
+          DISCORD_CLIENT_SECRET: "client-secret",
+        },
+        "auth-code",
+        "https://example.com/login",
+      ),
     );
 
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) {
-      throw new Error("Expected token exchange to fail");
-    }
-
-    expect(result.error).toMatchObject({
+    expect(error).toMatchObject({
       endpoint: "https://discord.com/api/v10/oauth2/token",
       kind: "request_timeout",
     });
@@ -153,7 +158,7 @@ describe("worker discord helpers", () => {
       "https://example.com/login/callback",
     );
 
-    expect(result._unsafeUnwrap()).toEqual({
+    expect(result).toEqual({
       accessToken: "access",
       expiresIn: 3600,
       refreshToken: "refresh",
@@ -201,21 +206,21 @@ describe("worker discord helpers", () => {
       "code",
       "https://example.com/callback",
     );
-    expect(result._unsafeUnwrap().refreshToken).toBeUndefined();
+    expect(result.refreshToken).toBeUndefined();
 
     vi.restoreAllMocks();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ access_token: "access" })),
     );
-    const invalid = await exchangeCodeForToken(
-      { DISCORD_CLIENT_ID: "client", DISCORD_CLIENT_SECRET: "secret" },
-      "code",
-      "https://example.com/callback",
+    const invalid = await catchDiscordError(
+      exchangeCodeForToken(
+        { DISCORD_CLIENT_ID: "client", DISCORD_CLIENT_SECRET: "secret" },
+        "code",
+        "https://example.com/callback",
+      ),
     );
-    expect(invalid.isErr()).toBe(true);
-    if (invalid.isOk()) throw new Error("Expected a schema error");
-    expect(invalid.error.kind).toBe("unexpected_json_response");
-    expect(invalid.error.responseBodyJson).toEqual({ access_token: "access" });
+    expect(invalid.kind).toBe("unexpected_json_response");
+    expect(invalid.responseBodyJson).toEqual({ access_token: "access" });
   });
 
   it("retrieves and validates an authorized guild member", async () => {
@@ -234,7 +239,7 @@ describe("worker discord helpers", () => {
     );
 
     const result = await getGuildMember("token", "guild/id");
-    expect(result._unsafeUnwrap()).toEqual({
+    expect(result).toEqual({
       nick: null,
       user: {
         discriminator: "1234",
@@ -261,7 +266,7 @@ describe("worker discord helpers", () => {
       ),
     );
     const valid = await getGuildMember("token", "guild");
-    expect(valid._unsafeUnwrap().user).toEqual({
+    expect(valid.user).toEqual({
       id: "user-1",
       username: "alice",
     });
@@ -270,10 +275,8 @@ describe("worker discord helpers", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ user: { id: "user-1" } })),
     );
-    const invalid = await getGuildMember("token", "guild");
-    expect(invalid.isErr()).toBe(true);
-    if (invalid.isOk()) throw new Error("Expected an invalid member response");
-    expect(invalid.error.kind).toBe("unexpected_json_response");
+    const invalid = await catchDiscordError(getGuildMember("token", "guild"));
+    expect(invalid.kind).toBe("unexpected_json_response");
   });
 
   it.each([
@@ -290,10 +293,8 @@ describe("worker discord helpers", () => {
       }),
     );
 
-    const result = await getGuildMember("token", "guild");
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) throw new Error("Expected a Discord API failure");
-    expect(result.error).toMatchObject({
+    const error = await catchDiscordError(getGuildMember("token", "guild"));
+    expect(error).toMatchObject({
       kind,
       responseBodyJson: { message: "upstream failure" },
       statusText: "Discord Error",
@@ -305,12 +306,12 @@ describe("worker discord helpers", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response(null, { status: 204 }));
 
-    const result = await revokeAccessToken(
-      { DISCORD_CLIENT_ID: "client", DISCORD_CLIENT_SECRET: "secret" },
-      "access-token",
-    );
-
-    expect(result.isOk()).toBe(true);
+    await expect(
+      revokeAccessToken(
+        { DISCORD_CLIENT_ID: "client", DISCORD_CLIENT_SECRET: "secret" },
+        "access-token",
+      ),
+    ).resolves.toBeUndefined();
     expect(fetchSpy).toHaveBeenCalledWith(
       "https://discord.com/api/v10/oauth2/token/revoke",
       expect.objectContaining({
@@ -332,20 +333,16 @@ describe("worker discord helpers", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response("not JSON"),
     );
-    const nonJson = await getGuildMember("token", "guild");
-    expect(nonJson.isErr()).toBe(true);
-    if (nonJson.isOk()) throw new Error("Expected a JSON error");
-    expect(nonJson.error).toMatchObject({
+    const nonJson = await catchDiscordError(getGuildMember("token", "guild"));
+    expect(nonJson).toMatchObject({
       kind: "non_json_response",
       responseBodyText: "not JSON",
     });
 
     vi.restoreAllMocks();
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(" \n\t "));
-    const empty = await getGuildMember("token", "guild");
-    expect(empty.isErr()).toBe(true);
-    if (empty.isOk()) throw new Error("Expected a JSON error");
-    expect(empty.error).toMatchObject({
+    const empty = await catchDiscordError(getGuildMember("token", "guild"));
+    expect(empty).toMatchObject({
       kind: "non_json_response",
       responseBodyText: undefined,
     });
@@ -354,10 +351,8 @@ describe("worker discord helpers", () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(
       new TypeError("network down"),
     );
-    const failed = await getGuildMember("token", "guild");
-    expect(failed.isErr()).toBe(true);
-    if (failed.isOk()) throw new Error("Expected a request error");
-    expect(failed.error).toMatchObject({
+    const failed = await catchDiscordError(getGuildMember("token", "guild"));
+    expect(failed).toMatchObject({
       kind: "request_failed",
       message: "network down",
     });
@@ -373,12 +368,10 @@ describe("worker discord helpers", () => {
           });
         }),
     );
-    const pending = getGuildMember("token", "guild");
+    const pending = catchDiscordError(getGuildMember("token", "guild"));
     await vi.advanceTimersByTimeAsync(10_000);
-    const result = await pending;
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) throw new Error("Expected timeout");
-    expect(result.error.kind).toBe("request_timeout");
+    const error = await pending;
+    expect(error.kind).toBe("request_timeout");
     vi.useRealTimers();
   });
 

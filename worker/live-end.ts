@@ -1,6 +1,9 @@
 import { endLive } from "./database";
 import { createErrorLogFields, logInfo, logWarn } from "./logger";
-import { deleteLiveStartedNotification } from "./notifications";
+import {
+  deleteLiveStartedNotification,
+  DiscordWebhookError,
+} from "./notifications";
 import type { Bindings } from "./types";
 
 // OBS sends DELETE before every reconnect, so a broadcast outlives each ingest
@@ -78,26 +81,23 @@ export async function runLiveEnd(
 
   try {
     await step.do("delete the start notification", async () => {
-      const deleteResult = await deleteLiveStartedNotification(
-        env,
-        BigInt(messageId),
-      );
-      if (deleteResult.isOk()) {
+      try {
+        await deleteLiveStartedNotification(env, BigInt(messageId));
         return "deleted";
+      } catch (error: unknown) {
+        // Throwing lets Workflows retry the step with backoff; failures that a
+        // retry cannot fix, such as an already deleted message, end here.
+        if (!(error instanceof DiscordWebhookError) || error.isRetryable()) {
+          throw error;
+        }
+        logWarn(env, "live_notification.delete_failed", {
+          ...createErrorLogFields(error),
+          messageId,
+          sessionId,
+          userId,
+        });
+        return "failed";
       }
-
-      // Throwing lets Workflows retry the step with backoff; failures that a
-      // retry cannot fix, such as an already deleted message, end here.
-      if (deleteResult.error.isRetryable()) {
-        throw deleteResult.error;
-      }
-      logWarn(env, "live_notification.delete_failed", {
-        ...createErrorLogFields(deleteResult.error),
-        messageId,
-        sessionId,
-        userId,
-      });
-      return "failed";
     });
   } catch (error: unknown) {
     // Retries are exhausted. The row is already gone, so only log it.

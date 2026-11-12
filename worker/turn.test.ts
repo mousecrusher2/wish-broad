@@ -1,6 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TurnApiError, generateTurnIceServers } from "./turn";
 
+async function catchTurnError(
+  promise: Promise<unknown>,
+): Promise<TurnApiError> {
+  try {
+    await promise;
+  } catch (error: unknown) {
+    if (error instanceof TurnApiError) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("Expected a TurnApiError");
+}
+
 async function expectNoUsableIceServers(
   payload: unknown,
 ): Promise<TurnApiError> {
@@ -8,13 +22,12 @@ async function expectNoUsableIceServers(
   vi.spyOn(globalThis, "fetch").mockResolvedValue(
     new Response(JSON.stringify(payload)),
   );
-  const result = await generateTurnIceServers(
-    { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
-    "viewer",
+  return catchTurnError(
+    generateTurnIceServers(
+      { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
+      "viewer",
+    ),
   );
-  expect(result.isErr()).toBe(true);
-  if (result.isOk()) throw new Error("Expected no usable ICE server");
-  return result.error;
 }
 
 describe("worker turn credentials", () => {
@@ -51,7 +64,7 @@ describe("worker turn credentials", () => {
       ),
     );
 
-    const result = await generateTurnIceServers(
+    const iceServers = await generateTurnIceServers(
       {
         TURN_KEY_API_TOKEN: "turn-key-api-token",
         TURN_KEY_ID: "turn-key-id",
@@ -59,8 +72,7 @@ describe("worker turn credentials", () => {
       "viewer-1",
     );
 
-    expect(result.isOk()).toBe(true);
-    expect(result._unsafeUnwrap()).toEqual([
+    expect(iceServers).toEqual([
       {
         urls: ["stun:stun.cloudflare.com:3478"],
       },
@@ -94,7 +106,7 @@ describe("worker turn credentials", () => {
     });
   });
 
-  it("returns an empty_ice_servers error when only port 53 URLs remain", async () => {
+  it("throws an empty_ice_servers error when only port 53 URLs remain", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -110,44 +122,36 @@ describe("worker turn credentials", () => {
       ),
     );
 
-    const result = await generateTurnIceServers(
-      {
-        TURN_KEY_API_TOKEN: "turn-key-api-token",
-        TURN_KEY_ID: "turn-key-id",
-      },
-      "viewer-1",
+    const error = await catchTurnError(
+      generateTurnIceServers(
+        {
+          TURN_KEY_API_TOKEN: "turn-key-api-token",
+          TURN_KEY_ID: "turn-key-id",
+        },
+        "viewer-1",
+      ),
     );
 
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) {
-      throw new Error("Expected TURN credential generation to fail");
-    }
-
-    expect(result.error).toBeInstanceOf(TurnApiError);
-    expect(result.error.kind).toBe("empty_ice_servers");
+    expect(error.kind).toBe("empty_ice_servers");
   });
 
-  it("returns a timeout result when the TURN request is aborted", async () => {
+  it("throws a timeout error when the TURN request is aborted", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(
       new DOMException("The operation was aborted", "AbortError"),
     );
 
-    const result = await generateTurnIceServers(
-      {
-        TURN_KEY_API_TOKEN: "turn-key-api-token",
-        TURN_KEY_ID: "turn-key-id",
-      },
-      "viewer-1",
+    const error = await catchTurnError(
+      generateTurnIceServers(
+        {
+          TURN_KEY_API_TOKEN: "turn-key-api-token",
+          TURN_KEY_ID: "turn-key-id",
+        },
+        "viewer-1",
+      ),
     );
 
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) {
-      throw new Error("Expected TURN credential generation to fail");
-    }
-
-    expect(result.error).toBeInstanceOf(TurnApiError);
-    expect(result.error.kind).toBe("request_timeout");
-    expect(result.error.endpoint).toBe(
+    expect(error.kind).toBe("request_timeout");
+    expect(error.endpoint).toBe(
       "https://rtc.live.cloudflare.com/v1/turn/keys/turn-key-id/credentials/generate-ice-servers",
     );
   });
@@ -162,14 +166,14 @@ describe("worker turn credentials", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response("not-json", { statusText: "OK" }),
     );
-    const invalidJson = await generateTurnIceServers(
-      { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
-      "viewer",
+    const invalidJson = await catchTurnError(
+      generateTurnIceServers(
+        { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
+        "viewer",
+      ),
     );
-    expect(invalidJson.isErr()).toBe(true);
-    if (invalidJson.isOk()) throw new Error("Expected invalid JSON error");
-    expect(invalidJson.error.kind).toBe("invalid_response_json");
-    expect(invalidJson.error.statusText).toBe("OK");
+    expect(invalidJson.kind).toBe("invalid_response_json");
+    expect(invalidJson.statusText).toBe("OK");
 
     vi.restoreAllMocks();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -177,16 +181,15 @@ describe("worker turn credentials", () => {
         statusText: "OK",
       }),
     );
-    const invalidSchema = await generateTurnIceServers(
-      { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
-      "viewer",
+    const invalidSchema = await catchTurnError(
+      generateTurnIceServers(
+        { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
+        "viewer",
+      ),
     );
-    expect(invalidSchema.isErr()).toBe(true);
-    if (invalidSchema.isOk())
-      throw new Error("Expected schema validation error");
-    expect(invalidSchema.error.kind).toBe("invalid_response_schema");
-    expect(invalidSchema.error.statusText).toBe("OK");
-    expect(invalidSchema.error.responseBody).toMatchObject({
+    expect(invalidSchema.kind).toBe("invalid_response_schema");
+    expect(invalidSchema.statusText).toBe("OK");
+    expect(invalidSchema.responseBody).toMatchObject({
       responseBody: { iceServers: [{ urls: [1, 2] }] },
     });
   });
@@ -198,13 +201,13 @@ describe("worker turn credentials", () => {
         statusText: "Forbidden",
       }),
     );
-    const httpError = await generateTurnIceServers(
-      { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
-      "viewer",
+    const httpError = await catchTurnError(
+      generateTurnIceServers(
+        { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
+        "viewer",
+      ),
     );
-    expect(httpError.isErr()).toBe(true);
-    if (httpError.isOk()) throw new Error("Expected HTTP error");
-    expect(httpError.error).toMatchObject({
+    expect(httpError).toMatchObject({
       kind: "http_error",
       responseBody: { message: "denied" },
       statusText: "Forbidden",
@@ -217,23 +220,23 @@ describe("worker turn credentials", () => {
         statusText: "Server Error",
       }),
     );
-    const nonJsonHttpError = await generateTurnIceServers(
-      { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
-      "viewer",
+    const nonJsonHttpError = await catchTurnError(
+      generateTurnIceServers(
+        { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
+        "viewer",
+      ),
     );
-    expect(nonJsonHttpError.isErr()).toBe(true);
-    if (nonJsonHttpError.isOk()) throw new Error("Expected HTTP failure");
-    expect(nonJsonHttpError.error.responseBody).toBeNull();
+    expect(nonJsonHttpError.responseBody).toBeNull();
 
     vi.restoreAllMocks();
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"));
-    const requestError = await generateTurnIceServers(
-      { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
-      "viewer",
+    const requestError = await catchTurnError(
+      generateTurnIceServers(
+        { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
+        "viewer",
+      ),
     );
-    expect(requestError.isErr()).toBe(true);
-    if (requestError.isOk()) throw new Error("Expected request failure");
-    expect(requestError.error).toMatchObject({
+    expect(requestError).toMatchObject({
       kind: "request_failed",
       responseBody: "offline",
     });
@@ -249,17 +252,17 @@ describe("worker turn credentials", () => {
           });
         }),
     );
-    const pending = generateTurnIceServers(
-      { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
-      "viewer",
+    const pending = catchTurnError(
+      generateTurnIceServers(
+        { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
+        "viewer",
+      ),
     );
     await vi.advanceTimersByTimeAsync(5_000);
-    const result = await pending;
+    const error = await pending;
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) throw new Error("Expected timeout error");
-    expect(result.error.kind).toBe("request_timeout");
+    expect(error.kind).toBe("request_timeout");
     vi.useRealTimers();
   });
 
@@ -271,12 +274,10 @@ describe("worker turn credentials", () => {
         }),
       ),
     );
-    const result = await generateTurnIceServers(
+    const iceServers = await generateTurnIceServers(
       { TURN_KEY_API_TOKEN: "token", TURN_KEY_ID: "key" },
       "viewer",
     );
-    expect(result._unsafeUnwrap()).toEqual([
-      { urls: ["turn:relay.example.com:3478"] },
-    ]);
+    expect(iceServers).toEqual([{ urls: ["turn:relay.example.com:3478"] }]);
   });
 });

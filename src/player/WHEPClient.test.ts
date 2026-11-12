@@ -288,9 +288,9 @@ describe("WHEPSession", () => {
       resourceUserId: "alice/id",
     });
 
-    const result = await session.start(new AbortController().signal);
-
-    expect(result.isOk()).toBe(true);
+    await expect(
+      session.start(new AbortController().signal),
+    ).resolves.toBeUndefined();
     expect(statuses).toEqual(["connecting"]);
     expect(pc.getConfiguration().iceServers).toEqual([
       { urls: ["turn:turn.example.com:3478"] },
@@ -338,7 +338,7 @@ describe("WHEPSession", () => {
       "icegatheringstatechange",
     );
 
-    expect((await pending).isOk()).toBe(true);
+    await expect(pending).resolves.toBeUndefined();
     expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
@@ -348,9 +348,9 @@ describe("WHEPSession", () => {
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     const { pc, session } = createSession();
 
-    const result = await session.start(new AbortController().signal);
-
-    expect(result.isOk()).toBe(true);
+    await expect(
+      session.start(new AbortController().signal),
+    ).resolves.toBeUndefined();
     expect(pc.setLocalDescription.mock.calls.map(([d]) => d.type)).toEqual([
       "offer",
       "rollback",
@@ -380,9 +380,9 @@ describe("WHEPSession", () => {
       );
       const { pc, session, statuses } = createSession();
 
-      const error = (
-        await session.start(new AbortController().signal)
-      )._unsafeUnwrapErr();
+      const error: unknown = await session
+        .start(new AbortController().signal)
+        .catch((startError: unknown) => startError);
 
       expect(error).toBeInstanceOf(WHEPSessionError);
       expect(error).toMatchObject({
@@ -424,11 +424,9 @@ describe("WHEPSession", () => {
       mockFetch().mockResolvedValue(response);
       const { session } = createSession();
 
-      const error = (
-        await session.start(new AbortController().signal)
-      )._unsafeUnwrapErr();
-
-      expect(error).toMatchObject({ kind, retryable: false });
+      await expect(
+        session.start(new AbortController().signal),
+      ).rejects.toMatchObject({ kind, retryable: false });
       expect(session.getSnapshot().status).toBe("failed");
     },
   );
@@ -440,9 +438,9 @@ describe("WHEPSession", () => {
     const { pc, session } = createSession();
     pc.setRemoteDescription.mockRejectedValue(new Error("bad answer"));
 
-    const result = await session.start(new AbortController().signal);
-
-    expect(result._unsafeUnwrapErr()).toMatchObject({ message: "bad answer" });
+    await expect(
+      session.start(new AbortController().signal),
+    ).rejects.toMatchObject({ message: "bad answer" });
     expect(session.getSnapshot().status).toBe("failed");
     expect(fetchCalls(fetchSpy)).toEqual([
       { method: "POST", url: `${ORIGIN}/play/alice` },
@@ -457,9 +455,9 @@ describe("WHEPSession", () => {
       .mockResolvedValueOnce(new Response(null, { status: 200 }));
     const { session } = createSession();
 
-    const result = await session.start(new AbortController().signal);
-
-    expect(result._unsafeUnwrapErr()).toMatchObject({
+    await expect(
+      session.start(new AbortController().signal),
+    ).rejects.toMatchObject({
       kind: "client_request_error",
       stage: "patch",
     });
@@ -482,7 +480,7 @@ describe("WHEPSession", () => {
     });
     attempt.abort();
 
-    expect((await pending).isOk()).toBe(true);
+    await expect(pending).resolves.toBeUndefined();
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(statuses).toEqual(["connecting"]);
   });
@@ -623,7 +621,7 @@ describe("WHEPSession", () => {
 
     await session.dispose();
 
-    expect((await pending).isOk()).toBe(true);
+    await expect(pending).resolves.toBeUndefined();
     expect(fetchCalls(fetchSpy)).toEqual([
       { method: "POST", url: `${ORIGIN}/play/alice` },
       { method: "DELETE", url: SESSION_URL },
@@ -650,10 +648,11 @@ describe("WHEPSession", () => {
     const { pc, session, statuses } = createSession();
     await session.dispose({ notifyServer: false });
 
-    const result = await session.start(new AbortController().signal);
+    await expect(
+      session.start(new AbortController().signal),
+    ).resolves.toBeUndefined();
     pc.connect();
 
-    expect(result.isOk()).toBe(true);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(statuses).toEqual([]);
   });

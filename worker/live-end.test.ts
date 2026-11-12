@@ -1,4 +1,3 @@
-import { err, ok } from "neverthrow";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordWebhookError } from "./notifications";
 
@@ -88,7 +87,7 @@ describe("live end workflow", () => {
   beforeEach(() => {
     mocks.endLive.mockReset();
     mocks.deleteLiveStartedNotification.mockReset();
-    mocks.deleteLiveStartedNotification.mockResolvedValue(ok(undefined));
+    mocks.deleteLiveStartedNotification.mockResolvedValue(undefined);
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
@@ -183,8 +182,8 @@ describe("live end workflow", () => {
       const { step } = createStep();
       const doSpy = vi.spyOn(step, "do");
       mocks.endLive.mockResolvedValue({ notificationMessageId: 9n });
-      mocks.deleteLiveStartedNotification.mockResolvedValue(
-        err(discordError(status)),
+      mocks.deleteLiveStartedNotification.mockRejectedValue(
+        discordError(status),
       );
 
       await runLiveEnd(createEnv(), params, step);
@@ -207,9 +206,7 @@ describe("live end workflow", () => {
     const { step } = createStep();
     const doSpy = vi.spyOn(step, "do");
     mocks.endLive.mockResolvedValue({ notificationMessageId: 9n });
-    mocks.deleteLiveStartedNotification.mockResolvedValue(
-      err(discordError(404)),
-    );
+    mocks.deleteLiveStartedNotification.mockRejectedValue(discordError(404));
 
     await runLiveEnd(createEnv(), params, step);
 

@@ -358,8 +358,7 @@ export function OBSStreamingInfo({
   };
 
   const handleCreateToken = async () => {
-    const createResult = await createToken();
-    if (createResult.isOk()) {
+    if (await createToken()) {
       setShowToken(true);
     }
   };

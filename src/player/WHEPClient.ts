@@ -1,4 +1,3 @@
-import { err, ok, type Result } from "neverthrow";
 import { fetchTurnIceServers } from "./turn-credentials";
 
 export type WHEPConnectionStatus =
@@ -178,6 +177,9 @@ async function createResponseError(
   });
 }
 
+/**
+ * @throws {WHEPSessionError} When the response is not a non-empty SDP body.
+ */
 async function readSdpResponse(response: Response): Promise<string> {
   const contentType = response.headers.get("content-type");
   if (!contentType?.toLowerCase().startsWith("application/sdp")) {
@@ -202,6 +204,10 @@ async function readSdpResponse(response: Response): Promise<string> {
   return sdp;
 }
 
+/**
+ * @throws {WHEPSessionError} When the response is not a 201 or 406 session
+ * with a location header, a valid track count header, and an SDP body.
+ */
 async function parseWhepSessionResponse(
   response: Response,
   resourceUrl: URL,
@@ -713,18 +719,18 @@ export class WHEPSession {
       this.serverSession.location,
       window.location.origin,
     );
-    const responseResult = await fetch(sessionUrl, { method: "DELETE" })
-      .then((response) => ok(response))
-      .catch((error: Error) => err(error));
-    if (responseResult.isErr()) {
-      console.warn("Failed to close WHEP session:", responseResult.error);
+    let response: Response;
+    try {
+      response = await fetch(sessionUrl, { method: "DELETE" });
+    } catch (error: unknown) {
+      console.warn("Failed to close WHEP session:", error);
       return;
     }
 
-    if (!responseResult.value.ok) {
+    if (!response.ok) {
       const responseError = await createResponseError(
-        responseResult.value,
-        `Unexpected WHEP delete response: ${String(responseResult.value.status)}`,
+        response,
+        `Unexpected WHEP delete response: ${String(response.status)}`,
         "delete",
       );
       console.warn("Failed to close WHEP session:", responseError);
@@ -752,18 +758,30 @@ export class WHEPSession {
     await this.deleteRegisteredSession();
   }
 
-  async start(attemptSignal: AbortSignal): Promise<Result<void, Error>> {
+  /**
+   * Negotiate playback for this session.
+   *
+   * Resolves quietly when `attemptSignal` aborts or the session is disposed
+   * meanwhile. On any other failure the session disposes itself and reports
+   * `failed` before rethrowing.
+   *
+   * @throws {WHEPSessionError} When the WHEP resource rejects the session or
+   * answers unexpectedly; its `kind` tells whether the live ended or is
+   * waiting for the publisher.
+   * @throws {Error} When the local SDP negotiation or a request fails.
+   */
+  async start(attemptSignal: AbortSignal): Promise<void> {
     const signal = AbortSignal.any([
       attemptSignal,
       this.abortController.signal,
     ]);
     if (!this.isActive() || signal.aborted) {
-      return ok(undefined);
+      return;
     }
 
     this.setStatus("connecting");
 
-    const runStart = async (): Promise<Result<void, Error>> => {
+    const runStart = async (): Promise<void> => {
       const resourceUrl = new URL(
         `/play/${encodeURIComponent(this.resourceUserId)}`,
         window.location.origin,
@@ -796,19 +814,9 @@ export class WHEPSession {
         },
         body: localOfferSdp,
         signal,
-      })
-        .then((offerResponse) => ok(offerResponse))
-        .catch((error: Error) => err(error))
-        .then((offerResponseResult) => {
-          if (offerResponseResult.isErr()) {
-            throw offerResponseResult.error;
-          }
-
-          return parseWhepSessionResponse(
-            offerResponseResult.value,
-            resourceUrl,
-          );
-        });
+      }).then((offerResponse) =>
+        parseWhepSessionResponse(offerResponse, resourceUrl),
+      );
       this.serverSession = {
         kind: "registering",
         promise: registrationPromise,
@@ -824,7 +832,7 @@ export class WHEPSession {
       };
 
       if (!this.isActive()) {
-        return ok(undefined);
+        return;
       }
 
       switch (sessionResponse.kind) {
@@ -848,7 +856,7 @@ export class WHEPSession {
             throw new Error("Failed to create local SDP answer");
           }
 
-          const patchResponseResult = await fetch(sessionResponse.sessionUrl, {
+          const patchResponse = await fetch(sessionResponse.sessionUrl, {
             method: "PATCH",
             headers: {
               Accept: "application/sdp",
@@ -856,14 +864,7 @@ export class WHEPSession {
             },
             body: localAnswerSdp,
             signal,
-          })
-            .then((response) => ok(response))
-            .catch((error: Error) => err(error));
-          if (patchResponseResult.isErr()) {
-            throw patchResponseResult.error;
-          }
-
-          const patchResponse = patchResponseResult.value;
+          });
           if (patchResponse.status !== 204) {
             throw await createResponseError(
               patchResponse,
@@ -882,17 +883,16 @@ export class WHEPSession {
           );
           break;
       }
-      return ok(undefined);
     };
 
-    return runStart().catch(async (error: Error) => {
+    await runStart().catch(async (error: unknown) => {
       if (signal.aborted || !this.isActive()) {
-        return ok(undefined);
+        return;
       }
 
       await this.dispose({ notifyServer: true });
       this.setStatus("failed");
-      return err(error);
+      throw error;
     });
   }
 

@@ -1,4 +1,4 @@
-import { Suspense, useState } from "react";
+import { useState } from "react";
 import { OBSStreamingInfo } from "./OBSStreamingInfo";
 import { StreamSelection } from "./components/StreamSelection";
 import { WHEPPlayer } from "./WHEPPlayer";
@@ -6,11 +6,7 @@ import {
   createDefaultSnapshot,
   type WHEPPlaybackControllerSnapshot,
 } from "./player/WHEPPlaybackController";
-import {
-  revalidateLiveStreams,
-  useLiveStreams,
-  useSuspenseCurrentUser,
-} from "./api";
+import { revalidateLiveStreams, useCurrentUser, useLiveStreams } from "./api";
 import { buttonClasses, surfaceClasses } from "./components/styles";
 
 type PlayerSelection = {
@@ -19,9 +15,17 @@ type PlayerSelection = {
 } | null;
 
 function CurrentUserGreeting() {
-  const currentUserResult = useSuspenseCurrentUser();
+  const currentUserState = useCurrentUser();
 
-  if (currentUserResult.isErr()) {
+  if (currentUserState.status === "loading") {
+    return (
+      <p className="truncate text-sm text-cyan-50/80">
+        ユーザー情報を確認中...
+      </p>
+    );
+  }
+
+  if (currentUserState.status === "error") {
     return (
       <p className="text-sm text-amber-200">ユーザー情報を取得できません</p>
     );
@@ -31,16 +35,10 @@ function CurrentUserGreeting() {
     <p className="truncate text-sm text-cyan-50/90">
       ようこそ、
       <span className="font-semibold text-white">
-        {currentUserResult.value.displayName}
+        {currentUserState.user.displayName}
       </span>{" "}
       さん
     </p>
-  );
-}
-
-function CurrentUserGreetingFallback() {
-  return (
-    <p className="truncate text-sm text-cyan-50/80">ユーザー情報を確認中...</p>
   );
 }
 
@@ -133,9 +131,7 @@ function WHEPPlayerPageContent() {
           </h1>
           <nav className="flex flex-wrap items-center gap-3">
             <div className="min-h-5 w-full min-w-0 md:w-auto md:max-w-64">
-              <Suspense fallback={<CurrentUserGreetingFallback />}>
-                <CurrentUserGreeting />
-              </Suspense>
+              <CurrentUserGreeting />
             </div>
             <button
               type="button"

@@ -146,67 +146,64 @@ export async function completeDiscordLogin<E extends ContextWithBindings>(
     return c.text("Authorization code is required", 400);
   }
 
-  // Discord OAuth is used only to prove membership in the authorized guild.
-  // The app session is our own JWT cookie, so revoke the Discord access token
-  // after the membership check regardless of login success.
-  let accessToken: string | null = null;
-  const revokeAccessTokenIfNeeded = async () => {
-    if (accessToken) {
-      const revokeResult = await revokeAccessToken(c.env, accessToken);
-      if (revokeResult.isErr()) {
-        logWarn(c.env, "discord.oauth_revoke_failed", {
-          ...createErrorLogFields(revokeResult.error),
-        });
-      }
+  let accessToken: string;
+  try {
+    ({ accessToken } = await exchangeCodeForToken(
+      c.env,
+      authorizationCode,
+      getDiscordRedirectUri(c),
+    ));
+  } catch (error: unknown) {
+    if (!(error instanceof DiscordApiError)) {
+      throw error;
     }
-  };
-
-  const oauthTokenResult = await exchangeCodeForToken(
-    c.env,
-    authorizationCode,
-    getDiscordRedirectUri(c),
-  );
-  if (oauthTokenResult.isErr()) {
     logError(c.env, "discord.login_token_exchange_failed", {
-      ...createErrorLogFields(oauthTokenResult.error),
+      ...createErrorLogFields(error),
     });
     return c.text(
-      `Discord login failed: ${getDiscordErrorMessage(oauthTokenResult.error)}`,
+      `Discord login failed: ${getDiscordErrorMessage(error)}`,
       502,
     );
   }
 
-  accessToken = oauthTokenResult.value.accessToken;
-
-  const memberResult = await getGuildMember(
-    accessToken,
-    c.env.AUTHORIZED_GUILD_ID,
-  );
-  if (memberResult.isErr()) {
-    logError(c.env, "discord.login_member_check_failed", {
-      ...createErrorLogFields(memberResult.error),
-      guildId: c.env.AUTHORIZED_GUILD_ID,
-    });
-    const response = isGuildMembershipLookupFailure(
-      memberResult.error,
-      c.env.AUTHORIZED_GUILD_ID,
-    )
-      ? c.text(
-          "Unauthorized: You are not a member of the authorized Discord server",
-          401,
-        )
-      : c.text(
-          `Discord login failed: ${getDiscordErrorMessage(memberResult.error)}`,
-          502,
-        );
-
-    await revokeAccessTokenIfNeeded();
-    return response;
-  }
-
+  // Discord OAuth is used only to prove membership in the authorized guild.
+  // The app session is our own JWT cookie, so revoke the Discord access token
+  // after the membership check regardless of login success.
   try {
-    return await issueDiscordLoginJwt(c, memberResult.value);
+    let member: DiscordGuildMember;
+    try {
+      member = await getGuildMember(accessToken, c.env.AUTHORIZED_GUILD_ID);
+    } catch (error: unknown) {
+      if (!(error instanceof DiscordApiError)) {
+        throw error;
+      }
+      logError(c.env, "discord.login_member_check_failed", {
+        ...createErrorLogFields(error),
+        guildId: c.env.AUTHORIZED_GUILD_ID,
+      });
+      return isGuildMembershipLookupFailure(error, c.env.AUTHORIZED_GUILD_ID)
+        ? c.text(
+            "Unauthorized: You are not a member of the authorized Discord server",
+            401,
+          )
+        : c.text(`Discord login failed: ${getDiscordErrorMessage(error)}`, 502);
+    }
+
+    return await issueDiscordLoginJwt(c, member);
   } finally {
-    await revokeAccessTokenIfNeeded();
+    await revokeAccessTokenQuietly(c.env, accessToken);
+  }
+}
+
+// Revocation runs in a `finally`, so it must not throw: an error there would
+// replace the login response. A failed revocation is only logged.
+async function revokeAccessTokenQuietly(
+  env: Bindings,
+  accessToken: string,
+): Promise<void> {
+  try {
+    await revokeAccessToken(env, accessToken);
+  } catch (error: unknown) {
+    logWarn(env, "discord.oauth_revoke_failed", createErrorLogFields(error));
   }
 }

@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import useSWR, { mutate as mutateGlobal, preload } from "swr";
-import { err, ok, type Result } from "neverthrow";
 import * as v from "valibot";
 import type { Live, User } from "./types";
 
@@ -30,10 +29,6 @@ const swrOptions = {
   revalidateOnReconnect: false,
   shouldRetryOnError: false,
 };
-const swrSuspenseOptions = {
-  ...swrOptions,
-  suspense: true,
-};
 
 type StableLiveTokenState =
   { status: "none" } | { status: "available"; token: string | null };
@@ -45,10 +40,16 @@ type CurrentUserState =
   | { status: "ready"; user: User }
   | { status: "error"; error: string };
 
-type DataState<T> =
-  | { status: "loading" }
-  | { status: "ready"; data: T }
-  | { status: "error"; error: Error };
+/**
+ * What SWR caches for a key. The cached fetchers resolve failures too: SWR
+ * discards a resolved request that a newer request or a local `mutate` has
+ * replaced, but it applies a rejected one regardless, which would let a stale
+ * failure hide fresh data.
+ */
+type Settled<T> =
+  { status: "ready"; data: T } | { status: "error"; error: Error };
+
+type DataState<T> = { status: "loading" } | Settled<T>;
 
 type BootstrapAuthState =
   | { status: "loading" }
@@ -70,147 +71,140 @@ export class UnauthorizedError extends Error {
   }
 }
 
-async function apiFetch(
-  input: string,
-  init?: RequestInit,
-): Promise<Result<Response, Error>> {
-  const responseResult = await fetch(input, {
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+/**
+ * Fetch a same-origin API with the app cookie.
+ *
+ * @throws {UnauthorizedError} When the API answers 401.
+ * @throws {TypeError} When the request fails before a response arrives.
+ */
+async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const response = await fetch(input, {
     ...init,
     credentials: "include",
-  })
-    .then((response) => ok(response))
-    .catch((error: Error) => err(error));
-  if (responseResult.isErr()) {
-    return err(responseResult.error);
-  }
-
-  const response = responseResult.value;
+  });
   if (response.status === 401) {
-    return err(new UnauthorizedError());
+    throw new UnauthorizedError();
   }
 
-  return ok(response);
+  return response;
 }
 
-async function readJsonResponse(
+/**
+ * Read a JSON response body and validate it against `schema`.
+ *
+ * @throws {SyntaxError} When the body is not JSON.
+ * @throws {Error} With `invalidMessage` when the body does not match `schema`.
+ */
+async function readJson<TOutput>(
   response: Response,
-  errorLabel: string,
-): Promise<Result<unknown, Error>> {
-  return response
-    .json()
-    .then((data: unknown) => ok(data))
-    .catch((error: Error) => {
-      console.error(errorLabel, error);
-      return err(error);
-    });
-}
-
-export async function fetchCurrentUser(): Promise<Result<User, Error>> {
-  const responseResult = await apiFetch("/api/me");
-  if (responseResult.isErr()) {
-    console.error("Failed to fetch current user:", responseResult.error);
-    return err(responseResult.error);
+  schema: v.GenericSchema<unknown, TOutput>,
+  invalidMessage: string,
+): Promise<TOutput> {
+  const parsed = v.safeParse(schema, await response.json());
+  if (!parsed.success) {
+    throw new Error(invalidMessage);
   }
 
-  const response = responseResult.value;
+  return parsed.output;
+}
+
+/**
+ * @throws {UnauthorizedError} When the session cookie is missing or expired.
+ * @throws {Error} When the request fails or the response is not a user.
+ */
+export async function fetchCurrentUser(): Promise<User> {
+  const response = await apiFetch("/api/me");
   if (!response.ok) {
-    return err(new Error(`Unexpected status code: ${String(response.status)}`));
+    throw new Error(`Unexpected status code: ${String(response.status)}`);
   }
 
-  const payloadResult = await readJsonResponse(
-    response,
-    "Failed to fetch current user:",
-  );
-  if (payloadResult.isErr()) {
-    return err(payloadResult.error);
-  }
-
-  const parsedUser = v.safeParse(userSchema, payloadResult.value);
-  if (!parsedUser.success) {
-    return err(new Error("Unexpected /api/me response"));
-  }
-
-  return ok(parsedUser.output);
+  return readJson(response, userSchema, "Unexpected /api/me response");
 }
 
-export async function fetchLiveStreams(): Promise<Result<Live[], Error>> {
-  const responseResult = await apiFetch("/api/lives");
-  if (responseResult.isErr()) {
-    console.error("Failed to fetch live streams:", responseResult.error);
-    return err(responseResult.error);
-  }
-
-  const response = responseResult.value;
+/**
+ * @throws {UnauthorizedError} When the session cookie is missing or expired.
+ * @throws {Error} When the request fails or the response is not a live list.
+ */
+export async function fetchLiveStreams(): Promise<Live[]> {
+  const response = await apiFetch("/api/lives");
   if (!response.ok) {
-    return err(new Error("配信リストの取得に失敗しました"));
+    throw new Error("配信リストの取得に失敗しました");
   }
 
-  const payloadResult = await readJsonResponse(
-    response,
-    "Failed to fetch live streams:",
-  );
-  if (payloadResult.isErr()) {
-    return err(payloadResult.error);
-  }
-
-  const parsedLiveList = v.safeParse(liveListSchema, payloadResult.value);
-  if (!parsedLiveList.success) {
-    return err(new Error("Unexpected live streams response"));
-  }
-
-  return ok(parsedLiveList.output);
+  return readJson(response, liveListSchema, "Unexpected live streams response");
 }
 
-async function fetchLiveTokenState(): Promise<
-  Result<StableLiveTokenState, Error>
-> {
-  const responseResult = await apiFetch("/api/me/livetoken", {
+/**
+ * @throws {UnauthorizedError} When the session cookie is missing or expired.
+ * @throws {Error} When the request fails or the response is not a token status.
+ */
+async function fetchLiveTokenState(): Promise<StableLiveTokenState> {
+  const response = await apiFetch("/api/me/livetoken", {
     method: "GET",
   });
-  if (responseResult.isErr()) {
-    console.error("Failed to fetch token status:", responseResult.error);
-    return err(responseResult.error);
-  }
-
-  const response = responseResult.value;
   if (!response.ok) {
-    return err(new Error(`HTTP error! status: ${String(response.status)}`));
+    throw new Error(`HTTP error! status: ${String(response.status)}`);
   }
 
-  const payloadResult = await readJsonResponse(
+  const { hasToken } = await readJson(
     response,
-    "Failed to fetch token status:",
+    liveTokenResponseSchema,
+    "Unexpected live token response",
   );
-  if (payloadResult.isErr()) {
-    return err(payloadResult.error);
-  }
-
-  const parsedData = v.safeParse(liveTokenResponseSchema, payloadResult.value);
-  if (!parsedData.success) {
-    return err(new Error("Unexpected live token response"));
-  }
-
-  if (parsedData.output.hasToken) {
-    return ok({ status: "available", token: null });
-  }
-
-  return ok({ status: "none" });
+  return hasToken ? { status: "available", token: null } : { status: "none" };
 }
 
-void preload(currentUserKey, fetchCurrentUser);
-void preload(liveStreamsKey, fetchLiveStreams);
-void preload(liveTokenStateKey, fetchLiveTokenState);
-
-function toDataState<T>(result: Result<T, Error> | undefined): DataState<T> {
-  if (!result) {
-    return { status: "loading" };
+/**
+ * Issue a new live token and return it.
+ *
+ * @throws {UnauthorizedError} When the session cookie is missing or expired.
+ * @throws {Error} When the request fails or the response is not a new token.
+ */
+async function createLiveToken(): Promise<string> {
+  const response = await apiFetch("/api/me/livetoken", {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${String(response.status)}`);
   }
 
-  if (result.isOk()) {
-    return { status: "ready", data: result.value };
-  }
+  const { token } = await readJson(
+    response,
+    createTokenResponseSchema,
+    "Unexpected token creation response",
+  );
+  return token;
+}
 
-  return { status: "error", error: result.error };
+/** Wrap a fetcher for SWR so that its failure is logged and cached. */
+function settle<T>(
+  key: string,
+  fetcher: () => Promise<T>,
+): () => Promise<Settled<T>> {
+  return async () => {
+    try {
+      return { status: "ready", data: await fetcher() };
+    } catch (error: unknown) {
+      console.error(`Failed to fetch ${key}:`, error);
+      return { status: "error", error: toError(error) };
+    }
+  };
+}
+
+const loadCurrentUser = settle(currentUserKey, fetchCurrentUser);
+const loadLiveStreams = settle(liveStreamsKey, fetchLiveStreams);
+const loadLiveTokenState = settle(liveTokenStateKey, fetchLiveTokenState);
+
+void preload(currentUserKey, loadCurrentUser);
+void preload(liveStreamsKey, loadLiveStreams);
+void preload(liveTokenStateKey, loadLiveTokenState);
+
+function toDataState<T>(settled: Settled<T> | undefined): DataState<T> {
+  return settled ?? { status: "loading" };
 }
 
 function hasUnauthorizedError(states: DataState<unknown>[]): boolean {
@@ -246,19 +240,19 @@ function resolveBootstrapAuthState(
 }
 
 export function useBootstrapAuthState(): BootstrapAuthState {
-  const { data: currentUser } = useSWR<Result<User, Error>>(
+  const { data: currentUser } = useSWR<Settled<User>>(
     currentUserKey,
-    fetchCurrentUser,
+    loadCurrentUser,
     swrOptions,
   );
-  const { data: liveStreams } = useSWR<Result<Live[], Error>>(
+  const { data: liveStreams } = useSWR<Settled<Live[]>>(
     liveStreamsKey,
-    fetchLiveStreams,
+    loadLiveStreams,
     swrOptions,
   );
-  const { data: liveTokenState } = useSWR<Result<StableLiveTokenState, Error>>(
+  const { data: liveTokenState } = useSWR<Settled<StableLiveTokenState>>(
     liveTokenStateKey,
-    fetchLiveTokenState,
+    loadLiveTokenState,
     swrOptions,
   );
 
@@ -270,37 +264,27 @@ export function useBootstrapAuthState(): BootstrapAuthState {
 }
 
 export function useCurrentUser(): CurrentUserState {
-  const { data } = useSWR<Result<User, Error>>(
+  const { data } = useSWR<Settled<User>>(
     currentUserKey,
-    fetchCurrentUser,
+    loadCurrentUser,
     swrOptions,
   );
 
-  if (data?.isOk()) {
-    return { status: "ready", user: data.value };
+  if (data?.status === "ready") {
+    return { status: "ready", user: data.data };
   }
 
-  if (data?.isErr()) {
+  if (data?.status === "error") {
     return { status: "error", error: data.error.message };
   }
 
   return { status: "loading" };
 }
 
-export function useSuspenseCurrentUser(): Result<User, Error> {
-  const { data } = useSWR<Result<User, Error>>(
-    currentUserKey,
-    fetchCurrentUser,
-    swrSuspenseOptions,
-  );
-
-  return data ?? err(new Error("Current user is unavailable"));
-}
-
 export function useLiveStreams(): UseLiveStreamsState {
-  const { data, isValidating, mutate } = useSWR<Result<Live[], Error>>(
+  const { data, isValidating, mutate } = useSWR<Settled<Live[]>>(
     liveStreamsKey,
-    fetchLiveStreams,
+    loadLiveStreams,
     swrOptions,
   );
   const refreshInFlightRef = useRef(false);
@@ -316,15 +300,15 @@ export function useLiveStreams(): UseLiveStreamsState {
     });
   };
 
-  if (data?.isOk()) {
+  if (data?.status === "ready") {
     if (isValidating) {
-      return { status: "refreshing", refresh, streams: data.value };
+      return { status: "refreshing", refresh, streams: data.data };
     }
 
-    return { status: "ready", refresh, streams: data.value };
+    return { status: "ready", refresh, streams: data.data };
   }
 
-  if (data?.isErr()) {
+  if (data?.status === "error") {
     if (isValidating) {
       return { status: "retrying", error: data.error.message, refresh };
     }
@@ -343,101 +327,56 @@ export function useLiveToken() {
   const [overrideState, setOverrideState] = useState<LiveTokenState | null>(
     null,
   );
-  const [overrideError, setOverrideError] = useState<string | null>(null);
-  const { data, mutate } = useSWR<Result<StableLiveTokenState, Error>>(
+  const { data, mutate } = useSWR<Settled<StableLiveTokenState>>(
     liveTokenStateKey,
-    fetchLiveTokenState,
+    loadLiveTokenState,
     swrOptions,
   );
 
-  const state =
+  const state: LiveTokenState =
     overrideState ??
-    (data?.isOk() ? data.value : null) ??
-    ({ status: "loading" } satisfies LiveTokenState);
+    (data?.status === "ready" ? data.data : { status: "loading" });
   const error =
-    overrideError ??
-    (overrideState === null && data?.isErr() ? data.error.message : null);
+    overrideState === null && data?.status === "error"
+      ? data.error.message
+      : null;
 
-  const fetchTokenStatus = async (): Promise<Result<void, Error>> => {
+  /** Revalidate the token status. A failure is exposed through `error`. */
+  const fetchTokenStatus = async (): Promise<void> => {
     setOverrideState({ status: "loading" });
-    setOverrideError(null);
-
-    const nextState = await mutate();
-    setOverrideState(null);
-
-    if (!nextState) {
-      const unavailableError = new Error("Live token state is unavailable");
-      setOverrideError(unavailableError.message);
-      return err(unavailableError);
+    try {
+      await mutate();
+    } finally {
+      setOverrideState(null);
     }
-
-    if (nextState.isErr()) {
-      setOverrideError(nextState.error.message);
-      return err(nextState.error);
-    }
-
-    setOverrideError(null);
-    return ok(undefined);
   };
 
-  const createToken = async (): Promise<Result<void, Error>> => {
+  /**
+   * Issue a new live token. A failure is logged and exposed through `error`.
+   *
+   * @returns Whether a new token was issued.
+   */
+  const createToken = async (): Promise<boolean> => {
     setOverrideState({ status: "loading" });
-    setOverrideError(null);
-
-    const run = async (): Promise<Result<void, Error>> => {
-      const responseResult = await apiFetch("/api/me/livetoken", {
-        method: "POST",
-      });
-      if (responseResult.isErr()) {
-        console.error("Failed to create token:", responseResult.error);
-        await mutate(err(responseResult.error), { revalidate: false });
-        setOverrideError(responseResult.error.message);
-        return err(responseResult.error);
-      }
-
-      const response = responseResult.value;
-      if (!response.ok) {
-        const responseError = new Error(
-          `HTTP error! status: ${String(response.status)}`,
-        );
-        await mutate(err(responseError), { revalidate: false });
-        setOverrideError(responseError.message);
-        return err(responseError);
-      }
-
-      const payloadResult = await readJsonResponse(
-        response,
-        "Failed to create token:",
+    try {
+      const token = await createLiveToken();
+      await mutate(
+        { status: "ready", data: { status: "available", token } },
+        { revalidate: false },
       );
-      if (payloadResult.isErr()) {
-        await mutate(err(payloadResult.error), { revalidate: false });
-        setOverrideError(payloadResult.error.message);
-        return err(payloadResult.error);
-      }
-
-      const parsedToken = v.safeParse(
-        createTokenResponseSchema,
-        payloadResult.value,
+      return true;
+    } catch (createError: unknown) {
+      console.error("Failed to create token:", createError);
+      // Cache the failure like a fetch failure so that an expired session
+      // also reaches the auth bootstrap, which then shows the login prompt.
+      await mutate(
+        { status: "error", error: toError(createError) },
+        { revalidate: false },
       );
-      if (!parsedToken.success) {
-        const payloadError = new Error("Unexpected token creation response");
-        await mutate(err(payloadError), { revalidate: false });
-        setOverrideError(payloadError.message);
-        return err(payloadError);
-      }
-
-      const nextState: StableLiveTokenState = {
-        status: "available",
-        token: parsedToken.output.token,
-      };
-      await mutate(ok(nextState), { revalidate: false });
-      setOverrideError(null);
-      return ok(undefined);
-    };
-
-    return run().finally(() => {
+      return false;
+    } finally {
       setOverrideState(null);
-    });
+    }
   };
 
   return {

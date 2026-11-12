@@ -30,7 +30,6 @@ OBSはWHIPで配信し、認証済みユーザーはブラウザからアプリ�
 - Cloudflare Realtime SFU and TURN (formerly Calls)
 - SWR
 - Valibot
-- neverthrow
 - Vitest
 - oxlint, Knip, and Prettier
 

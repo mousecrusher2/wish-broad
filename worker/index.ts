@@ -9,6 +9,8 @@ import {
   startDiscordLogin,
 } from "./discord-login";
 import {
+  type IngestSession,
+  type PlaybackSession,
   SfuApiError,
   type StoredTrack,
   closeTracks,
@@ -28,7 +30,11 @@ import {
   sendLiveStartedNotification,
 } from "./notifications";
 import { hashTokenWithPepper } from "./token-hash";
-import { generateTurnIceServers } from "./turn";
+import {
+  generateTurnIceServers,
+  TurnApiError,
+  type TurnIceServer,
+} from "./turn";
 import { createErrorLogFields, logError, logInfo, logWarn } from "./logger";
 import { LIVE_RECONNECT_GRACE_MS, scheduleLiveEnd } from "./live-end";
 
@@ -98,35 +104,38 @@ function scheduleTrackClose(
   // Track close is cleanup only. D1 is already updated before this runs, so a
   // transient Calls failure should not keep invalid track locators visible.
   c.executionCtx.waitUntil(
-    closeTracks(c.env, sessionId, tracks).then((closeResult) => {
-      if (closeResult.isErr()) {
+    closeTracks(c.env, sessionId, tracks).then(
+      (response) => {
         if (
-          closeResult.error.kind !== "session_not_found" &&
-          closeResult.error.kind !== "session_gone"
+          response.errorCode ||
+          response.tracks?.some((track) => track.errorCode)
         ) {
-          logWarn(c.env, "track_close.failed", {
-            ...createErrorLogFields(closeResult.error),
-            message: failureLabel,
+          logWarn(c.env, "track_close.sfu_errors", {
+            message: errorLabel,
+            response,
             sessionId,
           });
         }
-        return;
-      }
-
-      if (
-        closeResult.value.errorCode ||
-        closeResult.value.tracks?.some((track) => track.errorCode)
-      ) {
-        logWarn(c.env, "track_close.sfu_errors", {
-          message: errorLabel,
-          response: closeResult.value,
+      },
+      (error: unknown) => {
+        if (
+          error instanceof SfuApiError &&
+          (error.kind === "session_not_found" || error.kind === "session_gone")
+        ) {
+          return;
+        }
+        logWarn(c.env, "track_close.failed", {
+          ...createErrorLogFields(error),
+          message: failureLabel,
           sessionId,
         });
-      }
-    }),
+      },
+    ),
   );
 }
 
+// Runs in waitUntil after the ingest response, so every failure is logged here
+// instead of being thrown.
 async function sendLiveStartNotification(
   c: Context<AppEnv>,
   userId: string,
@@ -134,49 +143,47 @@ async function sendLiveStartNotification(
   sessionId: string,
   siteUrl: string,
 ): Promise<void> {
-  const notificationResult = await sendLiveStartedNotification(
-    c.env,
-    userId,
-    siteUrl,
-  );
-  if (notificationResult.isErr()) {
+  let messageId: bigint;
+  try {
+    ({ messageId } = await sendLiveStartedNotification(c.env, userId, siteUrl));
+  } catch (error: unknown) {
     logWarn(c.env, "live_notification.send_failed", {
-      ...createErrorLogFields(notificationResult.error),
+      ...createErrorLogFields(error),
       sessionId,
       userId,
     });
     return;
   }
 
-  const { messageId } = notificationResult.value;
-
   // Notifications are tied to the broadcast, which survives OBS reconnects. If
   // it has already ended, delete the Discord message instead of leaving an
   // orphan.
-  type PersistNotificationResult =
-    { ok: true; saved: boolean } | { ok: false; error: Error };
-  const persistResult: PersistNotificationResult = await db
-    .setLiveNotificationMessageId(c.env.LIVE_DB, userId, broadcastId, messageId)
-    .then((saved): PersistNotificationResult => ({ ok: true, saved }))
-    .catch((error: Error): PersistNotificationResult => ({ ok: false, error }));
-
-  if (!persistResult.ok) {
+  let saved = false;
+  try {
+    saved = await db.setLiveNotificationMessageId(
+      c.env.LIVE_DB,
+      userId,
+      broadcastId,
+      messageId,
+    );
+  } catch (error: unknown) {
     logWarn(c.env, "live_notification.persist_failed", {
-      ...createErrorLogFields(persistResult.error),
+      ...createErrorLogFields(error),
       messageId: messageId.toString(),
       sessionId,
       userId,
     });
   }
 
-  if (persistResult.ok && persistResult.saved) {
+  if (saved) {
     return;
   }
 
-  const deleteResult = await deleteLiveStartedNotification(c.env, messageId);
-  if (deleteResult.isErr()) {
+  try {
+    await deleteLiveStartedNotification(c.env, messageId);
+  } catch (error: unknown) {
     logWarn(c.env, "live_notification.orphan_delete_failed", {
-      ...createErrorLogFields(deleteResult.error),
+      ...createErrorLogFields(error),
       messageId: messageId.toString(),
       sessionId,
       userId,
@@ -190,14 +197,12 @@ function scheduleNotificationDelete(
   fields: { sessionId: string; userId: string },
 ): void {
   c.executionCtx.waitUntil(
-    deleteLiveStartedNotification(c.env, messageId).then((deleteResult) => {
-      if (deleteResult.isErr()) {
-        logWarn(c.env, "live_notification.delete_failed", {
-          ...createErrorLogFields(deleteResult.error),
-          ...fields,
-          messageId: messageId.toString(),
-        });
-      }
+    deleteLiveStartedNotification(c.env, messageId).catch((error: unknown) => {
+      logWarn(c.env, "live_notification.delete_failed", {
+        ...createErrorLogFields(error),
+        ...fields,
+        messageId: messageId.toString(),
+      });
     }),
   );
 }
@@ -320,26 +325,36 @@ app.post("/ingest/:userId", async (c) => {
     // Avoid global SFU sweeps in Workers. Only check the one row that blocks
     // this ingest attempt, then end it if Calls has already garbage-collected
     // the underlying session (for example after OBS crashed without DELETE).
-    const isActiveResult = await isSessionActive(c.env, existingLive.sessionId);
-    if (isActiveResult.isErr()) {
+    let isActive: boolean;
+    try {
+      isActive = await isSessionActive(c.env, existingLive.sessionId);
+    } catch (error: unknown) {
+      if (!(error instanceof SfuApiError)) {
+        throw error;
+      }
       logError(c.env, "ingest.session_activity_check_failed", {
-        ...createErrorLogFields(isActiveResult.error),
+        ...createErrorLogFields(error),
         sessionId: existingLive.sessionId,
         userId,
       });
       return c.text("Failed to verify ingest session status", 502);
     }
 
-    if (isActiveResult.value) {
+    if (isActive) {
       return c.text("A live stream is already active for this user", 400);
     }
 
     await endObservedLive(c, existingLive, "session_inactive");
   }
 
-  const ingestResult = await startIngest(c.env, userId, sdpOffer);
-  if (ingestResult.isErr()) {
-    const negotiationError = ingestResult.error.toNegotiationClientError(
+  let result: IngestSession;
+  try {
+    result = await startIngest(c.env, userId, sdpOffer);
+  } catch (error: unknown) {
+    if (!(error instanceof SfuApiError)) {
+      throw error;
+    }
+    const negotiationError = error.toNegotiationClientError(
       "Failed to negotiate ingest session",
     );
     if (negotiationError) {
@@ -347,13 +362,12 @@ app.post("/ingest/:userId", async (c) => {
     }
 
     logError(c.env, "ingest.negotiation_failed", {
-      ...createErrorLogFields(ingestResult.error),
+      ...createErrorLogFields(error),
       userId,
     });
     return c.text("Internal Server Error", 500);
   }
 
-  const result = ingestResult.value;
   const respondWithAnswer = () =>
     c.body(result.sdpAnswer, 201, {
       "content-type": "application/sdp",
@@ -538,19 +552,21 @@ app.post("/play/:userId", async (c) => {
   if (liveTrackRecord) {
     // Playback names one live owner, so this is the cheapest safe point to
     // reconcile stale D1 state with Calls without scanning every live row.
-    const isActiveResult = await isSessionActive(
-      c.env,
-      liveTrackRecord.sessionId,
-    );
-    if (isActiveResult.isErr()) {
+    let isActive: boolean;
+    try {
+      isActive = await isSessionActive(c.env, liveTrackRecord.sessionId);
+    } catch (error: unknown) {
+      if (!(error instanceof SfuApiError)) {
+        throw error;
+      }
       logError(c.env, "play.session_activity_check_failed", {
-        ...createErrorLogFields(isActiveResult.error),
+        ...createErrorLogFields(error),
         sessionId: liveTrackRecord.sessionId,
         userId,
       });
       return c.text("Failed to verify live stream status", 502);
     }
-    if (!isActiveResult.value) {
+    if (!isActive) {
       // If the row changed meanwhile (OBS sent DELETE or resumed), let the
       // viewer retry against the new state instead of reporting an end.
       return (await endObservedLive(c, liveTrackRecord, "session_inactive"))
@@ -568,13 +584,17 @@ app.post("/play/:userId", async (c) => {
     return c.text("SDP offer is required", 400);
   }
 
-  const playResult = await startPlay(c.env, userId, tracks, sdpOffer);
-  if (playResult.isErr()) {
-    const error = playResult.error;
+  let result: PlaybackSession;
+  try {
+    result = await startPlay(c.env, userId, tracks, sdpOffer);
+  } catch (error: unknown) {
     if (error instanceof LiveNotFoundError) {
       return c.text(`Live stream not found: ${userId}`, 404);
     }
-    if (error instanceof SfuApiError && error.isSessionNotFound()) {
+    if (!(error instanceof SfuApiError)) {
+      throw error;
+    }
+    if (error.isSessionNotFound()) {
       if (
         liveTrackRecord &&
         !(await endObservedLive(c, liveTrackRecord, "session_inactive"))
@@ -588,19 +608,16 @@ app.post("/play/:userId", async (c) => {
       userId,
       viewerUserId: jwtPayload.userId,
     });
-    if (error instanceof SfuApiError) {
-      const negotiationError = error.toNegotiationClientError(
-        "Failed to negotiate playback session",
-      );
-      if (negotiationError) {
-        return c.text(negotiationError.text, negotiationError.status);
-      }
+    const negotiationError = error.toNegotiationClientError(
+      "Failed to negotiate playback session",
+    );
+    if (negotiationError) {
+      return c.text(negotiationError.text, negotiationError.status);
     }
 
     return c.text("Failed to negotiate playback session", 502);
   }
 
-  const result = playResult.value;
   const status = result.sdpType === "offer" ? 406 : 201;
   // Use the stored live track count, not the negotiated playback track count.
   // If playback only negotiates a subset, treat it as incomplete and let the
@@ -655,22 +672,21 @@ app
       return c.text("SDP answer is required", 400);
     }
 
-    const renegotiationResult = await renegotiateSession(
-      c.env,
-      sessionId,
-      sdpAnswer,
-    );
-    if (renegotiationResult.isErr()) {
-      const negotiationError =
-        renegotiationResult.error.toNegotiationClientError(
-          "Failed to submit WHEP answer",
-        );
+    try {
+      await renegotiateSession(c.env, sessionId, sdpAnswer);
+    } catch (error: unknown) {
+      if (!(error instanceof SfuApiError)) {
+        throw error;
+      }
+      const negotiationError = error.toNegotiationClientError(
+        "Failed to submit WHEP answer",
+      );
       if (negotiationError) {
         return c.text(negotiationError.text, negotiationError.status);
       }
 
       logError(c.env, "play.answer_submission_failed", {
-        ...createErrorLogFields(renegotiationResult.error),
+        ...createErrorLogFields(error),
         sessionId,
       });
       return c.text("Failed to submit WHEP answer", 502);
@@ -709,22 +725,25 @@ app.get("/api/turn-credentials", async (c) => {
   const jwtPayload = c.get("jwtPayload");
   // Keep TURN credentials behind the authenticated Worker API. The browser
   // client is not intended to be a generic unauthenticated WHEP endpoint client.
-  const turnResult = await generateTurnIceServers(c.env, jwtPayload.userId);
-  if (turnResult.isErr()) {
+  let iceServers: TurnIceServer[];
+  try {
+    iceServers = await generateTurnIceServers(c.env, jwtPayload.userId);
+  } catch (error: unknown) {
+    if (!(error instanceof TurnApiError)) {
+      throw error;
+    }
     logError(c.env, "turn_credentials.generate_failed", {
-      ...createErrorLogFields(turnResult.error),
+      ...createErrorLogFields(error),
       userId: jwtPayload.userId,
     });
     return c.text(
       "Failed to generate TURN credentials",
-      turnResult.error.kind === "request_timeout" ? 504 : 502,
+      error.kind === "request_timeout" ? 504 : 502,
     );
   }
 
   c.header("Cache-Control", "no-store");
-  return c.json({
-    iceServers: turnResult.value,
-  });
+  return c.json({ iceServers });
 });
 
 // Live tokens can be rotated at any time. Return the raw token only on creation;
@@ -735,14 +754,11 @@ app.post("/api/me/livetoken", async (c) => {
   const token = createLiveToken();
   const tokenHash = await hashTokenWithPepper(c.env.LIVE_TOKEN_PEPPER, token);
 
-  type SaveTokenResult = { ok: true } | { ok: false; error: Error };
-  const saveResult: SaveTokenResult = await db
-    .setLiveToken(c.env.LIVE_DB, userId, tokenHash)
-    .then((): SaveTokenResult => ({ ok: true }))
-    .catch((error: Error): SaveTokenResult => ({ ok: false, error }));
-  if (!saveResult.ok) {
+  try {
+    await db.setLiveToken(c.env.LIVE_DB, userId, tokenHash);
+  } catch (error: unknown) {
     logError(c.env, "live_token.save_failed", {
-      ...createErrorLogFields(saveResult.error),
+      ...createErrorLogFields(error),
       userId,
     });
     return c.text("Failed to save live token", 500);
@@ -758,23 +774,18 @@ app.post("/api/me/livetoken", async (c) => {
 app.get("/api/me/livetoken", async (c) => {
   const jwtPayload = c.get("jwtPayload");
   const userId = jwtPayload.userId;
-  type HasTokenResult =
-    { ok: true; hasToken: boolean } | { ok: false; error: Error };
-  const hasTokenResult: HasTokenResult = await db
-    .hasLiveToken(c.env.LIVE_DB, userId)
-    .then((hasToken): HasTokenResult => ({ ok: true, hasToken }))
-    .catch((error: Error): HasTokenResult => ({ ok: false, error }));
-  if (!hasTokenResult.ok) {
+  let hasToken: boolean;
+  try {
+    hasToken = await db.hasLiveToken(c.env.LIVE_DB, userId);
+  } catch (error: unknown) {
     logError(c.env, "live_token.status_check_failed", {
-      ...createErrorLogFields(hasTokenResult.error),
+      ...createErrorLogFields(error),
       userId,
     });
     return c.text("Failed to check live token", 500);
   }
 
-  return c.json({
-    hasToken: hasTokenResult.hasToken,
-  });
+  return c.json({ hasToken });
 });
 
 app.get("/api/lives", async (c) => {

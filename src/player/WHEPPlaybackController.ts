@@ -738,12 +738,15 @@ export class WHEPPlaybackController {
     );
 
     try {
-      const startResult = await session.start(abortController.signal);
+      const startFailure = await session.start(abortController.signal).then(
+        () => null,
+        (error: unknown) =>
+          error instanceof Error ? error : new Error(String(error)),
+      );
       abortController.signal.throwIfAborted();
-
-      if (startResult.isErr()) {
+      if (startFailure) {
         this.session = null;
-        this.handleAttemptFailure(startResult.error, mode, resourceUserId);
+        this.handleAttemptFailure(startFailure, mode, resourceUserId);
         return;
       }
 

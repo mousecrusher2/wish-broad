@@ -1,4 +1,3 @@
-import { err, ok, type Result } from "neverthrow";
 import type { Bindings } from "./types";
 
 type NotificationsEnv = Pick<Bindings, "NOTIFICATIONS_DISCORD_WEBHOOK_URL">;
@@ -130,48 +129,57 @@ function parseMessageId(rawMessageId: unknown): bigint | null {
   }
 }
 
+/**
+ * @throws {DiscordWebhookError} When the request fails or times out before
+ * Discord answers.
+ */
 async function fetchDiscordWebhook(
   endpoint: string,
   init: RequestInit,
-): Promise<Result<Response, DiscordWebhookError>> {
+): Promise<Response> {
   const abortController = new AbortController();
   const timeoutId = setTimeout(() => {
     abortController.abort();
   }, DISCORD_WEBHOOK_TIMEOUT_MS);
 
-  return fetch(endpoint, {
-    ...init,
-    signal: abortController.signal,
-  })
-    .then((response) => ok(response))
-    .catch((error: unknown) =>
-      err(
-        new DiscordWebhookError(
-          isAbortError(error)
-            ? "Discord webhook request timed out"
-            : "Discord webhook request failed",
-          {
-            endpoint,
-            kind: isAbortError(error) ? "request_timeout" : "request_failed",
-            responseBodyText: getErrorMessage(error),
-          },
-        ),
-      ),
-    )
-    .finally(() => {
-      clearTimeout(timeoutId);
+  try {
+    return await fetch(endpoint, {
+      ...init,
+      signal: abortController.signal,
     });
+  } catch (error: unknown) {
+    const timedOut = isAbortError(error);
+    throw new DiscordWebhookError(
+      timedOut
+        ? "Discord webhook request timed out"
+        : "Discord webhook request failed",
+      {
+        endpoint,
+        kind: timedOut ? "request_timeout" : "request_failed",
+        responseBodyText: getErrorMessage(error),
+      },
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
+/**
+ * Post the live start message to the Discord webhook.
+ *
+ * @returns The posted message id, which is needed to delete it later.
+ * @throws {DiscordWebhookError} When the request fails, Discord rejects it, or
+ * the response does not carry a valid message id.
+ */
 export async function sendLiveStartedNotification(
   env: NotificationsEnv,
   userId: string,
   siteUrl: string,
-): Promise<Result<{ messageId: bigint }, DiscordWebhookError>> {
+): Promise<{ messageId: bigint }> {
   const endpoint = createWebhookExecutionEndpoint(
     env.NOTIFICATIONS_DISCORD_WEBHOOK_URL,
   );
-  const responseResult = await fetchDiscordWebhook(endpoint, {
+  const response = await fetchDiscordWebhook(endpoint, {
     body: JSON.stringify({
       allowed_mentions: {
         parse: [],
@@ -185,35 +193,29 @@ export async function sendLiveStartedNotification(
     method: "POST",
   });
 
-  if (responseResult.isErr()) {
-    return err(responseResult.error);
-  }
-
-  const response = responseResult.value;
   const responseText = await response.text();
   if (!response.ok) {
-    return err(
-      new DiscordWebhookError("Discord webhook request failed", {
-        endpoint,
-        kind: "http_error",
-        responseBodyText: trimResponseBody(responseText),
-        status: response.status,
-        statusText: response.statusText,
-      }),
-    );
+    throw new DiscordWebhookError("Discord webhook request failed", {
+      endpoint,
+      kind: "http_error",
+      responseBodyText: trimResponseBody(responseText),
+      status: response.status,
+      statusText: response.statusText,
+    });
   }
 
   let responseJson: unknown;
   try {
     responseJson = JSON.parse(responseText);
   } catch {
-    return err(
-      new DiscordWebhookError("Discord webhook response was not valid JSON", {
+    throw new DiscordWebhookError(
+      "Discord webhook response was not valid JSON",
+      {
         endpoint,
         kind: "http_error",
         responseBodyText: trimResponseBody(responseText),
         statusText: response.statusText,
-      }),
+      },
     );
   }
 
@@ -222,65 +224,59 @@ export async function sendLiveStartedNotification(
     responseJson === null ||
     !("id" in responseJson)
   ) {
-    return err(
-      new DiscordWebhookError(
-        "Discord webhook response did not include a message id",
-        {
-          endpoint,
-          kind: "http_error",
-          responseBodyText: trimResponseBody(responseText),
-          statusText: response.statusText,
-        },
-      ),
+    throw new DiscordWebhookError(
+      "Discord webhook response did not include a message id",
+      {
+        endpoint,
+        kind: "http_error",
+        responseBodyText: trimResponseBody(responseText),
+        statusText: response.statusText,
+      },
     );
   }
 
   const messageId = parseMessageId(responseJson.id);
   if (messageId === null) {
-    return err(
-      new DiscordWebhookError(
-        "Discord webhook response did not include a valid message id",
-        {
-          endpoint,
-          kind: "http_error",
-          responseBodyText: trimResponseBody(responseText),
-          statusText: response.statusText,
-        },
-      ),
+    throw new DiscordWebhookError(
+      "Discord webhook response did not include a valid message id",
+      {
+        endpoint,
+        kind: "http_error",
+        responseBodyText: trimResponseBody(responseText),
+        statusText: response.statusText,
+      },
     );
   }
 
-  return ok({ messageId });
+  return { messageId };
 }
 
+/**
+ * Delete a previously posted live start message.
+ *
+ * @throws {DiscordWebhookError} When the request fails or Discord rejects it;
+ * `isRetryable()` tells whether trying again later could succeed.
+ */
 export async function deleteLiveStartedNotification(
   env: NotificationsEnv,
   messageId: bigint,
-): Promise<Result<void, DiscordWebhookError>> {
+): Promise<void> {
   const endpoint = createWebhookMessageEndpoint(
     env.NOTIFICATIONS_DISCORD_WEBHOOK_URL,
     messageId,
   );
-  const responseResult = await fetchDiscordWebhook(endpoint, {
+  const response = await fetchDiscordWebhook(endpoint, {
     method: "DELETE",
   });
-
-  if (responseResult.isErr()) {
-    return err(responseResult.error);
-  }
-
-  const response = responseResult.value;
   if (response.ok) {
-    return ok(undefined);
+    return;
   }
 
-  return err(
-    new DiscordWebhookError("Discord webhook request failed", {
-      endpoint,
-      kind: "http_error",
-      responseBodyText: trimResponseBody(await response.text()),
-      status: response.status,
-      statusText: response.statusText,
-    }),
-  );
+  throw new DiscordWebhookError("Discord webhook request failed", {
+    endpoint,
+    kind: "http_error",
+    responseBodyText: trimResponseBody(await response.text()),
+    status: response.status,
+    statusText: response.statusText,
+  });
 }

@@ -6,6 +6,20 @@ import {
   sendLiveStartedNotification,
 } from "./notifications";
 
+async function catchWebhookError(
+  promise: Promise<unknown>,
+): Promise<DiscordWebhookError> {
+  try {
+    await promise;
+  } catch (error: unknown) {
+    if (error instanceof DiscordWebhookError) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("Expected a DiscordWebhookError");
+}
+
 describe("worker live start notifications", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -28,8 +42,7 @@ describe("worker live start notifications", () => {
       "https://example.com/",
     );
 
-    expect(result.isOk()).toBe(true);
-    expect(result._unsafeUnwrap()).toEqual({ messageId: 1n });
+    expect(result).toEqual({ messageId: 1n });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     const [endpoint, init] = fetchSpy.mock.calls[0] ?? [];
@@ -53,7 +66,7 @@ describe("worker live start notifications", () => {
     });
   });
 
-  it("returns an http error result when Discord rejects the webhook", async () => {
+  it("throws an http error when Discord rejects the webhook", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("bad gateway", {
         status: 502,
@@ -61,22 +74,18 @@ describe("worker live start notifications", () => {
       }),
     );
 
-    const result = await sendLiveStartedNotification(
-      {
-        NOTIFICATIONS_DISCORD_WEBHOOK_URL:
-          "https://discord.com/api/webhooks/123/token",
-      },
-      "user-1",
-      "https://example.com/",
+    const error = await catchWebhookError(
+      sendLiveStartedNotification(
+        {
+          NOTIFICATIONS_DISCORD_WEBHOOK_URL:
+            "https://discord.com/api/webhooks/123/token",
+        },
+        "user-1",
+        "https://example.com/",
+      ),
     );
 
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) {
-      throw new Error("Expected webhook request to fail");
-    }
-
-    expect(result.error).toBeInstanceOf(DiscordWebhookError);
-    expect(result.error).toMatchObject({
+    expect(error).toMatchObject({
       endpoint: "https://discord.com/api/webhooks/123/[redacted]?wait=true",
       kind: "http_error",
       responseBodyText: "bad gateway",
@@ -98,15 +107,15 @@ describe("worker live start notifications", () => {
         new Response("failed", { status }),
       );
 
-      const error = (
-        await deleteLiveStartedNotification(
+      const error = await catchWebhookError(
+        deleteLiveStartedNotification(
           {
             NOTIFICATIONS_DISCORD_WEBHOOK_URL:
               "https://discord.com/api/webhooks/1/token",
           },
           9n,
-        )
-      )._unsafeUnwrapErr();
+        ),
+      );
 
       expect(error.status).toBe(status);
       expect(error.isRetryable()).toBe(retryable);
@@ -130,27 +139,23 @@ describe("worker live start notifications", () => {
     ).toBe(false);
   });
 
-  it("returns a timeout result when the webhook request is aborted", async () => {
+  it("throws a timeout error when the webhook request is aborted", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(
       new DOMException("The operation was aborted", "AbortError"),
     );
 
-    const result = await sendLiveStartedNotification(
-      {
-        NOTIFICATIONS_DISCORD_WEBHOOK_URL:
-          "https://discord.com/api/webhooks/123/token",
-      },
-      "user-1",
-      "https://example.com/",
+    const error = await catchWebhookError(
+      sendLiveStartedNotification(
+        {
+          NOTIFICATIONS_DISCORD_WEBHOOK_URL:
+            "https://discord.com/api/webhooks/123/token",
+        },
+        "user-1",
+        "https://example.com/",
+      ),
     );
 
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) {
-      throw new Error("Expected webhook request to fail");
-    }
-
-    expect(result.error).toBeInstanceOf(DiscordWebhookError);
-    expect(result.error).toMatchObject({
+    expect(error).toMatchObject({
       endpoint: "https://discord.com/api/webhooks/123/[redacted]?wait=true",
       kind: "request_timeout",
     });
@@ -166,20 +171,20 @@ describe("worker live start notifications", () => {
         "https://discord.com/api/v10/webhooks/123/secret-token?thread_id=7",
     };
 
-    const sendError = (
-      await sendLiveStartedNotification(env, "user-1", "https://example.com")
-    )._unsafeUnwrapErr();
-    const deleteError = (
-      await deleteLiveStartedNotification(env, 45n)
-    )._unsafeUnwrapErr();
-    const unrecognizedUrlError = (
-      await deleteLiveStartedNotification(
+    const sendError = await catchWebhookError(
+      sendLiveStartedNotification(env, "user-1", "https://example.com"),
+    );
+    const deleteError = await catchWebhookError(
+      deleteLiveStartedNotification(env, 45n),
+    );
+    const unrecognizedUrlError = await catchWebhookError(
+      deleteLiveStartedNotification(
         {
           NOTIFICATIONS_DISCORD_WEBHOOK_URL: "https://example.com/secret-token",
         },
         45n,
-      )
-    )._unsafeUnwrapErr();
+      ),
+    );
 
     expect(sendError.endpoint).toBe(
       "https://discord.com/api/v10/webhooks/123/[redacted]?thread_id=7&wait=true",
@@ -206,15 +211,15 @@ describe("worker live start notifications", () => {
       }),
     );
 
-    const result = await deleteLiveStartedNotification(
-      {
-        NOTIFICATIONS_DISCORD_WEBHOOK_URL:
-          "https://discord.com/api/webhooks/123/token",
-      },
-      1n,
-    );
-
-    expect(result.isOk()).toBe(true);
+    await expect(
+      deleteLiveStartedNotification(
+        {
+          NOTIFICATIONS_DISCORD_WEBHOOK_URL:
+            "https://discord.com/api/webhooks/123/token",
+        },
+        1n,
+      ),
+    ).resolves.toBeUndefined();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     const [endpoint, init] = fetchSpy.mock.calls[0] ?? [];
@@ -240,7 +245,7 @@ describe("worker live start notifications", () => {
       "https://example.com/live",
     );
 
-    expect(result._unsafeUnwrap()).toEqual({ messageId: 42n });
+    expect(result).toEqual({ messageId: 42n });
     expect(fetchSpy.mock.calls[0]?.[0]).toBe(
       "https://discord.com/api/webhooks/123/token?wait=true&thread_id=7",
     );
@@ -259,18 +264,18 @@ describe("worker live start notifications", () => {
     async (body, message, responseBodyText) => {
       vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body));
 
-      const result = await sendLiveStartedNotification(
-        {
-          NOTIFICATIONS_DISCORD_WEBHOOK_URL:
-            "https://discord.com/api/webhooks/1/token",
-        },
-        "user-1",
-        "https://example.com",
+      const error = await catchWebhookError(
+        sendLiveStartedNotification(
+          {
+            NOTIFICATIONS_DISCORD_WEBHOOK_URL:
+              "https://discord.com/api/webhooks/1/token",
+          },
+          "user-1",
+          "https://example.com",
+        ),
       );
 
-      expect(result.isErr()).toBe(true);
-      if (result.isOk()) throw new Error("Expected invalid webhook result");
-      expect(result.error).toMatchObject({
+      expect(error).toMatchObject({
         kind: "http_error",
         message,
         responseBodyText,
@@ -298,21 +303,21 @@ describe("worker live start notifications", () => {
     expect(fetchSpy.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
   });
 
-  it("returns a request_failed result when the webhook request fails", async () => {
+  it("throws a request_failed error when the webhook request fails", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
       new TypeError("offline"),
     );
-    const networkError = await sendLiveStartedNotification(
-      {
-        NOTIFICATIONS_DISCORD_WEBHOOK_URL:
-          "https://discord.com/api/webhooks/1/token",
-      },
-      "user-1",
-      "https://example.com",
+    const error = await catchWebhookError(
+      sendLiveStartedNotification(
+        {
+          NOTIFICATIONS_DISCORD_WEBHOOK_URL:
+            "https://discord.com/api/webhooks/1/token",
+        },
+        "user-1",
+        "https://example.com",
+      ),
     );
-    expect(networkError.isErr()).toBe(true);
-    if (networkError.isOk()) throw new Error("Expected request failure");
-    expect(networkError.error).toMatchObject({
+    expect(error).toMatchObject({
       kind: "request_failed",
       responseBodyText: "offline",
     });
@@ -328,19 +333,19 @@ describe("worker live start notifications", () => {
           });
         }),
     );
-    const pending = sendLiveStartedNotification(
-      {
-        NOTIFICATIONS_DISCORD_WEBHOOK_URL:
-          "https://discord.com/api/webhooks/1/token",
-      },
-      "user-1",
-      "https://example.com",
+    const pending = catchWebhookError(
+      sendLiveStartedNotification(
+        {
+          NOTIFICATIONS_DISCORD_WEBHOOK_URL:
+            "https://discord.com/api/webhooks/1/token",
+        },
+        "user-1",
+        "https://example.com",
+      ),
     );
     await vi.advanceTimersByTimeAsync(5_000);
-    const result = await pending;
-    expect(result.isErr()).toBe(true);
-    if (result.isOk()) throw new Error("Expected timeout");
-    expect(result.error.kind).toBe("request_timeout");
+    const error = await pending;
+    expect(error.kind).toBe("request_timeout");
     vi.useRealTimers();
   });
 });
