@@ -1,3 +1,4 @@
+import { fetchWithTimeout, trimResponseBody } from "./http";
 import type { Bindings } from "./types";
 
 type NotificationsEnv = Pick<Bindings, "NOTIFICATIONS_DISCORD_WEBHOOK_URL">;
@@ -69,25 +70,12 @@ export class DiscordWebhookError extends Error {
   }
 }
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
-}
-
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
   }
 
   return String(error);
-}
-
-function trimResponseBody(text: string): string | undefined {
-  const normalized = text.replaceAll(/\s+/gu, " ").trim();
-  if (normalized.length === 0) {
-    return undefined;
-  }
-
-  return normalized.slice(0, 200);
 }
 
 function createWebhookExecutionEndpoint(webhookUrl: string): string {
@@ -137,31 +125,18 @@ async function fetchDiscordWebhook(
   endpoint: string,
   init: RequestInit,
 ): Promise<Response> {
-  const abortController = new AbortController();
-  const timeoutId = setTimeout(() => {
-    abortController.abort();
-  }, DISCORD_WEBHOOK_TIMEOUT_MS);
-
-  try {
-    return await fetch(endpoint, {
-      ...init,
-      signal: abortController.signal,
-    });
-  } catch (error: unknown) {
-    const timedOut = isAbortError(error);
-    throw new DiscordWebhookError(
-      timedOut
-        ? "Discord webhook request timed out"
-        : "Discord webhook request failed",
-      {
-        endpoint,
-        kind: timedOut ? "request_timeout" : "request_failed",
-        responseBodyText: getErrorMessage(error),
-      },
-    );
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return fetchWithTimeout(
+    endpoint,
+    init,
+    DISCORD_WEBHOOK_TIMEOUT_MS,
+    (kind, error) =>
+      new DiscordWebhookError(
+        kind === "request_timeout"
+          ? "Discord webhook request timed out"
+          : "Discord webhook request failed",
+        { endpoint, kind, responseBodyText: getErrorMessage(error) },
+      ),
+  );
 }
 
 /**

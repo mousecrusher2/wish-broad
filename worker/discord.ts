@@ -1,6 +1,7 @@
 import { Bindings } from "./types";
 import * as v from "valibot";
 import { createRandomHex } from "./hex";
+import { fetchWithTimeout, trimResponseBody } from "./http";
 
 type DiscordEnv = Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">;
 
@@ -133,15 +134,6 @@ export class DiscordApiError extends Error {
   }
 }
 
-function trimResponseBody(text: string): string | undefined {
-  const normalized = text.replaceAll(/\s+/gu, " ").trim();
-  if (normalized.length === 0) {
-    return undefined;
-  }
-
-  return normalized.slice(0, 200);
-}
-
 function looksLikeHtml(text: string): boolean {
   const normalized = text.trim();
   return normalized.startsWith("<");
@@ -152,10 +144,6 @@ function createDiscordBasicAuthHeader(env: DiscordEnv): string {
   return `Basic ${btoa(credentials)}`;
 }
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
-}
-
 /**
  * @throws {DiscordApiError} When the request fails or times out before Discord
  * answers.
@@ -164,30 +152,23 @@ async function fetchDiscordWithTimeout(
   endpoint: string,
   init: RequestInit,
 ): Promise<Response> {
-  const abortController = new AbortController();
-  const timeoutId = setTimeout(() => {
-    abortController.abort();
-  }, DISCORD_FETCH_TIMEOUT_MS);
-
-  try {
-    return await fetch(endpoint, {
-      ...init,
-      signal: abortController.signal,
-    });
-  } catch (error: unknown) {
-    const timedOut = isAbortError(error);
-    const failureMessage =
-      error instanceof Error ? error.message : String(error);
-    throw new DiscordApiError(
-      timedOut ? "Discord request timed out" : failureMessage,
-      {
-        endpoint,
-        kind: timedOut ? "request_timeout" : "request_failed",
-      },
-    );
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return fetchWithTimeout(
+    endpoint,
+    init,
+    DISCORD_FETCH_TIMEOUT_MS,
+    (kind, error) => {
+      if (kind === "request_timeout") {
+        return new DiscordApiError("Discord request timed out", {
+          endpoint,
+          kind,
+        });
+      }
+      return new DiscordApiError(
+        error instanceof Error ? error.message : String(error),
+        { endpoint, kind },
+      );
+    },
+  );
 }
 
 /**

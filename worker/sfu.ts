@@ -1,5 +1,6 @@
 import { Bindings } from "./types";
 import * as v from "valibot";
+import { fetchWithTimeout } from "./http";
 
 type SessionDescription = {
   sdp: string;
@@ -312,10 +313,6 @@ function getHeaders(env: SfuEnv): Record<string, string> {
   };
 }
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
-}
-
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -328,29 +325,18 @@ async function fetchSfu(
   endpoint: string,
   init: RequestInit,
 ): Promise<Response> {
-  const abortController = new AbortController();
-  const timeoutId = setTimeout(() => {
-    abortController.abort();
-  }, SFU_FETCH_TIMEOUT_MS);
-
-  try {
-    return await fetch(endpoint, {
-      ...init,
-      signal: abortController.signal,
-    });
-  } catch (error: unknown) {
-    const timedOut = isAbortError(error);
-    throw new SfuApiError(
-      timedOut ? "SFU request timed out" : "SFU request failed",
-      {
-        endpoint,
-        kind: timedOut ? "request_timeout" : "request_failed",
-        responseBody: getErrorMessage(error),
-      },
-    );
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return fetchWithTimeout(
+    endpoint,
+    init,
+    SFU_FETCH_TIMEOUT_MS,
+    (kind, error) =>
+      new SfuApiError(
+        kind === "request_timeout"
+          ? "SFU request timed out"
+          : "SFU request failed",
+        { endpoint, kind, responseBody: getErrorMessage(error) },
+      ),
+  );
 }
 
 function normalizeTrackLocator(track: TrackLocator): TrackLocatorRequest {

@@ -1,4 +1,5 @@
 import * as v from "valibot";
+import { fetchWithTimeout } from "./http";
 import type { Bindings } from "./types";
 
 type TurnEnv = Pick<Bindings, "TURN_KEY_API_TOKEN" | "TURN_KEY_ID">;
@@ -85,10 +86,6 @@ function getTurnCredentialsResponseSchema() {
   return turnCredentialsResponseSchema;
 }
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
-}
-
 function toUrlList(urls: string | string[]): string[] {
   return Array.isArray(urls) ? urls : [urls];
 }
@@ -163,31 +160,22 @@ async function fetchTurnCredentials(
   endpoint: string,
   init: RequestInit,
 ): Promise<Response> {
-  const abortController = new AbortController();
-  const timeoutId = setTimeout(() => {
-    abortController.abort();
-  }, TURN_FETCH_TIMEOUT_MS);
-
-  try {
-    return await fetch(endpoint, {
-      ...init,
-      signal: abortController.signal,
-    });
-  } catch (error: unknown) {
-    const timedOut = isAbortError(error);
-    throw new TurnApiError(
-      timedOut
-        ? "TURN credential request timed out"
-        : "TURN credential request failed",
-      {
-        endpoint,
-        kind: timedOut ? "request_timeout" : "request_failed",
-        responseBody: error instanceof Error ? error.message : String(error),
-      },
-    );
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return fetchWithTimeout(
+    endpoint,
+    init,
+    TURN_FETCH_TIMEOUT_MS,
+    (kind, error) =>
+      new TurnApiError(
+        kind === "request_timeout"
+          ? "TURN credential request timed out"
+          : "TURN credential request failed",
+        {
+          endpoint,
+          kind,
+          responseBody: error instanceof Error ? error.message : String(error),
+        },
+      ),
+  );
 }
 
 /**
