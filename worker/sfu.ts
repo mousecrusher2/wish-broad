@@ -1,6 +1,6 @@
 import { Bindings } from "./types";
 import * as v from "valibot";
-import { fetchWithTimeout } from "./http";
+import { fetchWithTimeout, readResponseBody } from "./http";
 
 type SessionDescription = {
   sdp: string;
@@ -179,9 +179,7 @@ async function createHttpError(
   response: Response,
   endpoint: string,
 ): Promise<SfuApiError> {
-  const responseBody: unknown = await response
-    .json()
-    .catch(() => response.text().catch(() => null));
+  const responseBody = await readResponseBody(response);
   const { kind, message } = classifyHttpFailure(response.status);
   return new SfuApiError(message, {
     endpoint,

@@ -1,5 +1,5 @@
 import * as v from "valibot";
-import { fetchWithTimeout } from "./http";
+import { fetchWithTimeout, readResponseBody } from "./http";
 import type { Bindings } from "./types";
 
 type TurnEnv = Pick<Bindings, "TURN_KEY_API_TOKEN" | "TURN_KEY_ID">;
@@ -187,9 +187,7 @@ async function parseTurnCredentialsResponse(
   response: Response,
 ): Promise<TurnCredentialsResponse> {
   if (!response.ok) {
-    const responseBody: unknown = await response
-      .json()
-      .catch(() => response.text().catch(() => null));
+    const responseBody = await readResponseBody(response);
     throw new TurnApiError("TURN credential request failed", {
       endpoint,
       kind: "http_error",

@@ -194,7 +194,7 @@ describe("worker turn credentials", () => {
     });
   });
 
-  it("maps HTTP and network failures and falls back from non-JSON error bodies", async () => {
+  it("maps HTTP and network failures and keeps non-JSON error bodies as text", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(JSON.stringify({ message: "denied" }), {
         status: 403,
@@ -226,7 +226,7 @@ describe("worker turn credentials", () => {
         "viewer",
       ),
     );
-    expect(nonJsonHttpError.responseBody).toBeNull();
+    expect(nonJsonHttpError.responseBody).toBe("plain error body");
 
     vi.restoreAllMocks();
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"));

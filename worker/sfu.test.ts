@@ -414,7 +414,39 @@ describe("SFU API", () => {
       const [status, kind] = testCase;
       expect(error.kind).toBe(kind);
       expect(error.isSessionNotFound()).toBe(status === 404);
-      expect(error.responseBody).toBeNull();
+      expect(error.responseBody).toBe("failure");
+    });
+  });
+
+  it("passes a plain-text Calls rejection through to the client", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("Malformed SDP answer", { status: 422 }),
+    );
+
+    const error = await catchSfuError(
+      renegotiateSession(env, "session-1", "answer"),
+    );
+
+    expect(error.responseBody).toBe("Malformed SDP answer");
+    expect(error.toNegotiationClientError("fallback")).toEqual({
+      status: 422,
+      text: "Malformed SDP answer",
+    });
+  });
+
+  it("keeps a JSON Calls error body as parsed JSON", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ errorCode: "invalid_sdp" }, 400),
+    );
+
+    const error = await catchSfuError(
+      renegotiateSession(env, "session-1", "answer"),
+    );
+
+    expect(error.responseBody).toEqual({ errorCode: "invalid_sdp" });
+    expect(error.toNegotiationClientError("fallback")).toEqual({
+      status: 400,
+      text: "fallback",
     });
   });
 
@@ -542,7 +574,7 @@ describe("SFU API", () => {
     );
     const httpError = await catchSfuError(isSessionActive(env, "session-1"));
     expect(httpError.kind).toBe("http_error");
-    expect(httpError.responseBody).toBeNull();
+    expect(httpError.responseBody).toBe("error");
 
     vi.restoreAllMocks();
     vi.spyOn(globalThis, "fetch").mockRejectedValue(

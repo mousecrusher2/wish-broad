@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type FetchFailureKind,
   fetchWithTimeout,
+  readResponseBody,
   trimResponseBody,
 } from "./http";
 
@@ -99,6 +100,28 @@ describe("fetchWithTimeout", () => {
     await fetchWithTimeout("https://example.com", {}, 5_000, createTestError);
 
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("readResponseBody", () => {
+  it("parses a JSON body", async () => {
+    await expect(
+      readResponseBody(new Response(JSON.stringify({ errorCode: "bad" }))),
+    ).resolves.toEqual({ errorCode: "bad" });
+  });
+
+  it("keeps a non-JSON body as text", async () => {
+    await expect(
+      readResponseBody(new Response("Malformed SDP offer")),
+    ).resolves.toBe("Malformed SDP offer");
+  });
+
+  it("returns null for an empty or unreadable body", async () => {
+    const consumed = new Response("already read");
+    await consumed.text();
+
+    await expect(readResponseBody(new Response(null))).resolves.toBeNull();
+    await expect(readResponseBody(consumed)).resolves.toBeNull();
   });
 });
 

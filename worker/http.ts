@@ -41,6 +41,31 @@ export async function fetchWithTimeout(
   }
 }
 
+/**
+ * Reads a response body once and returns it as parsed JSON when it is JSON,
+ * as the raw text otherwise, or null when it is empty or cannot be read.
+ * Reading with `json()` first would consume the body, so a non-JSON body
+ * could no longer be read as text.
+ */
+export async function readResponseBody(response: Response): Promise<unknown> {
+  let text: string;
+  try {
+    text = await response.text();
+  } catch {
+    return null;
+  }
+  if (text.length === 0) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed;
+  } catch {
+    return text;
+  }
+}
+
 /** Collapses whitespace and keeps a short prefix of a body for logs. */
 export function trimResponseBody(text: string): string | undefined {
   const normalized = text.replaceAll(/\s+/gu, " ").trim();
