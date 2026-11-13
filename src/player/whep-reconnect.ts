@@ -1,13 +1,16 @@
 import { WHEPSessionError, type WHEPSessionSnapshot } from "./WHEPClient";
 
-const WHEP_RECONNECT_BASE_DELAY_MS = 500;
-const WHEP_RECONNECT_MAX_DELAY_MS = 2_000;
+// The Worker states whether a broadcast still exists (503 while the publisher
+// reconnects, with `Retry-After: 2`; 404 once it ended), so the client does not
+// back off to guess; it retries at the same fixed interval.
+export const WHEP_RECONNECT_DELAY_MS = 2_000;
 
 // Recovery is viewer-driven because the Worker does not continuously poll the
-// SFU. Keep retries bounded so a broken stream does not load forever. The
-// window must outlast the Worker's 60-second publisher reconnect grace period
-// (worker/live-end.ts), during which POST /play answers 503; when the period
-// ends without a reconnect, the Worker answers 404 and playback ends at once.
+// SFU. The Worker answers POST /play with 404 once the 60-second publisher
+// reconnect grace period (worker/live-end.ts) passes, even if the scheduled end
+// never ran, so playback normally ends there. This window is only a safety net
+// against a server that keeps failing or answering 503, so a broken stream does
+// not poll forever. It must outlast that grace period.
 export const WHEP_RECONNECT_WINDOW_MS = 75_000;
 
 // Receiver stats are the source of truth for media flow. Wait long enough for
@@ -22,20 +25,6 @@ export const WHEP_SESSION_RECOVERY_GRACE_MS = 3_000;
 
 type WHEPReconnectDisposition = "ended" | "error" | "retry";
 export type WHEPReconnectAttemptMode = "initial" | "retry";
-
-export function getReconnectDelayMs(
-  attemptCount: number,
-  remainingMs: number,
-): number {
-  return Math.max(
-    0,
-    Math.min(
-      WHEP_RECONNECT_BASE_DELAY_MS * 2 ** attemptCount,
-      WHEP_RECONNECT_MAX_DELAY_MS,
-      remainingMs,
-    ),
-  );
-}
 
 export function resolveReconnectDisposition(
   error: unknown,

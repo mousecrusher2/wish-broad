@@ -260,7 +260,7 @@ describe("WHEPPlaybackController", () => {
     });
 
     lastPeer().updateStates(ICE_FAILED);
-    // Covers the backoff before the next retry.
+    // Covers the 2 s retry interval before the next offer.
     await vi.advanceTimersByTimeAsync(2_000);
     await vi.waitFor(() => {
       expect(countPosts(requests)).toBe(3);
@@ -285,7 +285,13 @@ describe("WHEPPlaybackController", () => {
       isLoading: false,
       playbackState: { phase: "reconnecting", resourceUserId: "alice" },
     });
-    // Covers the 500 ms and 1 s backoffs before the second and third offers.
+    // Offers are retried at a fixed 2 s interval, without backing off.
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(countPosts(requests)).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => {
+      expect(countPosts(requests)).toBe(2);
+    });
     await vi.advanceTimersByTimeAsync(2_000);
     await vi.waitFor(() => {
       expect(countPosts(requests)).toBe(3);
@@ -330,7 +336,7 @@ describe("WHEPPlaybackController", () => {
     expect(snapshots.at(-1)?.playbackState.phase).toBe("reconnecting");
     const postsDuringGrace = countPosts(requests);
 
-    // Covers the maximum 2 s backoff once the publisher is back.
+    // Covers the 2 s retry interval once the publisher is back.
     await vi.advanceTimersByTimeAsync(3_000);
     await vi.waitFor(() => {
       expect(countPosts(requests)).toBeGreaterThan(postsDuringGrace);

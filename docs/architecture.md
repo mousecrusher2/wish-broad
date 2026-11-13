@@ -203,16 +203,20 @@ it when the user loads a stream, even if the selected owner is unchanged. This
 forces a fresh WHEP session for manual reloads.
 
 Playback recovery is viewer-driven and bounded. The frontend reconnects when the
-specific session loses expected tracks, stalls, or disconnects, but it gives up
-within a fixed window so ended streams do not appear to load forever.
+specific session loses expected tracks, stalls, or disconnects. The client
+treats the play endpoint's status as the source of truth for whether to keep
+waiting: a 503 means the broadcast still exists without a usable session, so
+the client keeps retrying every 2 seconds (the `Retry-After` the Worker sends),
+even on an initial load; a 404 means the broadcast has ended, so playback ends
+at once. Because the server decides, retries use a fixed interval instead of
+backing off.
 
-The window (75 seconds) must outlast the Worker's 60-second publisher reconnect
-grace period, because the viewer usually notices the stall a few seconds after
-OBS sent DELETE. The client treats the play endpoint's status as the source of
-truth for whether to keep waiting: a 503 means the broadcast still exists
-without a usable session, so the client keeps retrying with backoff, even on an
-initial load; a 404 means the broadcast has ended, so playback ends at once
-instead of retrying until the window expires. Other 5xx responses and network
+The Worker answers 404 once the grace period has passed even if the scheduled
+end never ran, so the client normally learns the end from the server. The
+client still gives up after a fixed window (75 seconds) as a safety net, so a
+server that keeps failing or answering 503 is not polled forever. The window
+must outlast the Worker's 60-second publisher reconnect grace period, because
+the viewer usually notices the stall a few seconds after OBS sent DELETE. Other 5xx responses and network
 errors fail the initial attempt, so a broken server still surfaces as an error
 on the initial load. They are retried only once the client is already
 reconnecting, whether after an established session dropped or while waiting out

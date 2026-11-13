@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WHEPSessionError } from "./WHEPClient";
 import {
-  getReconnectDelayMs,
   resolveReconnectDisposition,
   shouldReconnectForPlaybackStall,
   shouldReconnectForTrackDiscoveryTimeout,
@@ -57,14 +56,6 @@ describe("whep-reconnect", () => {
       ),
     ).toBe("retry");
     expect(resolveReconnectDisposition(new Error("network"))).toBe("retry");
-  });
-
-  it("uses exponential backoff capped by the remaining reconnect window", () => {
-    expect(getReconnectDelayMs(0, 10_000)).toBe(500);
-    expect(getReconnectDelayMs(1, 10_000)).toBe(1_000);
-    expect(getReconnectDelayMs(2, 10_000)).toBe(2_000);
-    expect(getReconnectDelayMs(4, 10_000)).toBe(2_000);
-    expect(getReconnectDelayMs(4, 1_500)).toBe(1_500);
   });
 
   it("detects established sessions that should be recovered", () => {

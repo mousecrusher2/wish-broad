@@ -5,10 +5,10 @@ import {
 } from "./WHEPClient";
 import {
   type WHEPReconnectAttemptMode,
+  WHEP_RECONNECT_DELAY_MS,
   WHEP_RECONNECT_WINDOW_MS,
   WHEP_SESSION_RECOVERY_GRACE_MS,
   WHEP_TRACK_DISCOVERY_GRACE_MS,
-  getReconnectDelayMs,
   resolveReconnectDisposition,
   shouldReconnectForPlaybackStall,
   shouldRecoverEstablishedSession,
@@ -73,7 +73,6 @@ function createConnectedPlaybackState(
     hasStream,
     phase: "connected",
     resourceUserId,
-    retryCount: 0,
   };
 }
 
@@ -87,7 +86,6 @@ function createTerminalPlaybackState(
       hasStream: false,
       phase,
       resourceUserId,
-      retryCount: 0,
     };
   }
 
@@ -96,7 +94,6 @@ function createTerminalPlaybackState(
     hasStream: false,
     phase,
     resourceUserId,
-    retryCount: 0,
   };
 }
 
@@ -110,7 +107,6 @@ export class WHEPPlaybackController {
   private reconnectDeadlineAt: number | null = null;
   private reconnectTimerId: number | null = null;
   private recoveryTimerId: number | null = null;
-  private retryCount = 0;
   private session: WHEPSession | null = null;
   private snapshot = createDefaultSnapshot();
   private snapshotSubscriber: SnapshotSubscriber | null = null;
@@ -148,7 +144,6 @@ export class WHEPPlaybackController {
         trimmedResourceUserId,
         "connecting",
         "connecting",
-        0,
       ),
     });
 
@@ -225,7 +220,6 @@ export class WHEPPlaybackController {
   private clearReconnectState(): void {
     this.clearReconnectTimer();
     this.reconnectDeadlineAt = null;
-    this.retryCount = 0;
   }
 
   private clearPlaybackMonitor(): void {
@@ -375,7 +369,6 @@ export class WHEPPlaybackController {
       hasStream: false,
       phase: "reconnecting",
       resourceUserId,
-      retryCount: this.retryCount,
     });
   }
 
@@ -387,10 +380,7 @@ export class WHEPPlaybackController {
     this.clearRecoveryTimer();
 
     const now = Date.now();
-    if (this.reconnectDeadlineAt === null) {
-      this.reconnectDeadlineAt = now + WHEP_RECONNECT_WINDOW_MS;
-      this.retryCount = 0;
-    }
+    this.reconnectDeadlineAt ??= now + WHEP_RECONNECT_WINDOW_MS;
 
     if (now >= this.reconnectDeadlineAt) {
       this.finalizePlayback(
@@ -406,12 +396,12 @@ export class WHEPPlaybackController {
       hasStream: false,
       phase: "reconnecting",
       resourceUserId,
-      retryCount: this.retryCount,
     });
 
+    // The deadline check above keeps the remaining time positive.
     const delayMs = options?.immediate
       ? 0
-      : getReconnectDelayMs(this.retryCount, this.reconnectDeadlineAt - now);
+      : Math.min(WHEP_RECONNECT_DELAY_MS, this.reconnectDeadlineAt - now);
     this.reconnectTimerId = window.setTimeout(() => {
       this.reconnectTimerId = null;
 
@@ -424,8 +414,6 @@ export class WHEPPlaybackController {
         );
         return;
       }
-
-      this.retryCount += 1;
       void this.startAttempt(this.createAttempt("retry", resourceUserId));
     }, delayMs);
   }
@@ -701,12 +689,7 @@ export class WHEPPlaybackController {
             }
 
             this.updatePlaybackState(
-              createPlaybackState(
-                resourceUserId,
-                phase,
-                status,
-                this.retryCount,
-              ),
+              createPlaybackState(resourceUserId, phase, status),
             );
             return;
           }
@@ -734,7 +717,7 @@ export class WHEPPlaybackController {
 
     this.session = session;
     this.updatePlaybackState(
-      createPlaybackState(resourceUserId, phase, "connecting", this.retryCount),
+      createPlaybackState(resourceUserId, phase, "connecting"),
     );
 
     try {

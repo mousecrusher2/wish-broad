@@ -45,7 +45,7 @@ type AppEnv = {
   };
 };
 
-// Matches the player's maximum reconnect backoff.
+// Matches the player's fixed reconnect interval.
 const LIVE_RECONNECTING_RETRY_AFTER_SECONDS = 2;
 
 const app = new HonoBase<AppEnv>({ router: new LinearRouter() });

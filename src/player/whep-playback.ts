@@ -10,7 +10,6 @@ type WHEPConnectingPlaybackState = {
   hasStream: false;
   phase: "connecting";
   resourceUserId: string;
-  retryCount: number;
 };
 
 type WHEPReconnectingPlaybackState = {
@@ -18,7 +17,6 @@ type WHEPReconnectingPlaybackState = {
   hasStream: false;
   phase: "reconnecting";
   resourceUserId: string;
-  retryCount: number;
 };
 
 export type WHEPPlaybackState =
@@ -27,7 +25,6 @@ export type WHEPPlaybackState =
       hasStream: false;
       phase: "idle";
       resourceUserId: null;
-      retryCount: 0;
     }
   | WHEPConnectingPlaybackState
   | {
@@ -35,7 +32,6 @@ export type WHEPPlaybackState =
       hasStream: boolean;
       phase: "connected";
       resourceUserId: string;
-      retryCount: 0;
     }
   | WHEPReconnectingPlaybackState
   | {
@@ -43,14 +39,12 @@ export type WHEPPlaybackState =
       hasStream: false;
       phase: "ended";
       resourceUserId: string;
-      retryCount: 0;
     }
   | {
       connectionStatus: "failed";
       hasStream: false;
       phase: "error";
       resourceUserId: string;
-      retryCount: 0;
     };
 
 type WHEPPlaybackPhase = WHEPPlaybackState["phase"];
@@ -61,7 +55,6 @@ export function createDefaultPlaybackState(): WHEPPlaybackState {
     hasStream: false,
     phase: "idle",
     resourceUserId: null,
-    retryCount: 0,
   };
 }
 
@@ -69,14 +62,12 @@ export function createPlaybackState(
   resourceUserId: string,
   phase: "connecting" | "reconnecting",
   connectionStatus: WHEPRecoveringConnectionStatus,
-  retryCount: number,
 ): WHEPConnectingPlaybackState | WHEPReconnectingPlaybackState {
   return {
     connectionStatus,
     hasStream: false,
     phase,
     resourceUserId,
-    retryCount,
   };
 }
 
