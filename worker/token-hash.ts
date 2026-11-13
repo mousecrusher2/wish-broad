@@ -1,10 +1,6 @@
-const textEncoder = new TextEncoder();
+import { bytesToHex } from "./hex";
 
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
-    "",
-  );
-}
+const textEncoder = new TextEncoder();
 
 function hexToBytes(hex: string): Uint8Array {
   if (hex.length % 2 !== 0 || !/^[0-9a-f]+$/iu.test(hex)) {

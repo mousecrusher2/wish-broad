@@ -1,5 +1,6 @@
 import { Bindings } from "./types";
 import * as v from "valibot";
+import { createRandomHex } from "./hex";
 
 type DiscordEnv = Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">;
 
@@ -295,11 +296,7 @@ function getDiscordGuildMemberSchema() {
 }
 
 export function createOAuthState(): string {
-  const randomBytes = new Uint8Array(32);
-  crypto.getRandomValues(randomBytes);
-  return Array.from(randomBytes, (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
+  return createRandomHex(32);
 }
 
 export function buildDiscordAuthorizationUrl(
