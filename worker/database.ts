@@ -16,6 +16,9 @@ export type LiveRecord = {
   // grace period in Unix epoch milliseconds.
   graceExpiresAt: number | null;
   notificationMessageId: bigint | null;
+  // When a request last found the ingest session active in Calls, in Unix
+  // epoch milliseconds, or null if none has since the session was stored.
+  sessionSeenActiveAt: number | null;
   userId: string;
   sessionId: string;
   tracks: StoredTrack[];
@@ -33,6 +36,7 @@ function createLiveTrackRowSchema() {
     broadcast_id: v.string(),
     grace_expires_at: v.nullable(v.pipe(v.number(), v.integer())),
     notification_message_id: createNotificationMessageIdSchema(),
+    session_seen_active_at: v.nullable(v.pipe(v.number(), v.integer())),
     user_id: v.string(),
     session_id: v.string(),
     tracks_json: v.string(),
@@ -156,7 +160,7 @@ export async function getLive(
 ): Promise<LiveRecord | null> {
   const result = await database
     .prepare(
-      "SELECT user_id, broadcast_id, session_id, tracks_json, notification_message_id, grace_expires_at FROM lives WHERE user_id = ?",
+      "SELECT user_id, broadcast_id, session_id, tracks_json, notification_message_id, grace_expires_at, session_seen_active_at FROM lives WHERE user_id = ?",
     )
     .bind(userId)
     .first();
@@ -183,6 +187,7 @@ export async function getLive(
     notificationMessageId: parseNotificationMessageId(
       row.notification_message_id,
     ),
+    sessionSeenActiveAt: row.session_seen_active_at,
     userId: row.user_id,
     sessionId: row.session_id,
     tracks: tracksResult.output,
@@ -210,6 +215,28 @@ export async function setLiveNotificationMessageId(
   return result.meta.changes > 0;
 }
 
+/**
+ * Records that a request found the live ingest session still active in Calls,
+ * at most once per `minIntervalMs`. A skipped update writes no D1 rows, so
+ * viewers joining a healthy stream do not write on every request.
+ */
+export async function markLiveSessionSeenActive(
+  database: D1Database,
+  userId: string,
+  sessionId: string,
+  now: number,
+  minIntervalMs: number,
+): Promise<boolean> {
+  const result = await database
+    .prepare(
+      "UPDATE lives SET session_seen_active_at = ? WHERE user_id = ? AND session_id = ? AND (session_seen_active_at IS NULL OR session_seen_active_at <= ?)",
+    )
+    .bind(now, userId, sessionId, now - minIntervalMs)
+    .run();
+
+  return result.meta.changes > 0;
+}
+
 /** Moves a live ingest session into its reconnect grace period. */
 export async function startLiveReconnectGrace(
   database: D1Database,
@@ -228,9 +255,12 @@ export async function startLiveReconnectGrace(
 }
 
 /**
- * Continues a broadcast in its grace period with a new ingest session. Changing
- * session_id also turns the pending end of the previous grace period into a
- * no-op, because endLive only matches the exact state it observed.
+ * Continues a broadcast with a new ingest session, either during its grace
+ * period or right after its previous session was lost without DELETE. Matching
+ * the previous session_id makes this a compare-and-swap: it fails once the
+ * broadcast ended or another ingest resumed it. Changing session_id also turns
+ * the pending end of a grace period into a no-op, because endLive only matches
+ * the exact state it observed.
  */
 export async function resumeLive(
   database: D1Database,
@@ -241,7 +271,7 @@ export async function resumeLive(
 ): Promise<boolean> {
   const result = await database
     .prepare(
-      "UPDATE lives SET session_id = ?, tracks_json = ?, grace_expires_at = NULL WHERE user_id = ? AND session_id = ? AND grace_expires_at IS NOT NULL",
+      "UPDATE lives SET session_id = ?, tracks_json = ?, grace_expires_at = NULL, session_seen_active_at = NULL WHERE user_id = ? AND session_id = ?",
     )
     .bind(sessionId, JSON.stringify(tracks), userId, previousSessionId)
     .run();

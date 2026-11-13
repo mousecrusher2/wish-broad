@@ -108,9 +108,13 @@ user/session, such as ingest start or playback start.
 - If the owner's broadcast is within its grace period, the new SFU session
   resumes it. The row's session and tracks are replaced, and no new start
   notification is sent.
+- If the stored session is no longer active in the SFU (OBS crashed or lost its
+  network without sending DELETE) but a request saw it active within the last
+  60 seconds, OBS is reconnecting, so the new session resumes the broadcast the
+  same way.
 - If the grace period already passed, or the stored session is no longer active
-  in the SFU (OBS crashed without sending DELETE), that broadcast is ended, with
-  its row and notification removed, and a new broadcast starts.
+  and was not seen active recently, that broadcast is ended, with its row and
+  notification removed, and a new broadcast starts.
 - If the stored session is still active, the second ingest is rejected. Only
   that user's stored SFU session is checked.
 - If a concurrent ingest for the same owner created or resumed the row while
@@ -133,7 +137,36 @@ OBS still sends DELETE when its window is closed; only crashes and network loss
 skip it. Those are not polled for, because checking the SFU throughout every
 broadcast would spend Workflow steps or requests on a rare case. They are
 detected when the next ingest or playback request for that owner finds the
-stored session inactive.
+stored session inactive, which Calls reports once it garbage-collects the
+session about 30 seconds after losing it.
+
+Without DELETE, the Worker cannot tell when the session was lost, so it cannot
+tell an OBS reconnect from an ingest days later that is meant as a new
+broadcast. To still resume a reconnect without a second notification, requests
+that find the stored session active record when they did in
+`session_seen_active_at`: an ingest rejected because the session is still
+active, which is how a reconnecting OBS retries until Calls garbage-collects
+the session, and a playback request, which viewers keep sending once media
+stops. A session found inactive within 60 seconds of being seen active was lost
+just now:
+
+- An ingest resumes the broadcast without notifying.
+- A playback request starts a 30-second grace period, as a late DELETE would,
+  and answers 503. Together with the roughly 30 seconds Calls took to
+  garbage-collect the session, the broadcast waits about as long as after a
+  DELETE. Playback that loses the session between the activity check and the
+  Calls request does the same, because it just saw the session active.
+
+If nobody saw the session active shortly before it was garbage-collected, for
+example when OBS comes back more than 30 seconds after losing its network and
+nobody was watching, the next ingest starts a new broadcast with a new
+notification. That is accepted so that a broadcast started much later is never
+silently resumed without a notification.
+
+The activity record is written at most every 10 seconds per session. D1 counts
+no rows written for an `UPDATE` whose `WHERE` matches nothing, so the throttle
+lives in SQL and a skipped write costs one row read. The record is
+best-effort; without it, a lost session ends the broadcast as before.
 
 ## Playback Lifecycle
 
@@ -147,7 +180,9 @@ with `Retry-After` without calling the SFU, because the stored tracks were close
 by DELETE. A 404 therefore means the broadcast has ended. If a playback request
 finds the stored session inactive but cannot end the row because it changed in
 the meantime (OBS sent DELETE or resumed), it also answers 503 so the viewer
-retries against the new state. `/api/lives` keeps listing broadcasts in their
+retries against the new state. A session that was lost just now starts a short
+grace period instead of ending the broadcast, as described under Ingest
+Lifecycle. `/api/lives` keeps listing broadcasts in their
 grace period and hides ones whose deadline passed, even before the Workflow
 removed them.
 

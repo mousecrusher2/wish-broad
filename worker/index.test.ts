@@ -17,6 +17,7 @@ const dbMocks = vi.hoisted(() => ({
   getLive: vi.fn<() => Promise<LiveRecord | null>>(),
   hasLiveToken: vi.fn<() => Promise<boolean>>(),
   insertLive: vi.fn<() => Promise<string | null>>(),
+  markLiveSessionSeenActive: vi.fn<() => Promise<boolean>>(),
   resumeLive: vi.fn<() => Promise<boolean>>(),
   setLiveNotificationMessageId: vi.fn<() => Promise<boolean>>(),
   setLiveToken: vi.fn<() => Promise<void>>(),
@@ -462,6 +463,7 @@ function createLive(overrides: Partial<LiveRecord> = {}): LiveRecord {
     graceExpiresAt: null,
     notificationMessageId: null,
     sessionId,
+    sessionSeenActiveAt: null,
     tracks: [
       {
         location: "remote",
@@ -541,6 +543,7 @@ describe("worker app", () => {
     dbMocks.hasLiveToken.mockResolvedValue(false);
     dbMocks.setLiveToken.mockResolvedValue();
     dbMocks.insertLive.mockResolvedValue("broadcast-1");
+    dbMocks.markLiveSessionSeenActive.mockResolvedValue(true);
     dbMocks.resumeLive.mockResolvedValue(true);
     dbMocks.setLiveNotificationMessageId.mockResolvedValue(true);
     dbMocks.setUser.mockResolvedValue();
@@ -1900,6 +1903,7 @@ describe("worker app", () => {
   });
 
   it("rejects a new ingest when the user already has an active live", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
     const env = createBindings();
     const execution = createObservedExecutionContext();
 
@@ -1920,7 +1924,105 @@ describe("worker app", () => {
     expect(
       notificationsMocks.sendLiveStartedNotification,
     ).not.toHaveBeenCalled();
+    // This may be OBS retrying after losing the session without DELETE, so
+    // the rejection remembers that Calls still had the session.
+    expect(execution.waitUntilPromises).toHaveLength(1);
+    await Promise.all(execution.waitUntilPromises);
+    expect(dbMocks.markLiveSessionSeenActive).toHaveBeenCalledWith(
+      env.LIVE_DB,
+      "user-1",
+      "active-session",
+      1_700_000_000_000,
+      10_000,
+    );
+  });
+
+  it.each([
+    ["was never seen active", null],
+    ["was last seen active over a minute ago", 1_699_999_939_999],
+  ])(
+    "starts a new broadcast when a lost session %s",
+    async (_case, sessionSeenActiveAt) => {
+      vi.useFakeTimers({ now: 1_700_000_000_000 });
+      const env = createBindings();
+      const execution = createObservedExecutionContext();
+      const lostLive = createLive({
+        notificationMessageId: 8n,
+        sessionId: "lost-session",
+        sessionSeenActiveAt,
+      });
+      dbMocks.getLive.mockResolvedValue(lostLive);
+      dbMocks.endLive.mockResolvedValue({ notificationMessageId: 8n });
+      callsMocks.isSessionActive.mockResolvedValue(false);
+
+      const response = await requestIngestOffer(env, execution.context);
+
+      expect(response.status).toBe(201);
+      // The session may have been lost days before an ingest meant as a new
+      // broadcast, so that one must not lose its notification.
+      expect(dbMocks.endLive).toHaveBeenCalledWith(env.LIVE_DB, lostLive);
+      expect(dbMocks.resumeLive).not.toHaveBeenCalled();
+      expect(dbMocks.insertLive).toHaveBeenCalled();
+      await Promise.all(execution.waitUntilPromises);
+      expect(
+        notificationsMocks.deleteLiveStartedNotification,
+      ).toHaveBeenCalledWith(env, 8n);
+      expect(notificationsMocks.sendLiveStartedNotification).toHaveBeenCalled();
+    },
+  );
+
+  it("resumes the broadcast when OBS reconnects right after losing its session without DELETE", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const consoleInfoSpy = vi
+      .spyOn(console, "info")
+      .mockImplementation(() => {});
+    dbMocks.getLive.mockResolvedValue(
+      createLive({
+        notificationMessageId: 9n,
+        sessionId: "lost-session",
+        // Exactly one minute ago still counts as just now.
+        sessionSeenActiveAt: 1_699_999_940_000,
+      }),
+    );
+    callsMocks.isSessionActive.mockResolvedValue(false);
+
+    const response = await requestIngestOffer(env, execution.context);
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get("location")).toBe("/ingest/user-1/new-session");
+    expect(dbMocks.resumeLive).toHaveBeenCalledWith(
+      env.LIVE_DB,
+      "user-1",
+      "lost-session",
+      "new-session",
+      [
+        {
+          location: "remote",
+          mid: "0",
+          sessionId: "new-session",
+          trackName: "video",
+        },
+      ],
+    );
+    expect(dbMocks.endLive).not.toHaveBeenCalled();
+    expect(dbMocks.insertLive).not.toHaveBeenCalled();
     expect(execution.waitUntilPromises).toHaveLength(0);
+    expect(
+      notificationsMocks.sendLiveStartedNotification,
+    ).not.toHaveBeenCalled();
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).not.toHaveBeenCalled();
+    expect(consoleInfoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ingest.resumed",
+        previousSessionId: "lost-session",
+        reason: "session_lost",
+        sessionId: "new-session",
+      }),
+    );
   });
 
   it.each([
@@ -1932,6 +2034,13 @@ describe("worker app", () => {
         sessionId: "previous-session",
       }),
     ],
+    [
+      "a session lost just now",
+      createLive({
+        sessionId: "lost-session",
+        sessionSeenActiveAt: Number.MAX_SAFE_INTEGER,
+      }),
+    ],
   ] as const)(
     "rejects an ingest that loses a race for the owner's row after reading %s",
     async (_case, observedLive) => {
@@ -1941,6 +2050,7 @@ describe("worker app", () => {
         .spyOn(console, "warn")
         .mockImplementation(() => {});
       dbMocks.getLive.mockResolvedValue(observedLive);
+      callsMocks.isSessionActive.mockResolvedValue(false);
       // A concurrent ingest resumed or created the row first.
       dbMocks.resumeLive.mockResolvedValue(false);
       dbMocks.insertLive.mockResolvedValue(null);
@@ -2399,17 +2509,17 @@ describe("worker app", () => {
     );
   });
 
-  it("returns 404 and cleans up when SFU loses the live during play start", async () => {
+  it("waits for OBS when Calls loses the session between its check and play start", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
     const env = createBindings();
     const execution = createObservedExecutionContext();
-    const live = createLive({
-      notificationMessageId: 1n,
-      sessionId: "live-session",
-      userId: "streamer-1",
-    });
-
-    dbMocks.getLive.mockResolvedValue(live);
-    dbMocks.endLive.mockResolvedValue({ notificationMessageId: 1n });
+    dbMocks.getLive.mockResolvedValue(
+      createLive({
+        notificationMessageId: 1n,
+        sessionId: "live-session",
+        userId: "streamer-1",
+      }),
+    );
     callsMocks.startPlay.mockRejectedValue(
       new SfuApiError("SFU request failed: session not found", {
         endpoint: "/tracks/new",
@@ -2419,41 +2529,136 @@ describe("worker app", () => {
     );
 
     const response = await requestPlayOffer(env, execution.context);
-    await expectPlayNotFoundAndCleanup(response, env, live);
+
+    // The session was active a moment ago, so OBS was lost just now.
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("2");
+    expect(dbMocks.startLiveReconnectGrace).toHaveBeenCalledWith(
+      env.LIVE_DB,
+      "streamer-1",
+      "live-session",
+      1_700_000_030_000,
+    );
+    expect(dbMocks.endLive).not.toHaveBeenCalled();
     await Promise.all(execution.waitUntilPromises);
+    expect(workflowMocks.create).toHaveBeenCalledWith({
+      params: {
+        graceExpiresAt: 1_700_000_030_000,
+        sessionId: "live-session",
+        userId: "streamer-1",
+      },
+    });
     expect(
       notificationsMocks.deleteLiveStartedNotification,
-    ).toHaveBeenCalledWith(env, 1n);
+    ).not.toHaveBeenCalled();
   });
 
-  it("asks viewers to retry if the live row changed when SFU lost the session", async () => {
+  it("starts a short grace period when a play request finds a session lost just now", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
     const env = createBindings();
     const execution = createObservedExecutionContext();
+    const consoleInfoSpy = vi
+      .spyOn(console, "info")
+      .mockImplementation(() => {});
     dbMocks.getLive.mockResolvedValue(
       createLive({
-        notificationMessageId: 14n,
+        notificationMessageId: 15n,
         sessionId: "live-session",
+        sessionSeenActiveAt: 1_699_999_995_000,
         userId: "streamer-1",
       }),
     );
-    dbMocks.endLive.mockResolvedValue(null);
-    callsMocks.startPlay.mockRejectedValue(
-      new SfuApiError("Session not found", {
-        endpoint: "/tracks/new",
-        kind: "session_not_found",
-      }),
-    );
+    callsMocks.isSessionActive.mockResolvedValue(false);
 
     const response = await requestPlayOffer(env, execution.context);
 
     expect(response.status).toBe(503);
-    expect(await response.text()).toBe(
-      "Live stream is waiting for the publisher to reconnect",
+    expect(response.headers.get("retry-after")).toBe("2");
+    expect(dbMocks.startLiveReconnectGrace).toHaveBeenCalledWith(
+      env.LIVE_DB,
+      "streamer-1",
+      "live-session",
+      1_700_000_030_000,
     );
+    expect(dbMocks.endLive).not.toHaveBeenCalled();
+    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    expect(execution.waitUntilPromises).toHaveLength(1);
+    await Promise.all(execution.waitUntilPromises);
+    expect(workflowMocks.create).toHaveBeenCalledWith({
+      params: {
+        graceExpiresAt: 1_700_000_030_000,
+        sessionId: "live-session",
+        userId: "streamer-1",
+      },
+    });
     expect(
       notificationsMocks.deleteLiveStartedNotification,
     ).not.toHaveBeenCalled();
+    expect(consoleInfoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "live.session_lost",
+        graceExpiresAt: 1_700_000_030_000,
+        sessionId: "live-session",
+        userId: "streamer-1",
+      }),
+    );
+  });
+
+  it("asks viewers to retry without scheduling an end if a lost session's row changed meanwhile", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    dbMocks.getLive.mockResolvedValue(
+      createLive({
+        sessionId: "live-session",
+        sessionSeenActiveAt: Number.MAX_SAFE_INTEGER,
+        userId: "streamer-1",
+      }),
+    );
+    callsMocks.isSessionActive.mockResolvedValue(false);
+    // OBS sent DELETE or resumed first.
+    dbMocks.startLiveReconnectGrace.mockResolvedValue(false);
+
+    const response = await requestPlayOffer(env, execution.context);
+
+    expect(response.status).toBe(503);
     expect(execution.waitUntilPromises).toHaveLength(0);
+    expect(workflowMocks.create).not.toHaveBeenCalled();
+  });
+
+  it("records that a play request found the session active, and logs if that fails", async () => {
+    vi.useFakeTimers({ now: 1_700_000_000_000 });
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const consoleWarnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => {});
+    dbMocks.getLive.mockResolvedValue(
+      createLive({ sessionId: "live-session", userId: "streamer-1" }),
+    );
+    dbMocks.markLiveSessionSeenActive.mockRejectedValue(
+      new Error("D1 unavailable"),
+    );
+
+    const response = await requestPlayOffer(env, execution.context);
+
+    expect(response.status).toBe(201);
+    expect(execution.waitUntilPromises).toHaveLength(1);
+    await Promise.all(execution.waitUntilPromises);
+    expect(dbMocks.markLiveSessionSeenActive).toHaveBeenCalledWith(
+      env.LIVE_DB,
+      "streamer-1",
+      "live-session",
+      1_700_000_000_000,
+      10_000,
+    );
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorMessage: "D1 unavailable",
+        event: "live.session_activity_record_failed",
+        sessionId: "live-session",
+        userId: "streamer-1",
+      }),
+    );
   });
 
   it("returns 404 when the SFU loses playback for an owner with no stored row", async () => {

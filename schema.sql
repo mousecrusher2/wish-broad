@@ -8,13 +8,18 @@
 -- the same broadcast; once it passes, the broadcast has ended.
 -- notification_message_id is a Discord snowflake stored as decimal text because
 -- it does not fit in a JavaScript number.
+-- session_seen_active_at is the Unix epoch milliseconds when a request last
+-- found the ingest session active in Calls (written at most every 10 seconds),
+-- or NULL. It tells whether a session that Calls garbage-collected without OBS
+-- sending DELETE was lost just now, so OBS can still resume the broadcast.
 CREATE TABLE IF NOT EXISTS lives (
     user_id TEXT PRIMARY KEY,
     broadcast_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     tracks_json TEXT NOT NULL,
     notification_message_id TEXT,
-    grace_expires_at INTEGER
+    grace_expires_at INTEGER,
+    session_seen_active_at INTEGER
 );
 
 -- Publisher tokens are stored as HMAC hashes, not raw bearer tokens. Each user

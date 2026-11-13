@@ -36,7 +36,11 @@ import {
   type TurnIceServer,
 } from "./turn";
 import { createErrorLogFields, logError, logInfo, logWarn } from "./logger";
-import { LIVE_RECONNECT_GRACE_MS, scheduleLiveEnd } from "./live-end";
+import {
+  LIVE_RECONNECT_GRACE_MS,
+  type LiveEndParams,
+  scheduleLiveEnd,
+} from "./live-end";
 
 type AppEnv = {
   Bindings: Bindings;
@@ -47,6 +51,20 @@ type AppEnv = {
 
 // Matches the player's fixed reconnect interval.
 const LIVE_RECONNECTING_RETRY_AFTER_SECONDS = 2;
+
+// OBS can lose its ingest session without sending DELETE (a crash or network
+// loss), and Calls garbage-collects the session about 30 seconds later.
+// Requests that find the session active record when they did, at most this
+// often, so a later request that finds it garbage-collected can tell whether
+// the publisher was lost just now or long ago.
+const LIVE_SESSION_SEEN_ACTIVE_WRITE_INTERVAL_MS = 10_000;
+// A session garbage-collected within this long of last being seen active was
+// lost just now. It matches the grace period after DELETE and covers OBS's
+// growing reconnect interval plus the write interval above.
+const LIVE_SESSION_RECENTLY_ACTIVE_MS = 60_000;
+// Calls already waited about 30 seconds before garbage-collecting the session,
+// so this keeps the broadcast about as long as the grace period after DELETE.
+const LIVE_LOST_SESSION_GRACE_MS = 30_000;
 
 const app = new HonoBase<AppEnv>({ router: new LinearRouter() });
 
@@ -241,6 +259,93 @@ function isInReconnectGrace(live: db.LiveRecord, now: number): boolean {
   return live.graceExpiresAt !== null && live.graceExpiresAt > now;
 }
 
+function wasSessionSeenActiveRecently(
+  live: db.LiveRecord,
+  now: number,
+): boolean {
+  return (
+    live.sessionSeenActiveAt !== null &&
+    now - live.sessionSeenActiveAt <= LIVE_SESSION_RECENTLY_ACTIVE_MS
+  );
+}
+
+// Best-effort: without the record, losing this session later without DELETE
+// ends the broadcast at once instead of waiting for OBS to resume it.
+function recordLiveSessionSeenActive(
+  c: Context<AppEnv>,
+  live: db.LiveRecord,
+  now: number,
+): void {
+  c.executionCtx.waitUntil(
+    db
+      .markLiveSessionSeenActive(
+        c.env.LIVE_DB,
+        live.userId,
+        live.sessionId,
+        now,
+        LIVE_SESSION_SEEN_ACTIVE_WRITE_INTERVAL_MS,
+      )
+      .catch((error: unknown) => {
+        logWarn(c.env, "live.session_activity_record_failed", {
+          ...createErrorLogFields(error),
+          sessionId: live.sessionId,
+          userId: live.userId,
+        });
+      }),
+  );
+}
+
+function scheduleReconnectGraceEnd(
+  c: Context<AppEnv>,
+  params: LiveEndParams,
+): void {
+  // If scheduling fails, requests that touch this owner end the broadcast
+  // after the deadline instead, and /api/lives already hides it.
+  c.executionCtx.waitUntil(
+    scheduleLiveEnd(c.env, params).catch((error: unknown) => {
+      logError(c.env, "live_end.schedule_failed", {
+        ...createErrorLogFields(error),
+        sessionId: params.sessionId,
+        userId: params.userId,
+      });
+    }),
+  );
+}
+
+// Calls garbage-collected the ingest session shortly after a request saw it
+// active, so OBS lost it just now without sending DELETE. Treat this like a
+// late DELETE: keep the broadcast and its notification for a short grace
+// period so that a reconnecting OBS resumes it instead of notifying again.
+async function startLostSessionGrace(
+  c: Context<AppEnv>,
+  live: db.LiveRecord,
+  now: number,
+): Promise<void> {
+  const graceExpiresAt = now + LIVE_LOST_SESSION_GRACE_MS;
+  // If the row changed meanwhile (OBS sent DELETE or resumed), its new state
+  // already decides what happens next.
+  const graceStarted = await db.startLiveReconnectGrace(
+    c.env.LIVE_DB,
+    live.userId,
+    live.sessionId,
+    graceExpiresAt,
+  );
+  if (!graceStarted) {
+    return;
+  }
+
+  logInfo(c.env, "live.session_lost", {
+    graceExpiresAt,
+    sessionId: live.sessionId,
+    userId: live.userId,
+  });
+  scheduleReconnectGraceEnd(c, {
+    graceExpiresAt,
+    sessionId: live.sessionId,
+    userId: live.userId,
+  });
+}
+
 function respondLiveReconnecting(c: Context<AppEnv>): Response {
   // 503 tells viewers to keep retrying; 404 is reserved for an ended broadcast.
   return c.text("Live stream is waiting for the publisher to reconnect", 503, {
@@ -322,16 +427,17 @@ app.post("/ingest/:userId", async (c) => {
   }
 
   let resumableLive: db.LiveRecord | null = null;
+  const now = Date.now();
   const existingLive = await db.getLive(c.env.LIVE_DB, userId);
-  if (existingLive && isInReconnectGrace(existingLive, Date.now())) {
+  if (existingLive && isInReconnectGrace(existingLive, now)) {
     resumableLive = existingLive;
   } else if (existingLive && existingLive.graceExpiresAt !== null) {
     // The grace period passed but its scheduled end has not run (yet).
     await endObservedLive(c, existingLive, "reconnect_grace_expired");
   } else if (existingLive) {
     // Avoid global SFU sweeps in Workers. Only check the one row that blocks
-    // this ingest attempt, then end it if Calls has already garbage-collected
-    // the underlying session (for example after OBS crashed without DELETE).
+    // this ingest attempt, which matters once Calls garbage-collected the
+    // underlying session (OBS crashed or lost its network without DELETE).
     let isActive: boolean;
     try {
       isActive = await isSessionActive(c.env, existingLive.sessionId);
@@ -348,10 +454,21 @@ app.post("/ingest/:userId", async (c) => {
     }
 
     if (isActive) {
+      // This may be OBS retrying after losing the session without DELETE.
+      // Remember that Calls still had it, so that the retry after Calls
+      // garbage-collects it resumes the broadcast.
+      recordLiveSessionSeenActive(c, existingLive, now);
       return c.text("A live stream is already active for this user", 400);
     }
 
-    await endObservedLive(c, existingLive, "session_inactive");
+    if (wasSessionSeenActiveRecently(existingLive, now)) {
+      // The session was lost just now, so this is OBS reconnecting.
+      resumableLive = existingLive;
+    } else {
+      // The session may have been lost long ago, for example days before an
+      // ingest that is meant as a new broadcast, so start one and notify.
+      await endObservedLive(c, existingLive, "session_inactive");
+    }
   }
 
   let result: IngestSession;
@@ -397,6 +514,10 @@ app.post("/ingest/:userId", async (c) => {
   ) {
     logInfo(c.env, "ingest.resumed", {
       previousSessionId: resumableLive.sessionId,
+      reason:
+        resumableLive.graceExpiresAt === null
+          ? "session_lost"
+          : "reconnect_grace",
       sessionId: result.sessionId,
       userId,
     });
@@ -489,19 +610,7 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     `Failed to close live tracks for user ${userId}:`,
     `SFU reported track close errors for user ${userId}:`,
   );
-  // If scheduling fails, requests that touch this owner end the broadcast
-  // after the deadline instead, and /api/lives already hides it.
-  c.executionCtx.waitUntil(
-    scheduleLiveEnd(c.env, { graceExpiresAt, sessionId, userId }).catch(
-      (error: unknown) => {
-        logError(c.env, "live_end.schedule_failed", {
-          ...createErrorLogFields(error),
-          sessionId,
-          userId,
-        });
-      },
-    ),
-  );
+  scheduleReconnectGraceEnd(c, { graceExpiresAt, sessionId, userId });
 
   return c.text("OK", 200);
 });
@@ -547,9 +656,10 @@ app.post("/play/:userId", async (c) => {
 
   const jwtPayload = c.get("jwtPayload");
 
+  const now = Date.now();
   const liveTrackRecord = await db.getLive(c.env.LIVE_DB, userId);
   const tracks = liveTrackRecord?.tracks ?? [];
-  if (liveTrackRecord && isInReconnectGrace(liveTrackRecord, Date.now())) {
+  if (liveTrackRecord && isInReconnectGrace(liveTrackRecord, now)) {
     // The stored tracks were closed when OBS sent DELETE. Viewers retry until
     // OBS resumes the broadcast or the grace period ends it.
     return respondLiveReconnecting(c);
@@ -584,12 +694,19 @@ app.post("/play/:userId", async (c) => {
       return c.text("Failed to verify live stream status", 502);
     }
     if (!isActive) {
+      if (wasSessionSeenActiveRecently(liveTrackRecord, now)) {
+        await startLostSessionGrace(c, liveTrackRecord, now);
+        return respondLiveReconnecting(c);
+      }
       // If the row changed meanwhile (OBS sent DELETE or resumed), let the
       // viewer retry against the new state instead of reporting an end.
       return (await endObservedLive(c, liveTrackRecord, "session_inactive"))
         ? c.text(`Live stream not found: ${userId}`, 404)
         : respondLiveReconnecting(c);
     }
+    // Viewers keep requesting playback while a lost publisher's session is
+    // still waiting to be garbage-collected, so they notice the loss too.
+    recordLiveSessionSeenActive(c, liveTrackRecord, now);
   }
 
   if (!isSdpContentType(c.req.header("content-type"))) {
@@ -612,10 +729,10 @@ app.post("/play/:userId", async (c) => {
       throw error;
     }
     if (error.isSessionNotFound()) {
-      if (
-        liveTrackRecord &&
-        !(await endObservedLive(c, liveTrackRecord, "session_inactive"))
-      ) {
+      if (liveTrackRecord) {
+        // The ingest session was active when checked above, so Calls
+        // garbage-collected it just now.
+        await startLostSessionGrace(c, liveTrackRecord, Date.now());
         return respondLiveReconnecting(c);
       }
       return c.text(`Live stream not found: ${userId}`, 404);

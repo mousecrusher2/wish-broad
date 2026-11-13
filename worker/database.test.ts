@@ -5,6 +5,7 @@ import {
   getLive,
   getLiveTokenHash,
   insertLive,
+  markLiveSessionSeenActive,
   resumeLive,
   setLiveNotificationMessageId,
   startLiveReconnectGrace,
@@ -49,6 +50,7 @@ function createLiveRow(overrides: Record<string, unknown> = {}) {
     grace_expires_at: null,
     notification_message_id: null,
     session_id: "session-1",
+    session_seen_active_at: null,
     tracks_json: JSON.stringify(storedTracks),
     user_id: "user-1",
     ...overrides,
@@ -65,17 +67,28 @@ describe("D1 database helpers", () => {
   });
 
   it.each([
-    [null, null, null],
+    [null, null, null, null],
     // Larger than Number.MAX_SAFE_INTEGER, like real Discord snowflakes.
-    ["1300000000000000123", 1_300_000_000_000_000_123n, 1_700_000_060_000],
+    [
+      "1300000000000000123",
+      1_300_000_000_000_000_123n,
+      1_700_000_060_000,
+      1_700_000_000_000,
+    ],
   ] as const)(
     "validates and normalizes live rows with notification id %s",
-    async (storedMessageId, notificationMessageId, graceExpiresAt) => {
+    async (
+      storedMessageId,
+      notificationMessageId,
+      graceExpiresAt,
+      sessionSeenActiveAt,
+    ) => {
       const { database, statement } = createDatabase();
       statement.first.mockResolvedValue(
         createLiveRow({
           grace_expires_at: graceExpiresAt,
           notification_message_id: storedMessageId,
+          session_seen_active_at: sessionSeenActiveAt,
         }),
       );
 
@@ -83,6 +96,7 @@ describe("D1 database helpers", () => {
         broadcastId: "broadcast-1",
         graceExpiresAt,
         notificationMessageId,
+        sessionSeenActiveAt,
         userId: "user-1",
         sessionId: "session-1",
         tracks: storedTracks,
@@ -116,6 +130,13 @@ describe("D1 database helpers", () => {
     );
 
     statement.first.mockResolvedValue(createLiveRow({ grace_expires_at: 1.5 }));
+    await expect(getLive(database, "user-1")).rejects.toThrow(
+      "Invalid D1 lives row",
+    );
+
+    statement.first.mockResolvedValue(
+      createLiveRow({ session_seen_active_at: "recent" }),
+    );
     await expect(getLive(database, "user-1")).rejects.toThrow(
       "Invalid D1 lives row",
     );
@@ -179,8 +200,13 @@ describe("D1 database helpers", () => {
     ],
     [
       "resume",
-      "UPDATE lives SET session_id = ?, tracks_json = ?, grace_expires_at = NULL WHERE user_id = ? AND session_id = ? AND grace_expires_at IS NOT NULL",
+      "UPDATE lives SET session_id = ?, tracks_json = ?, grace_expires_at = NULL, session_seen_active_at = NULL WHERE user_id = ? AND session_id = ?",
       ["session-2", JSON.stringify(storedTracks), "user-1", "session-1"],
+    ],
+    [
+      "seen active",
+      "UPDATE lives SET session_seen_active_at = ? WHERE user_id = ? AND session_id = ? AND (session_seen_active_at IS NULL OR session_seen_active_at <= ?)",
+      [1_700_000_000_000, "user-1", "session-1", 1_699_999_990_000],
     ],
   ] as const)(
     "executes the guarded live %s update",
@@ -201,6 +227,14 @@ describe("D1 database helpers", () => {
           resumeLive(database, "user-1", "session-1", "session-2", [
             ...storedTracks,
           ]),
+        "seen active": () =>
+          markLiveSessionSeenActive(
+            database,
+            "user-1",
+            "session-1",
+            1_700_000_000_000,
+            10_000,
+          ),
       }[operation];
 
       await expect(run()).resolves.toBe(true);
