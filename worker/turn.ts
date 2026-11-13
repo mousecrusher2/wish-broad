@@ -90,56 +90,17 @@ function toUrlList(urls: string | string[]): string[] {
   return Array.isArray(urls) ? urls : [urls];
 }
 
-function getIceServerPort(url: string): number | null {
-  const schemeSeparatorIndex = url.indexOf(":");
-  if (schemeSeparatorIndex < 0) {
-    return null;
-  }
-
-  const querySeparatorIndex = url.indexOf("?");
-  const authority =
-    querySeparatorIndex >= 0
-      ? url.slice(schemeSeparatorIndex + 1, querySeparatorIndex)
-      : url.slice(schemeSeparatorIndex + 1);
-  if (authority.length === 0) {
-    return null;
-  }
-
-  if (authority.startsWith("[")) {
-    const bracketIndex = authority.indexOf("]");
-    if (bracketIndex < 0) {
-      return null;
-    }
-
-    const portText = authority.slice(bracketIndex + 2);
-    if (portText.length === 0) {
-      return null;
-    }
-
-    const port = Number.parseInt(portText, 10);
-    return Number.isInteger(port) ? port : null;
-  }
-
-  const lastColonIndex = authority.lastIndexOf(":");
-  if (lastColonIndex < 0) {
-    return null;
-  }
-
-  const portText = authority.slice(lastColonIndex + 1);
-  if (portText.length === 0) {
-    return null;
-  }
-
-  const port = Number.parseInt(portText, 10);
-  return Number.isInteger(port) ? port : null;
-}
+// STUN and TURN URIs are `scheme:host[:port][?transport=udp|tcp]` (RFC 7064,
+// RFC 7065), so the port, when present, comes right before the query or the
+// end. An IPv6 host ending in 53 is followed by "]" and does not match.
+const PORT_53_PATTERN = /:0*53(?:\?|$)/u;
 
 function filterIceServerUrls(iceServer: RawIceServer): TurnIceServer | null {
   // Cloudflare returns primary and alternate TURN ports, but browsers are known
   // to block port 53. Because this client waits for full ICE gathering instead
   // of using trickle ICE, keep blocked candidates out to avoid setup timeouts.
   const urls = toUrlList(iceServer.urls).filter((url) => {
-    return getIceServerPort(url) !== 53;
+    return !PORT_53_PATTERN.test(url);
   });
   if (urls.length === 0) {
     return null;

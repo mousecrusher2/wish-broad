@@ -106,6 +106,42 @@ describe("worker turn credentials", () => {
     });
   });
 
+  it.each([
+    ["turn:turn.cloudflare.com:53?transport=udp", false],
+    ["stun:stun.cloudflare.com:53", false],
+    ["turn:turn.cloudflare.com:053?transport=udp", false],
+    ["turns:turn.cloudflare.com:5349?transport=tcp", true],
+    ["turn:[2001:db8::53]:3478?transport=udp", true],
+    ["turn:[2001:db8::53]", true],
+  ] as const)("filters %s by port 53 (kept: %s)", async (url, kept) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          iceServers: [{ urls: ["stun:stun.cloudflare.com:3478", url] }],
+        }),
+        {
+          status: 201,
+        },
+      ),
+    );
+
+    const iceServers = await generateTurnIceServers(
+      {
+        TURN_KEY_API_TOKEN: "turn-key-api-token",
+        TURN_KEY_ID: "turn-key-id",
+      },
+      "viewer-1",
+    );
+
+    expect(iceServers).toEqual([
+      {
+        urls: kept
+          ? ["stun:stun.cloudflare.com:3478", url]
+          : ["stun:stun.cloudflare.com:3478"],
+      },
+    ]);
+  });
+
   it("throws an empty_ice_servers error when only port 53 URLs remain", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
