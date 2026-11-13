@@ -600,34 +600,6 @@ describe("WHEPSession", () => {
     ]);
   });
 
-  it("waits for an in-flight offer so its session can still be deleted", async () => {
-    const fetchSpy = mockFetch()
-      // The Worker has already created the Calls session when the abort lands,
-      // so the offer response still arrives.
-      .mockImplementationOnce(
-        (_input, init) =>
-          new Promise((resolve) => {
-            init?.signal?.addEventListener("abort", () => {
-              resolve(sdpResponse(201));
-            });
-          }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 200 }));
-    const { session } = createSession();
-    const pending = session.start(new AbortController().signal);
-    await vi.waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledOnce();
-    });
-
-    await session.dispose();
-
-    await expect(pending).resolves.toBeUndefined();
-    expect(fetchCalls(fetchSpy)).toEqual([
-      { method: "POST", url: `${ORIGIN}/play/alice` },
-      { method: "DELETE", url: SESSION_URL },
-    ]);
-  });
-
   it("finishes dispose with a warning when the server DELETE fails", async () => {
     mockFetch()
       .mockResolvedValueOnce(sdpResponse(201))

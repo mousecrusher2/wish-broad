@@ -52,11 +52,6 @@ type WHEPSessionOptions = {
   videoElement: WHEPVideoElement;
 };
 
-type ServerSessionState =
-  | { kind: "registering"; promise: Promise<WhepSessionResponse> }
-  | { kind: "registered"; location: string }
-  | null;
-
 type WhepSessionResponse =
   | {
       expectedRemoteTrackCount: number | null;
@@ -348,7 +343,8 @@ export class WHEPSession {
   private maxRemoteTrackCount = 0;
   private runtimeState: WHEPSessionRuntimeState =
     createRuntimeState("disconnected");
-  private serverSession: ServerSessionState = null;
+  // The WHEP session URL the Worker returned, once POST /play succeeded.
+  private serverSessionLocation: string | null = null;
 
   constructor({
     callbacks = {},
@@ -710,13 +706,13 @@ export class WHEPSession {
     this.setStatus("disconnected");
   }
 
-  private async deleteRegisteredSession(): Promise<void> {
-    if (this.serverSession?.kind !== "registered") {
+  private async deleteServerSession(): Promise<void> {
+    if (this.serverSessionLocation === null) {
       return;
     }
 
     const sessionUrl = new URL(
-      this.serverSession.location,
+      this.serverSessionLocation,
       window.location.origin,
     );
     let response: Response;
@@ -735,27 +731,6 @@ export class WHEPSession {
       );
       console.warn("Failed to close WHEP session:", responseError);
     }
-  }
-
-  private async cleanupServerSession(): Promise<void> {
-    // Dispose can run while POST /play is still in flight. If the Worker creates
-    // a session before the abort reaches it, wait for the registration result so
-    // the returned Location can still be DELETEd instead of leaking a Calls
-    // playback session.
-    if (this.serverSession?.kind === "registering") {
-      const registrationResult = await this.serverSession.promise.catch(
-        () => null,
-      );
-
-      if (registrationResult !== null) {
-        this.serverSession = {
-          kind: "registered",
-          location: registrationResult.sessionUrl.toString(),
-        };
-      }
-    }
-
-    await this.deleteRegisteredSession();
   }
 
   /**
@@ -806,7 +781,10 @@ export class WHEPSession {
         throw new Error("Failed to create local SDP offer");
       }
 
-      const registrationPromise = fetch(resourceUrl, {
+      // Disposing aborts this POST. If the Worker already created a Calls
+      // playback session by then, nothing DELETEs it; nobody connects to it,
+      // so it carries no media until Calls cleans it up.
+      const offerResponse = await fetch(resourceUrl, {
         method: "POST",
         headers: {
           Accept: "application/sdp",
@@ -814,22 +792,16 @@ export class WHEPSession {
         },
         body: localOfferSdp,
         signal,
-      }).then((offerResponse) =>
-        parseWhepSessionResponse(offerResponse, resourceUrl),
+      });
+      const sessionResponse = await parseWhepSessionResponse(
+        offerResponse,
+        resourceUrl,
       );
-      this.serverSession = {
-        kind: "registering",
-        promise: registrationPromise,
-      };
-      const sessionResponse = await registrationPromise;
       // Custom Worker header: expected ingest track count. It lets the
       // controller reject degraded playback that negotiates only a subset.
       this.expectedRemoteTrackCount =
         sessionResponse.expectedRemoteTrackCount ?? 0;
-      this.serverSession = {
-        kind: "registered",
-        location: sessionResponse.sessionUrl.toString(),
-      };
+      this.serverSessionLocation = sessionResponse.sessionUrl.toString();
 
       if (!this.isActive()) {
         return;
@@ -915,7 +887,7 @@ export class WHEPSession {
     this.releaseLocalResources();
 
     const cleanupPromise = notifyServer
-      ? this.cleanupServerSession()
+      ? this.deleteServerSession()
       : Promise.resolve();
     this.lifecycle = { cleanupPromise, kind: "closingServerSession" };
 

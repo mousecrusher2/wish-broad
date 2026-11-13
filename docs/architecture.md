@@ -155,10 +155,11 @@ its ID. The Worker does reject IDs with characters other than
 `[0-9A-Za-z_-]` on playback DELETE and PATCH, because it embeds the decoded ID
 in a Calls API URL.
 
-The frontend also waits for an in-flight WHEP registration to resolve during
-cleanup. A viewer can disconnect while `POST /play/:userId` is still in flight;
-if the SFU creates the session before the abort is observed, the returned
-`Location` is still needed so the client can DELETE the playback session.
+Playback DELETE is best-effort. If a viewer disconnects while
+`POST /play/:userId` is still in flight, the client aborts the request and
+DELETEs nothing, even if the Worker already created a Calls playback session.
+Nobody connects to that session, so it carries no media until Calls cleans it
+up.
 
 ## WHEP Client Decisions
 
