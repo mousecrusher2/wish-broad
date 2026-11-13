@@ -411,6 +411,16 @@ app.post("/ingest/:userId", async (c) => {
     result.sessionId,
     result.tracks,
   );
+  if (broadcastId === null) {
+    // A concurrent ingest for this owner created or resumed the row after it
+    // was read above, so that ingest owns the broadcast and its notification.
+    // Nobody connects to this ingest's Calls session; Calls cleans it up.
+    logWarn(c.env, "ingest.concurrent_ingest_rejected", {
+      sessionId: result.sessionId,
+      userId,
+    });
+    return c.text("A live stream is already active for this user", 400);
+  }
 
   const notifyParam = c.req.query("notify");
   if (notifyParam !== "false" && notifyParam !== "0") {

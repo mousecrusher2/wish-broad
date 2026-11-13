@@ -16,7 +16,7 @@ const dbMocks = vi.hoisted(() => ({
   getLiveTokenHash: vi.fn<() => Promise<string | null>>(),
   getLive: vi.fn<() => Promise<LiveRecord | null>>(),
   hasLiveToken: vi.fn<() => Promise<boolean>>(),
-  insertLive: vi.fn<() => Promise<string>>(),
+  insertLive: vi.fn<() => Promise<string | null>>(),
   resumeLive: vi.fn<() => Promise<boolean>>(),
   setLiveNotificationMessageId: vi.fn<() => Promise<boolean>>(),
   setLiveToken: vi.fn<() => Promise<void>>(),
@@ -1922,6 +1922,48 @@ describe("worker app", () => {
     ).not.toHaveBeenCalled();
     expect(execution.waitUntilPromises).toHaveLength(0);
   });
+
+  it.each([
+    ["no live row", null],
+    [
+      "a broadcast in its grace period",
+      createLive({
+        graceExpiresAt: Number.MAX_SAFE_INTEGER,
+        sessionId: "previous-session",
+      }),
+    ],
+  ] as const)(
+    "rejects an ingest that loses a race for the owner's row after reading %s",
+    async (_case, observedLive) => {
+      const env = createBindings();
+      const execution = createObservedExecutionContext();
+      const consoleWarnSpy = vi
+        .spyOn(console, "warn")
+        .mockImplementation(() => {});
+      dbMocks.getLive.mockResolvedValue(observedLive);
+      // A concurrent ingest resumed or created the row first.
+      dbMocks.resumeLive.mockResolvedValue(false);
+      dbMocks.insertLive.mockResolvedValue(null);
+
+      const response = await requestIngestOffer(env, execution.context);
+
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe(
+        "A live stream is already active for this user",
+      );
+      expect(
+        notificationsMocks.sendLiveStartedNotification,
+      ).not.toHaveBeenCalled();
+      expect(execution.waitUntilPromises).toHaveLength(0);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "ingest.concurrent_ingest_rejected",
+          sessionId: "new-session",
+          userId: "user-1",
+        }),
+      );
+    },
+  );
 
   it("does not schedule a notification when persisting the live row fails", async () => {
     const env = createBindings();

@@ -113,6 +113,10 @@ user/session, such as ingest start or playback start.
   its row and notification removed, and a new broadcast starts.
 - If the stored session is still active, the second ingest is rejected. Only
   that user's stored SFU session is checked.
+- If a concurrent ingest for the same owner created or resumed the row while
+  this one was negotiated, this one is rejected the same way instead of
+  failing on the primary key. Only the ingest that owns the row notifies, and
+  the rejected ingest's Calls session is left for Calls to clean up.
 
 `DELETE /ingest/:userId/:sessionId` cannot tell an intentional stop from a
 reconnect, because OBS sends DELETE before every reconnect, including the

@@ -123,26 +123,31 @@ function parseNotificationMessageId(value: string | null): bigint | null {
   return value === null ? null : BigInt(value);
 }
 
-/** Starts a new broadcast and returns its id. */
+/**
+ * Starts a new broadcast and returns its id, or null when the owner already
+ * has a live row, for example because a concurrent ingest created or resumed
+ * it first.
+ */
 export async function insertLive(
   database: D1Database,
   userId: string,
   sessionId: string,
   tracks: StoredTrack[],
-): Promise<string> {
+): Promise<string | null> {
   const broadcastId = crypto.randomUUID();
   const tracksJson = JSON.stringify(tracks);
-  // Do not upsert here. A concurrent second ingest should fail closed instead of
-  // replacing the existing live row with a later session. Reconnects resume the
-  // row through resumeLive, and stale rows are ended before inserting.
-  await database
+  // Do not upsert here. A concurrent second ingest must fail closed instead of
+  // replacing the existing live row with a later session and notifying again.
+  // Reconnects resume the row through resumeLive, and stale rows are ended
+  // before inserting.
+  const result = await database
     .prepare(
-      "INSERT INTO lives (user_id, broadcast_id, session_id, tracks_json) VALUES (?, ?, ?, ?)",
+      "INSERT INTO lives (user_id, broadcast_id, session_id, tracks_json) VALUES (?, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING",
     )
     .bind(userId, broadcastId, sessionId, tracksJson)
     .run();
 
-  return broadcastId;
+  return result.meta.changes > 0 ? broadcastId : null;
 }
 
 export async function getLive(

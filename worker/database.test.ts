@@ -147,7 +147,7 @@ describe("D1 database helpers", () => {
 
     expect(broadcastId).toMatch(/^[0-9a-f-]{36}$/u);
     expect(prepare).toHaveBeenCalledWith(
-      "INSERT INTO lives (user_id, broadcast_id, session_id, tracks_json) VALUES (?, ?, ?, ?)",
+      "INSERT INTO lives (user_id, broadcast_id, session_id, tracks_json) VALUES (?, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING",
     );
     expect(statement.bind).toHaveBeenCalledWith(
       "user-1",
@@ -155,6 +155,15 @@ describe("D1 database helpers", () => {
       "session-1",
       JSON.stringify(storedTracks),
     );
+  });
+
+  it("does not start a broadcast when the owner already has a live row", async () => {
+    const { database, statement } = createDatabase();
+    statement.run.mockResolvedValue({ meta: { changes: 0 } });
+
+    await expect(
+      insertLive(database, "user-1", "session-1", [...storedTracks]),
+    ).resolves.toBeNull();
   });
 
   it.each([
