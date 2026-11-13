@@ -18,7 +18,7 @@ function AuthErrorScreen({ message }: Readonly<{ message: string }>) {
       <p className={centeredCardBodyClasses}>
         認証状態の確認中にエラーが発生しました。
       </p>
-      <p className="mt-2 text-sm leading-6 break-words text-slate-400">
+      <p className="mt-2 text-sm leading-6 wrap-break-word text-slate-400">
         {message}
       </p>
       <button

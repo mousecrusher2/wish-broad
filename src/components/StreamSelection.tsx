@@ -91,7 +91,7 @@ export function StreamSelection({
 
         <div className={`h-72 overflow-hidden ${insetClasses}`}>
           {streams.length > 0 ? (
-            <div className="h-full [scrollbar-width:thin] space-y-2 overflow-y-auto p-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/15 hover:[&::-webkit-scrollbar-thumb]:bg-white/25 [&::-webkit-scrollbar-track]:bg-transparent">
+            <div className="h-full scrollbar-thin space-y-2 overflow-y-auto p-2 [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/15 hover:[&::-webkit-scrollbar-thumb]:bg-white/25 [&::-webkit-scrollbar-track]:bg-transparent">
               {streams.map((stream) => {
                 const isSelected = resource === stream.owner.userId;
 
@@ -115,7 +115,7 @@ export function StreamSelection({
                       }}
                       className={radioClasses}
                     />
-                    <span className="min-w-0 text-[15px] leading-5 font-medium break-words text-slate-100">
+                    <span className="min-w-0 text-[15px] leading-5 font-medium wrap-break-word text-slate-100">
                       {stream.owner.displayName}
                     </span>
                   </label>
