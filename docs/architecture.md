@@ -149,7 +149,11 @@ removed them.
 
 Playback DELETE requests close only the track mids embedded in the WHEP session
 URL returned by the Worker. The frontend must use that returned `Location`
-instead of reconstructing a session URL from D1 data.
+instead of reconstructing a session URL from D1 data. Session IDs are not tied
+to the viewer, because only the viewer that created a playback session learns
+its ID. The Worker does reject IDs with characters other than
+`[0-9A-Za-z_-]` on playback DELETE and PATCH, because it embeds the decoded ID
+in a Calls API URL.
 
 The frontend also waits for an in-flight WHEP registration to resolve during
 cleanup. A viewer can disconnect while `POST /play/:userId` is still in flight;

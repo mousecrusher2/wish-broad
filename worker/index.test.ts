@@ -2771,6 +2771,46 @@ describe("worker app", () => {
     expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
+  it("rejects WHEP session requests whose session id is not URL-safe", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    // Hono decodes %2F and %3F in the parameter, so without the check this
+    // would rewrite the Calls API URL to another path.
+    const sessionUrl = "http://localhost/play/streamer-1/..%2F..%2Fother%3F";
+
+    const deleteResponse = await app.fetch(
+      new Request(`${sessionUrl}?mid=0`, {
+        headers: {
+          Cookie: await createAuthCookie(env),
+          Origin: "http://localhost",
+        },
+        method: "DELETE",
+      }),
+      env,
+      execution.context,
+    );
+    const patchResponse = await app.fetch(
+      new Request(sessionUrl, {
+        body: "viewer-answer",
+        headers: {
+          Cookie: await createAuthCookie(env),
+          "Content-Type": "application/sdp",
+        },
+        method: "PATCH",
+      }),
+      env,
+      execution.context,
+    );
+
+    expect(deleteResponse.status).toBe(400);
+    expect(await deleteResponse.text()).toBe("Invalid WHEP session ID");
+    expect(patchResponse.status).toBe(400);
+    expect(await patchResponse.text()).toBe("Invalid WHEP session ID");
+    expect(execution.waitUntilPromises).toHaveLength(0);
+    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
+    expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
+  });
+
   it("trims and deduplicates requested WHEP track mids", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();

@@ -82,6 +82,13 @@ function getRequestedTrackMids(requestUrl: string): string[] {
   return [...new Set(normalizedMids)];
 }
 
+// Calls session ids are opaque URL-safe tokens. The WHEP session routes embed
+// the decoded path parameter in a Calls API URL, so reject anything else, such
+// as a decoded "/" or "?", instead of letting it rewrite that URL.
+function isCallsSessionId(sessionId: string): boolean {
+  return /^[0-9A-Za-z_-]+$/u.test(sessionId);
+}
+
 function createWhepCloseTracks(
   sessionId: string,
   mids: string[],
@@ -645,6 +652,9 @@ app.get("/play/:userId/:sessionId", async () => {
 app
   .delete("/play/:userId/:sessionId", async (c) => {
     const { sessionId } = c.req.param();
+    if (!isCallsSessionId(sessionId)) {
+      return c.text("Invalid WHEP session ID", 400);
+    }
     const mids = getRequestedTrackMids(c.req.url);
     if (mids.length === 0) {
       return c.text("WHEP session track mids are required", 400);
@@ -662,6 +672,9 @@ app
   }) // This PATCH submits the answer to a 406 counter-offer, not trickle ICE.
   .patch(async (c) => {
     const { sessionId } = c.req.param();
+    if (!isCallsSessionId(sessionId)) {
+      return c.text("Invalid WHEP session ID", 400);
+    }
 
     if (!isSdpContentType(c.req.header("content-type"))) {
       return c.text("Content-Type must be application/sdp", 415);
