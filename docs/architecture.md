@@ -8,25 +8,53 @@ interoperability.
 ## Runtime Model
 
 The Worker is treated as stateless request handling glue. Durable state that
-must survive requests lives in D1, while Cloudflare Realtime SFU (formerly
-Cloudflare Calls, hence the `CALLS_*` secret names) owns the actual media
-sessions and track state. Avoid designs that require the Worker to run timers,
-poll all active sessions, or keep long-lived in-memory state.
+must survive requests lives in one Durable Object, `LiveState`, while Cloudflare
+Realtime SFU (formerly Cloudflare Calls, hence the `CALLS_*` secret names) owns
+the actual media sessions and track state. Avoid designs that poll all active
+sessions or keep long-lived in-memory state.
+
+`LiveState` holds the broadcasts, publisher tokens, and users in its SQLite
+storage. Routes reach it through the RPC methods of `getLiveState(env)` in
+`worker/live-state.ts`. One object holds everything because `/api/lives` needs
+every broadcast together with its owner's name, and the load is a handful of
+short calls per viewer or publisher action. The class in `worker/main.ts` only
+delegates to `LiveStateCore` in `worker/live-state.ts`, which the Node-based
+tests run against Node's SQLite.
+
+A Durable Object is billed for the wall-clock time it spends running or
+awaiting, so `LiveState` must never call Realtime SFU, Discord, or any other
+external API, and must not await anything except its own storage and alarm
+calls. Each of its methods is one short storage transaction. The Worker
+makes the external calls between two of those methods and reports what it
+observed. When the object itself has to start external work, it calls the
+Worker's `LiveEffects` entrypoint through `ctx.exports`. That method returns at
+once and does the work in `waitUntil`, so the object is finished within
+milliseconds while the Worker waits for the external service.
 
 The one scheduled task is ending a broadcast once its OBS reconnect grace period
-passes (see Ingest Lifecycle). It runs as a Cloudflare Workflow instance
-(`LiveEndWorkflow`, exported from `worker/main.ts`) that sleeps until the
-deadline stored in D1, so nothing runs while no broadcast is waiting for OBS.
-The Workflow is only a trigger: `lives.grace_expires_at` is authoritative, and
-every request path treats a passed deadline as an ended broadcast, so a missed
-or failed Workflow only delays notification cleanup. A Durable Object alarm
-could replace it later without changing the row transitions; only
-`scheduleLiveEnd` and the Workflow body in `worker/live-end.ts` would move.
+passes (see Ingest Lifecycle). It is the object's alarm, which is set inside
+the transaction that makes the change it serves, so a deadline is never stored
+without its alarm. It is set only while a broadcast is waiting for OBS or a
+notification delete is pending, so nothing runs otherwise. The alarm is only a
+trigger: `lives.grace_expires_at` is authoritative, and every `LiveState`
+method first ends the broadcasts whose deadline passed, so a late alarm never
+lets a request see one.
 
-Durable Objects and WebSocket notifications are intentionally deferred. A future
-DO migration could centralize live state and per-room notifications, but until
-then the client and normal HTTP requests are the practical triggers for
-reconciliation.
+That transaction is `ctx.storage.transaction()`, and the choice rests on what
+the Durable Objects storage documentation states rather than on observed
+runtime behavior. With SQLite storage, every storage operation made on
+`ctx.storage` while the closure runs is part of the transaction, and alarm
+operations follow the same rules as other storage operations. A command that
+fails calls `rollback()`, the documented way to discard what it wrote.
+`transactionSync()` cannot hold the alarm: only synchronous storage operations
+are part of it, and the alarm calls return promises. It is used only for the
+schema migration in the constructor, which is SQL alone.
+
+The object checks notification ids and timestamps before writing them, using
+the same rules as its cleanup and alarm reads. It reads the scheduled alarm from
+storage when moving it, so a failed transaction or a restarted instance cannot
+leave an outdated in-memory alarm time. A live-end event is logged only after
+the transaction commits.
 
 ## Logging
 
@@ -41,18 +69,47 @@ available user/session identifiers; request correlation is left to Workers Logs.
 Warnings and errors include normalized error metadata, but raw bearer tokens,
 JWTs, authorization codes, cookies, and secrets must never be logged.
 
-## Schema Source
+## Storage Schema
 
-Treat `schema.sql` as the authoritative current D1 schema. Migration files are
-the deployment history and should be updated alongside `schema.sql`, but code and
-local reasoning should use `schema.sql` as the source of truth for current table
-shape.
+The tables live in the `LiveState` object's SQLite storage and are defined by
+`SCHEMA_MIGRATIONS` in `worker/database.ts`, which is the only description of
+their shape. Each entry is one schema version. The object applies the versions
+it has not recorded in `schema_migrations` when it starts, before it handles
+any call, so deploying the Worker is what migrates the storage. Append a new
+entry to change the schema; never edit one that has been deployed, because
+objects that already applied it would not run it again.
 
-Use `pnpm schema:check` to replay migrations into a temporary SQLite database and
-compare the resulting schema shape with `schema.sql`. The script requires the
-`sqlite3` CLI on `PATH`. This is a drift mitigation for migration authoring only.
-It cannot prove that data-copying migrations move or transform existing rows
-correctly.
+The Vitest suite runs the same statements against Node's SQLite
+(`worker/test-doubles.ts`), so a schema or query mistake fails `pnpm test`
+instead of surfacing after a deploy. It cannot prove that a data-copying
+migration moves or transforms existing rows correctly.
+
+## Cutover from D1
+
+Live state used to be stored in a D1 database (`broad-db`), with a Workflow
+(`whip-worker-live-end`) ending broadcasts. `LiveState` replaced both and
+starts empty: the D1 rows are deliberately not imported. They were reviewed
+before the switch and judged safe to drop, because each table is rebuilt by
+normal use. The deploy that makes the switch has these effects:
+
+- `live_tokens`: every publisher token stops working. OBS gets 401 from
+  `/ingest/:userId` until its publisher creates a new token on the site and
+  enters it in OBS.
+- `users`: a user is stored again at their next login. Someone still signed in
+  from before the switch can create a token and broadcast, but that broadcast
+  is not listed in `/api/lives` until they log in again. The auth cookie lasts
+  one day, so this ends by itself.
+- `lives`: a broadcast running during the deploy is no longer known. It
+  disappears from `/api/lives`, viewers get 404, and its start notification
+  stays in Discord because the message id is gone with the row. Deploy while
+  nobody is broadcasting. Otherwise the publisher has to start the stream
+  again, and the old notification has to be deleted by hand.
+
+The deploy does not remove the old resources, and nothing reads them
+afterwards. Workflow instances that were sleeping through a grace period no
+longer have a class to run. Once the switch is confirmed, delete both with
+`wrangler workflows delete whip-worker-live-end` and
+`wrangler d1 delete broad-db`.
 
 ## Auth and Tokens
 
@@ -76,8 +133,9 @@ shell can appear before every preload has finished without issuing duplicate
 requests.
 
 Publish credentials are separate from viewer auth. OBS uses a bearer live token,
-while viewers use the JWT cookie. Live tokens are shown only when created; D1
-stores an HMAC of the token with `LIVE_TOKEN_PEPPER`, not the raw bearer token.
+while viewers use the JWT cookie. Live tokens are shown only when created; the
+live state stores an HMAC of the token with `LIVE_TOKEN_PEPPER`, not the raw
+bearer token.
 
 ## Live Row Semantics
 
@@ -89,13 +147,16 @@ reusing stale locators. `grace_expires_at` is `NULL` while that ingest session
 is live and holds the reconnect deadline (Unix epoch milliseconds) after OBS
 sent DELETE.
 
-Row transitions are compare-and-set statements on the observed `session_id`
-and `grace_expires_at` rather than read-modify-write sequences. D1 offers no
-per-row lock, and a delayed request or Workflow must never end a broadcast that
-has since resumed or entered a new grace period. Resuming changes `session_id`,
-which is what turns an already scheduled end into a no-op.
+Each `LiveState` method runs alone and in one transaction, so transitions
+never interleave inside the object. The Worker's Calls requests still happen
+between two methods, though: it reads the row, asks Calls about the session,
+and then asks the object to act on the answer. Those transitions are therefore
+compare-and-set statements on the `session_id` and `grace_expires_at` the
+Worker observed, so a delayed request never ends a broadcast that has since
+resumed or entered a grace period. Resuming changes `session_id`, which is what
+turns a stale end into a no-op.
 
-The Worker does not try to keep the D1 live list perfectly synchronized with the
+The Worker does not try to keep the live list perfectly synchronized with the
 SFU. Full synchronization would require polling every live session, which is too
 expensive for `/api/lives` and does not fit the stateless Worker model. Instead,
 the code performs targeted SFU checks when an operation already names a specific
@@ -112,9 +173,11 @@ user/session, such as ingest start or playback start.
   network without sending DELETE) but a request saw it active within the last
   60 seconds, OBS is reconnecting, so the new session resumes the broadcast the
   same way.
-- If the grace period already passed, or the stored session is no longer active
-  and was not seen active recently, that broadcast is ended, with its row and
-  notification removed, and a new broadcast starts.
+- If the stored session is no longer active and was not seen active recently,
+  that broadcast is ended, with its row removed and its notification queued for
+  deletion, and a new broadcast starts.
+- If the grace period already passed, the live state ended the broadcast before
+  the ingest could see it, so a new broadcast starts.
 - If the stored session is still active, the second ingest is rejected. Only
   that user's stored SFU session is checked.
 - If a concurrent ingest for the same owner created or resumed the row while
@@ -127,17 +190,18 @@ reconnect, because OBS sends DELETE before every reconnect, including the
 frequent ones caused by unstable WHIP connections. Removing the broadcast here
 would delete and re-post the Discord notification on every reconnect, so DELETE
 starts a 60-second grace period instead. It closes the ingest tracks, keeps the
-row and the start notification, and schedules the live-end Workflow for the
-deadline. If no ingest resumed the broadcast by then, the Workflow removes the
-row and deletes the notification. The cost is that a deliberate stop removes
-the notification about a minute late. A repeated DELETE for the same session is
-accepted without starting another grace period.
+row and the start notification, and sets the live state's alarm for the
+deadline. If no ingest resumed the broadcast by then, the live state removes
+the row and has the Worker delete the notification (see Notifications). The
+cost is that a deliberate stop removes the notification about a minute late. A
+repeated DELETE for the same session is accepted without starting another grace
+period.
 
 OBS still sends DELETE when its window is closed; only crashes and network loss
-skip it. Those are not polled for, because checking the SFU throughout every
-broadcast would spend Workflow steps or requests on a rare case. They are
-detected when the next ingest or playback request for that owner finds the
-stored session inactive, which Calls reports once it garbage-collects the
+skip it. Those are not polled for: the live state must not call the SFU, and
+checking it throughout every broadcast would spend requests on a rare case.
+They are detected when the next ingest or playback request for that owner finds
+the stored session inactive, which Calls reports once it garbage-collects the
 session about 30 seconds after losing it.
 
 Without DELETE, the Worker cannot tell when the session was lost, so it cannot
@@ -163,10 +227,12 @@ nobody was watching, the next ingest starts a new broadcast with a new
 notification. That is accepted so that a broadcast started much later is never
 silently resumed without a notification.
 
-The activity record is written at most every 10 seconds per session. D1 counts
-no rows written for an `UPDATE` whose `WHERE` matches nothing, so the throttle
-lives in SQL and a skipped write costs one row read. The record is
-best-effort; without it, a lost session ends the broadcast as before.
+The activity record is written at most every 10 seconds per session. The
+Worker already holds the row it just read, so it skips the call to the live
+state while the record is fresh; a viewer joining a healthy stream then costs
+the object one call instead of two. The `UPDATE` repeats the check for requests
+that raced each other. The record is best-effort; without it, a lost session
+ends the broadcast as before.
 
 ## Playback Lifecycle
 
@@ -182,15 +248,15 @@ finds the stored session inactive but cannot end the row because it changed in
 the meantime (OBS sent DELETE or resumed), it also answers 503 so the viewer
 retries against the new state. A session that was lost just now starts a short
 grace period instead of ending the broadcast, as described under Ingest
-Lifecycle. `/api/lives` keeps listing broadcasts in their
-grace period and hides ones whose deadline passed, even before the Workflow
-removed them.
+Lifecycle. `/api/lives` keeps listing broadcasts in their grace period. One
+whose deadline passed is never listed, even when the alarm is late, because the
+live state ends overdue broadcasts before it answers any call.
 
 Playback DELETE requests close only the track mids embedded in the WHEP session
 URL returned by the Worker. The frontend must use that returned `Location`
-instead of reconstructing a session URL from D1 data. Session IDs are not tied
-to the viewer, because only the viewer that created a playback session learns
-its ID. The Worker does reject IDs with characters other than
+instead of reconstructing a session URL from stored data. Session IDs are not
+tied to the viewer, because only the viewer that created a playback session
+learns its ID. The Worker does reject IDs with characters other than
 `[0-9A-Za-z_-]` on playback DELETE and PATCH, because it embeds the decoded ID
 in a Calls API URL.
 
@@ -246,8 +312,9 @@ even on an initial load; a 404 means the broadcast has ended, so playback ends
 at once. Because the server decides, retries use a fixed interval instead of
 backing off.
 
-The Worker answers 404 once the grace period has passed even if the scheduled
-end never ran, so the client normally learns the end from the server. The
+The Worker answers 404 once the grace period has passed even if the alarm that
+ends the broadcast is late, so the client normally learns the end from the
+server. The
 client still gives up after a fixed window (75 seconds) as a safety net, so a
 server that keeps failing or answering 503 is not polled forever. The window
 must outlast the Worker's 60-second publisher reconnect grace period, because
@@ -284,17 +351,44 @@ Discord live-start notifications are best-effort. The Worker asks Discord to
 return the created message id so the message can be deleted when the broadcast
 ends. The id is stored by `broadcast_id`, not by ingest session, so a reconnect
 while the notification is still being sent does not orphan it. Message ids are
-64-bit snowflakes; D1 cannot bind JavaScript `bigint` values and would read an
-`INTEGER` back as a lossy `number`, so the id is stored as decimal text.
+64-bit snowflakes that do not fit in a JavaScript `number`, so the id is stored,
+and passed between the Worker and the live state, as decimal text.
+
+Deleting the notification is the one external call the live state starts, and
+it cannot make that call itself (see Runtime Model). Ending a broadcast
+therefore moves its message id into the `notification_deletes` outbox in the
+same transaction that removes the row. The alarm leases every due entry and
+hands the batch to the Worker's `LiveEffects.deleteStartNotifications`, which
+returns at once and deletes the messages in `waitUntil`. The Worker then
+reports the finished deletes back (`settleNotificationDeletes`) and the object
+drops them. A delete is finished when Discord deleted the message or when
+trying again cannot succeed, such as for a message that was already deleted.
+
+A delete that failed with a network error, timeout, 429, or 5xx is not
+reported, so its lease expires and the alarm hands it out again. Leases start
+at 30 seconds, which covers the time a Worker's `waitUntil` may run, and double
+on every attempt, which puts the six attempts within about 15 minutes. If the
+last one does not finish the delete within 30 seconds, the entry is dropped
+with a `live_notification.delete_abandoned` warning and the message stays in
+Discord. The outbox is at-least-once, so a message can be deleted twice;
+Discord answers the second attempt with 404, which finishes it.
+
+A broadcast that ends because a request found its session inactive queues its
+delete the same way, due at once, so the alarm set by that same call hands it
+out right away. If the notification id arrives after its broadcast ended, the
+live state queues it for deletion instead of storing it. If the call that
+stores the id fails with a transient Durable Object error, the Worker retries
+once on a new stub. The method is safe to repeat with the same id. If storing
+still fails, the Worker cannot know whether the id was stored, so it deletes
+the message itself.
 
 Notification send/delete failures are logged but do not block ingest or
-playback cleanup. The live-end Workflow lets Workflows retry a delete that
-failed with a network error, timeout, 429, or 5xx; other failures, such as a
-message that was already deleted, are logged once.
+playback cleanup.
 
 ## Deferred Work
 
-Do not add SSE for live state updates. Durable Objects cannot hibernate while
-holding SSE connections, and the current design avoids long-lived server state.
-If live-state push becomes necessary, revisit it together with a DO/WebSocket
-state model.
+Pushing live-state updates to clients is intentionally deferred; the client and
+normal HTTP requests remain the triggers for reconciliation. Do not add SSE for
+it. A Durable Object cannot hibernate while holding SSE connections, so
+`LiveState` would be billed for as long as anyone has the page open. If
+live-state push becomes necessary, revisit it with hibernatable WebSockets.

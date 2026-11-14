@@ -1,13 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordWebhookError } from "./notifications";
+import { createUnusedLiveStateNamespace } from "./test-doubles";
 
 const mocks = vi.hoisted(() => ({
   deleteLiveStartedNotification: vi.fn<() => Promise<unknown>>(),
-  endLive:
-    vi.fn<() => Promise<{ notificationMessageId: bigint | null } | null>>(),
+  settleNotificationDeletes: vi.fn<(messageIds: string[]) => Promise<void>>(),
 }));
 
-vi.mock("./database", () => ({ endLive: mocks.endLive }));
+vi.mock("./live-state", () => ({
+  getLiveState: () => ({
+    settleNotificationDeletes: mocks.settleNotificationDeletes,
+  }),
+}));
 vi.mock("./notifications", async () => ({
   ...(await vi.importActual<typeof import("./notifications")>(
     "./notifications",
@@ -15,64 +19,15 @@ vi.mock("./notifications", async () => ({
   deleteLiveStartedNotification: mocks.deleteLiveStartedNotification,
 }));
 
-import {
-  LIVE_RECONNECT_GRACE_MS,
-  type LiveEndParams,
-  runLiveEnd,
-  scheduleLiveEnd,
-} from "./live-end";
-
-const params = {
-  graceExpiresAt: 1_700_000_060_000,
-  sessionId: "session-1",
-  userId: "user-1",
-};
-
-function failUnexpectedAccess(): never {
-  throw new Error("Unexpected access in tests");
-}
+import { LIVE_RECONNECT_GRACE_MS, runNotificationDeletes } from "./live-end";
 
 function createEnv() {
   return {
-    // endLive is mocked, so the database itself is never touched.
-    // oxlint-disable-next-line typescript/consistent-type-assertions, typescript/no-unsafe-type-assertion -- An opaque handle passed through to the mocked endLive.
-    LIVE_DB: {} as D1Database,
+    ENVIRONMENT: "production",
+    LIVE_STATE: createUnusedLiveStateNamespace(),
     LOG_LEVEL: "info",
     NOTIFICATIONS_DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/1/t",
   };
-}
-
-function createWorkflowInstance(): WorkflowInstance {
-  return {
-    delete: failUnexpectedAccess,
-    id: "instance-1",
-    pause: failUnexpectedAccess,
-    restart: failUnexpectedAccess,
-    resume: failUnexpectedAccess,
-    sendEvent: failUnexpectedAccess,
-    status: failUnexpectedAccess,
-    subscribe: failUnexpectedAccess,
-    terminate: failUnexpectedAccess,
-  };
-}
-
-// Mirrors Workflows: each step runs its callback once and records the result,
-// and a throwing callback rejects the step after its retries are exhausted.
-function createStep() {
-  const calls: string[] = [];
-  const step = {
-    async do<T extends string | null>(
-      name: string,
-      callback: () => Promise<T>,
-    ): Promise<T> {
-      calls.push(`do:${name}`);
-      return callback();
-    },
-    async sleepUntil(name: string, timestamp: number): Promise<void> {
-      calls.push(`sleepUntil:${name}:${String(timestamp)}`);
-    },
-  };
-  return { calls, step };
 }
 
 function discordError(status: number): DiscordWebhookError {
@@ -83,12 +38,12 @@ function discordError(status: number): DiscordWebhookError {
   });
 }
 
-describe("live end workflow", () => {
+describe("live end", () => {
   beforeEach(() => {
-    mocks.endLive.mockReset();
     mocks.deleteLiveStartedNotification.mockReset();
     mocks.deleteLiveStartedNotification.mockResolvedValue(undefined);
-    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    mocks.settleNotificationDeletes.mockReset();
+    mocks.settleNotificationDeletes.mockResolvedValue();
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
 
@@ -96,126 +51,116 @@ describe("live end workflow", () => {
     expect(LIVE_RECONNECT_GRACE_MS).toBe(60_000);
   });
 
-  it("schedules one Workflow instance with the grace parameters", async () => {
-    const create =
-      vi.fn<
-        (
-          options?: WorkflowInstanceCreateOptions<LiveEndParams>,
-        ) => Promise<WorkflowInstance>
-      >();
-    create.mockResolvedValue(createWorkflowInstance());
-
-    await scheduleLiveEnd(
-      {
-        LIVE_END_WORKFLOW: {
-          create,
-          createBatch: failUnexpectedAccess,
-          deleteBatch: failUnexpectedAccess,
-          get: failUnexpectedAccess,
-        },
-      },
-      params,
-    );
-
-    expect(create).toHaveBeenCalledExactlyOnceWith({ params });
-  });
-
-  it("ends the live after the grace deadline and deletes its notification", async () => {
+  it("deletes each notification and reports them as finished", async () => {
     const env = createEnv();
-    const { calls, step } = createStep();
-    mocks.endLive.mockResolvedValue({
-      notificationMessageId: 1_300_000_000_000_000_123n,
-    });
 
-    await runLiveEnd(env, params, step);
-
-    expect(calls).toEqual([
-      "sleepUntil:wait for the publisher to reconnect:1700000060000",
-      "do:end the live",
-      "do:delete the start notification",
+    await runNotificationDeletes(env, [
+      // Larger than Number.MAX_SAFE_INTEGER, like real Discord snowflakes.
+      { messageId: "1300000000000000123", userId: "user-1" },
+      { messageId: "9", userId: "user-2" },
     ]);
-    expect(mocks.endLive).toHaveBeenCalledWith(env.LIVE_DB, params);
+
     expect(mocks.deleteLiveStartedNotification).toHaveBeenCalledWith(
       env,
       1_300_000_000_000_000_123n,
     );
-    expect(console.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "live.ended",
-        reason: "reconnect_grace_expired",
-        sessionId: "session-1",
-        userId: "user-1",
-      }),
-    );
-  });
-
-  it("does nothing more when the publisher resumed the broadcast", async () => {
-    const { calls, step } = createStep();
-    mocks.endLive.mockResolvedValue(null);
-
-    await runLiveEnd(createEnv(), params, step);
-
-    expect(calls).toEqual([
-      "sleepUntil:wait for the publisher to reconnect:1700000060000",
-      "do:end the live",
+    expect(mocks.deleteLiveStartedNotification).toHaveBeenCalledWith(env, 9n);
+    expect(mocks.settleNotificationDeletes).toHaveBeenCalledExactlyOnceWith([
+      "1300000000000000123",
+      "9",
     ]);
-    expect(mocks.deleteLiveStartedNotification).not.toHaveBeenCalled();
-    expect(console.info).not.toHaveBeenCalled();
-  });
-
-  it("skips notification cleanup when the broadcast never stored one", async () => {
-    const { calls, step } = createStep();
-    mocks.endLive.mockResolvedValue({ notificationMessageId: null });
-
-    await runLiveEnd(createEnv(), params, step);
-
-    expect(calls).toEqual([
-      "sleepUntil:wait for the publisher to reconnect:1700000060000",
-      "do:end the live",
-    ]);
-    expect(mocks.deleteLiveStartedNotification).not.toHaveBeenCalled();
+    expect(console.warn).not.toHaveBeenCalled();
   });
 
   it.each([429, 500, 503])(
-    "lets Workflows retry a notification delete that failed with %i",
+    "leaves a delete that failed with %i for a later attempt",
     async (status) => {
-      const { step } = createStep();
-      const doSpy = vi.spyOn(step, "do");
-      mocks.endLive.mockResolvedValue({ notificationMessageId: 9n });
       mocks.deleteLiveStartedNotification.mockRejectedValue(
         discordError(status),
       );
 
-      await runLiveEnd(createEnv(), params, step);
+      await runNotificationDeletes(createEnv(), [
+        { messageId: "9", userId: "user-1" },
+      ]);
 
-      await expect(doSpy.mock.results[1]?.value).rejects.toBeInstanceOf(
-        DiscordWebhookError,
-      );
+      expect(mocks.settleNotificationDeletes).not.toHaveBeenCalled();
       expect(console.warn).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           event: "live_notification.delete_failed",
           messageId: "9",
-          sessionId: "session-1",
           userId: "user-1",
+          willRetry: true,
         }),
       );
     },
   );
 
-  it("gives up without retrying when Discord rejects the delete", async () => {
-    const { step } = createStep();
-    const doSpy = vi.spyOn(step, "do");
-    mocks.endLive.mockResolvedValue({ notificationMessageId: 9n });
+  it("leaves a delete that timed out for a later attempt", async () => {
+    mocks.deleteLiveStartedNotification.mockRejectedValue(
+      new DiscordWebhookError("Discord webhook request timed out", {
+        endpoint: "https://discord.com/api/webhooks/1/t/messages/9",
+        kind: "request_timeout",
+      }),
+    );
+
+    await runNotificationDeletes(createEnv(), [
+      { messageId: "9", userId: "user-1" },
+    ]);
+
+    expect(mocks.settleNotificationDeletes).not.toHaveBeenCalled();
+  });
+
+  it("finishes a delete that Discord rejects, without another attempt", async () => {
     mocks.deleteLiveStartedNotification.mockRejectedValue(discordError(404));
 
-    await runLiveEnd(createEnv(), params, step);
+    await runNotificationDeletes(createEnv(), [
+      { messageId: "9", userId: "user-1" },
+    ]);
 
-    await expect(doSpy.mock.results[1]?.value).resolves.toBe("failed");
+    expect(mocks.settleNotificationDeletes).toHaveBeenCalledExactlyOnceWith([
+      "9",
+    ]);
     expect(console.warn).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         endpoint: "https://discord.com/api/webhooks/1/[redacted]/messages/9",
         event: "live_notification.delete_failed",
         messageId: "9",
+        willRetry: false,
+      }),
+    );
+  });
+
+  it("reports only the deletes that finished", async () => {
+    mocks.deleteLiveStartedNotification
+      .mockRejectedValueOnce(discordError(503))
+      .mockResolvedValueOnce(undefined);
+
+    await runNotificationDeletes(createEnv(), [
+      { messageId: "8", userId: "user-1" },
+      { messageId: "9", userId: "user-2" },
+    ]);
+
+    expect(mocks.settleNotificationDeletes).toHaveBeenCalledExactlyOnceWith([
+      "9",
+    ]);
+  });
+
+  it("logs instead of throwing when the result cannot be reported", async () => {
+    mocks.settleNotificationDeletes.mockRejectedValue(
+      new Error("live state unavailable"),
+    );
+
+    await expect(
+      runNotificationDeletes(createEnv(), [
+        { messageId: "9", userId: "user-1" },
+      ]),
+    ).resolves.toBeUndefined();
+
+    expect(console.warn).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        errorMessage: "live state unavailable",
+        event: "live_notification.settle_failed",
+        messageIds: ["9"],
       }),
     );
   });

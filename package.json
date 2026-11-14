@@ -19,7 +19,6 @@
     "check:unused-exports": "knip --exports --no-progress",
     "lint": "oxlint --deny-warnings",
     "lint:fix": "oxlint --fix",
-    "schema:check": "node scripts/check-schema-from-migrations.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

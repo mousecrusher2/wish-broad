@@ -11,7 +11,7 @@ OBSはWHIPで配信し、認証済みユーザーはブラウザからアプリ�
 - WHIP ingest endpoint for OBS
 - Authenticated playback flow inspired by WHEP
 - Cloudflare Realtime SFU session management
-- D1-backed live stream and token state
+- Durable Object-backed live stream and token state
 - Authenticated TURN credential endpoint
 - Best-effort Discord live-start notifications, skippable per stream with
   `?notify=false` on the ingest URL
@@ -25,8 +25,7 @@ OBSはWHIPで配信し、認証済みユーザーはブラウザからアプリ�
 - Tailwind CSS v4
 - Hono
 - Cloudflare Workers
-- Cloudflare D1
-- Cloudflare Workflows
+- Cloudflare Durable Objects (SQLite storage and alarms)
 - Cloudflare Realtime SFU and TURN (formerly Calls)
 - SWR
 - Valibot
@@ -36,11 +35,10 @@ OBSはWHIPで配信し、認証済みユーザーはブラウザからアプリ�
 ## Requirements
 
 - Node.js and pnpm
-- Cloudflare account with Workers, D1, Workflows, Realtime SFU, and Realtime TURN access
+- Cloudflare account with Workers, Durable Objects, Realtime SFU, and Realtime TURN access
 - Discord application for OAuth
 - Discord guild used as the viewer allowlist
 - Discord webhook for live notifications
-- `sqlite3` CLI if you run schema drift checks
 
 ## Setup
 
@@ -98,14 +96,6 @@ pnpm run format:check
 pnpm build
 ```
 
-After editing D1 migrations or `schema.sql`, run:
-
-```sh
-pnpm schema:check
-```
-
-`schema.sql` is the authoritative current schema. Migrations in `migrations/` are deployment history and should stay aligned with it. `pnpm schema:check` only verifies schema shape; it cannot prove that data migration logic preserves existing data correctly.
-
 ## Deployment
 
 Build and deploy with Wrangler:
@@ -114,11 +104,13 @@ Build and deploy with Wrangler:
 pnpm deploy
 ```
 
-Production secrets must be configured in Cloudflare before deployment. The Worker expects the D1 binding named `LIVE_DB` and the required secrets listed above. Apply pending D1 migrations before deploying code that depends on them. The `LIVE_END_WORKFLOW` Workflow binding is created by `wrangler deploy` from `wrangler.jsonc`.
+Production secrets must be configured in Cloudflare before deployment. The `LIVE_STATE` Durable Object binding and its storage are created by `wrangler deploy` from `wrangler.jsonc`, and the object creates its own tables when it starts, so there is no database to create or migrate by hand.
+
+Deploying this version over one that still keeps its state in D1 drops that state: the Durable Object starts empty and the D1 rows are not imported. Read [Cutover from D1](docs/architecture.md#cutover-from-d1) before doing so; publishers have to create new live tokens afterwards.
 
 ## Architecture Notes
 
-The Worker is intentionally stateless. Durable state lives in D1, while media session state is owned by Cloudflare Realtime SFU. The app avoids designs that require Workers to run timers, poll all live sessions, or keep long-lived in-memory state. The one scheduled task is a Cloudflare Workflow that ends a broadcast once its 60-second OBS reconnect grace period passes; it only runs while a broadcast is waiting for OBS.
+The Worker is intentionally stateless. Durable state lives in the SQLite storage of one Durable Object (`LiveState`), while media session state is owned by Cloudflare Realtime SFU. The object only runs short transactions on its own storage: it never calls Realtime SFU, Discord, or any other external API, because it is billed for the time it spends waiting. The app avoids designs that poll all live sessions or keep long-lived in-memory state. The one scheduled task is the object's alarm, which ends a broadcast once its 60-second OBS reconnect grace period passes and hands the Discord cleanup to the Worker; it is only set while a broadcast is waiting for OBS or a notification is waiting to be deleted.
 
 Viewing is intentionally authenticated and app-specific. TURN discovery is provided through `/api/turn-credentials`, not generic WHEP `OPTIONS`/`Link` discovery. The playback client waits for local ICE gathering before POST/PATCH because the current SFU path is effectively non-trickle.
 

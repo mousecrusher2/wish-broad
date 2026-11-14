@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import { HonoBase } from "hono/hono-base";
 import { LinearRouter } from "hono/router/linear-router";
 import { JWTPayload, Bindings } from "./types";
-import * as db from "./database";
+import type { LiveRecord } from "./database";
 import {
   clearAuthCookie,
   completeDiscordLogin,
@@ -36,11 +36,8 @@ import {
   type TurnIceServer,
 } from "./turn";
 import { createErrorLogFields, logError, logInfo, logWarn } from "./logger";
-import {
-  LIVE_RECONNECT_GRACE_MS,
-  type LiveEndParams,
-  scheduleLiveEnd,
-} from "./live-end";
+import { LIVE_RECONNECT_GRACE_MS } from "./live-end";
+import { getLiveState, isTransientLiveStateError } from "./live-state";
 
 type AppEnv = {
   Bindings: Bindings;
@@ -65,6 +62,16 @@ const LIVE_SESSION_RECENTLY_ACTIVE_MS = 60_000;
 // Calls already waited about 30 seconds before garbage-collecting the session,
 // so this keeps the broadcast about as long as the grace period after DELETE.
 const LIVE_LOST_SESSION_GRACE_MS = 30_000;
+
+// Storing a start notification is tried this often when it fails for a
+// transient reason. Keep the runtime's own retries short for each attempt,
+// leaving time in waitUntil to delete the message if persistence never works.
+const NOTIFICATION_PERSIST_MAX_ATTEMPTS = 2;
+const NOTIFICATION_PERSIST_RETRY_DELAY_MS = 500;
+const NOTIFICATION_PERSIST_RPC_RETRY = {
+  maxRetries: 1,
+  timeoutMs: 5_000,
+};
 
 const app = new HonoBase<AppEnv>({ router: new LinearRouter() });
 
@@ -126,8 +133,9 @@ function scheduleTrackClose(
   failureLabel: string,
   errorLabel: string,
 ): void {
-  // Track close is cleanup only. D1 is already updated before this runs, so a
-  // transient Calls failure should not keep invalid track locators visible.
+  // Track close is cleanup only. The live row is already updated before this
+  // runs, so a transient Calls failure should not keep invalid track locators
+  // visible.
   c.executionCtx.waitUntil(
     closeTracks(c.env, sessionId, tracks).then(
       (response) => {
@@ -159,6 +167,55 @@ function scheduleTrackClose(
   );
 }
 
+async function wait(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+// Reports the start notification to the live state, which stores it on the
+// broadcast or, if the broadcast already ended, queues the Discord message for
+// deletion itself. Returns false, after logging why, when the live state could
+// not be told.
+async function persistLiveStartNotification(
+  c: Context<AppEnv>,
+  userId: string,
+  broadcastId: string,
+  sessionId: string,
+  messageId: string,
+): Promise<boolean> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      // A failed call can leave its stub broken, so each attempt gets its own.
+      // Repeating the call is safe: it stores the same id again.
+      // oxlint-disable-next-line no-await-in-loop -- An attempt follows the failure of the previous one.
+      await getLiveState(
+        c.env,
+        NOTIFICATION_PERSIST_RPC_RETRY,
+      ).setLiveNotificationMessageId(userId, broadcastId, messageId);
+      return true;
+    } catch (error: unknown) {
+      const willRetry =
+        attempt < NOTIFICATION_PERSIST_MAX_ATTEMPTS &&
+        isTransientLiveStateError(error);
+      logWarn(c.env, "live_notification.persist_failed", {
+        ...createErrorLogFields(error),
+        attempt,
+        messageId,
+        sessionId,
+        userId,
+        willRetry,
+      });
+      if (!willRetry) {
+        return false;
+      }
+    }
+
+    // oxlint-disable-next-line no-await-in-loop -- The next attempt waits for the failure to pass.
+    await wait(NOTIFICATION_PERSIST_RETRY_DELAY_MS);
+  }
+}
+
 // Runs in waitUntil after the ingest response, so every failure is logged here
 // instead of being thrown.
 async function sendLiveStartNotification(
@@ -180,30 +237,21 @@ async function sendLiveStartNotification(
     return;
   }
 
-  // Notifications are tied to the broadcast, which survives OBS reconnects. If
-  // it has already ended, delete the Discord message instead of leaving an
-  // orphan.
-  let saved = false;
-  try {
-    saved = await db.setLiveNotificationMessageId(
-      c.env.LIVE_DB,
+  // Notifications are tied to the broadcast, which survives OBS reconnects.
+  if (
+    await persistLiveStartNotification(
+      c,
       userId,
       broadcastId,
-      messageId,
-    );
-  } catch (error: unknown) {
-    logWarn(c.env, "live_notification.persist_failed", {
-      ...createErrorLogFields(error),
-      messageId: messageId.toString(),
       sessionId,
-      userId,
-    });
-  }
-
-  if (saved) {
+      messageId.toString(),
+    )
+  ) {
     return;
   }
 
+  // Whether the id was stored is unknown, so nothing may ever delete the
+  // message. Delete it now; a later delete of a stored id finds it gone.
   try {
     await deleteLiveStartedNotification(c.env, messageId);
   } catch (error: unknown) {
@@ -216,53 +264,7 @@ async function sendLiveStartNotification(
   }
 }
 
-function scheduleNotificationDelete(
-  c: Context<AppEnv>,
-  messageId: bigint,
-  fields: { sessionId: string; userId: string },
-): void {
-  c.executionCtx.waitUntil(
-    deleteLiveStartedNotification(c.env, messageId).catch((error: unknown) => {
-      logWarn(c.env, "live_notification.delete_failed", {
-        ...createErrorLogFields(error),
-        ...fields,
-        messageId: messageId.toString(),
-      });
-    }),
-  );
-}
-
-type LiveEndReason = "reconnect_grace_expired" | "session_inactive";
-
-// Ends the broadcast only if its row is still exactly as observed, then removes
-// its start notification. Returns false when a concurrent request changed the
-// row first, for example OBS starting a reconnect grace period or resuming.
-async function endObservedLive(
-  c: Context<AppEnv>,
-  live: db.LiveRecord,
-  reason: LiveEndReason,
-): Promise<boolean> {
-  const ended = await db.endLive(c.env.LIVE_DB, live);
-  if (ended === null) {
-    return false;
-  }
-
-  const fields = { sessionId: live.sessionId, userId: live.userId };
-  logInfo(c.env, "live.ended", { ...fields, reason });
-  if (ended.notificationMessageId !== null) {
-    scheduleNotificationDelete(c, ended.notificationMessageId, fields);
-  }
-  return true;
-}
-
-function isInReconnectGrace(live: db.LiveRecord, now: number): boolean {
-  return live.graceExpiresAt !== null && live.graceExpiresAt > now;
-}
-
-function wasSessionSeenActiveRecently(
-  live: db.LiveRecord,
-  now: number,
-): boolean {
+function wasSessionSeenActiveRecently(live: LiveRecord, now: number): boolean {
   return (
     live.sessionSeenActiveAt !== null &&
     now - live.sessionSeenActiveAt <= LIVE_SESSION_RECENTLY_ACTIVE_MS
@@ -273,16 +275,23 @@ function wasSessionSeenActiveRecently(
 // ends the broadcast at once instead of waiting for OBS to resume it.
 function recordLiveSessionSeenActive(
   c: Context<AppEnv>,
-  live: db.LiveRecord,
+  live: LiveRecord,
   now: number,
 ): void {
+  // Viewers joining a healthy stream mostly find a fresh record. Skipping the
+  // call here, not only the write, keeps them from waking the live state.
+  if (
+    live.sessionSeenActiveAt !== null &&
+    now - live.sessionSeenActiveAt < LIVE_SESSION_SEEN_ACTIVE_WRITE_INTERVAL_MS
+  ) {
+    return;
+  }
+
   c.executionCtx.waitUntil(
-    db
+    getLiveState(c.env)
       .markLiveSessionSeenActive(
-        c.env.LIVE_DB,
         live.userId,
         live.sessionId,
-        now,
         LIVE_SESSION_SEEN_ACTIVE_WRITE_INTERVAL_MS,
       )
       .catch((error: unknown) => {
@@ -295,51 +304,26 @@ function recordLiveSessionSeenActive(
   );
 }
 
-function scheduleReconnectGraceEnd(
-  c: Context<AppEnv>,
-  params: LiveEndParams,
-): void {
-  // If scheduling fails, requests that touch this owner end the broadcast
-  // after the deadline instead, and /api/lives already hides it.
-  c.executionCtx.waitUntil(
-    scheduleLiveEnd(c.env, params).catch((error: unknown) => {
-      logError(c.env, "live_end.schedule_failed", {
-        ...createErrorLogFields(error),
-        sessionId: params.sessionId,
-        userId: params.userId,
-      });
-    }),
-  );
-}
-
 // Calls garbage-collected the ingest session shortly after a request saw it
 // active, so OBS lost it just now without sending DELETE. Treat this like a
 // late DELETE: keep the broadcast and its notification for a short grace
 // period so that a reconnecting OBS resumes it instead of notifying again.
 async function startLostSessionGrace(
   c: Context<AppEnv>,
-  live: db.LiveRecord,
-  now: number,
+  live: LiveRecord,
 ): Promise<void> {
-  const graceExpiresAt = now + LIVE_LOST_SESSION_GRACE_MS;
   // If the row changed meanwhile (OBS sent DELETE or resumed), its new state
   // already decides what happens next.
-  const graceStarted = await db.startLiveReconnectGrace(
-    c.env.LIVE_DB,
+  const graceExpiresAt = await getLiveState(c.env).startLiveReconnectGrace(
     live.userId,
     live.sessionId,
-    graceExpiresAt,
+    LIVE_LOST_SESSION_GRACE_MS,
   );
-  if (!graceStarted) {
+  if (graceExpiresAt === null) {
     return;
   }
 
   logInfo(c.env, "live.session_lost", {
-    graceExpiresAt,
-    sessionId: live.sessionId,
-    userId: live.userId,
-  });
-  scheduleReconnectGraceEnd(c, {
     graceExpiresAt,
     sessionId: live.sessionId,
     userId: live.userId,
@@ -384,7 +368,7 @@ app.use(
     pepper: (c) => c.env.LIVE_TOKEN_PEPPER,
     token: (c) => {
       const { userId } = c.req.param();
-      return db.getLiveTokenHash(c.env.LIVE_DB, userId);
+      return getLiveState(c.env).getLiveTokenHash(userId);
     },
   }),
 );
@@ -394,7 +378,7 @@ app.use(
     pepper: (c) => c.env.LIVE_TOKEN_PEPPER,
     token: (c) => {
       const { userId } = c.req.param();
-      return db.getLiveTokenHash(c.env.LIVE_DB, userId);
+      return getLiveState(c.env).getLiveTokenHash(userId);
     },
   }),
 );
@@ -426,14 +410,14 @@ app.post("/ingest/:userId", async (c) => {
     return c.text("SDP offer is required", 400);
   }
 
-  let resumableLive: db.LiveRecord | null = null;
+  const liveState = getLiveState(c.env);
+  let resumableLive: LiveRecord | null = null;
   const now = Date.now();
-  const existingLive = await db.getLive(c.env.LIVE_DB, userId);
-  if (existingLive && isInReconnectGrace(existingLive, now)) {
+  // A broadcast whose grace period passed is already ended by the live state,
+  // so a stored grace deadline always means OBS may still resume.
+  const existingLive = await liveState.getLive(userId);
+  if (existingLive && existingLive.graceExpiresAt !== null) {
     resumableLive = existingLive;
-  } else if (existingLive && existingLive.graceExpiresAt !== null) {
-    // The grace period passed but its scheduled end has not run (yet).
-    await endObservedLive(c, existingLive, "reconnect_grace_expired");
   } else if (existingLive) {
     // Avoid global SFU sweeps in Workers. Only check the one row that blocks
     // this ingest attempt, which matters once Calls garbage-collected the
@@ -466,8 +450,9 @@ app.post("/ingest/:userId", async (c) => {
       resumableLive = existingLive;
     } else {
       // The session may have been lost long ago, for example days before an
-      // ingest that is meant as a new broadcast, so start one and notify.
-      await endObservedLive(c, existingLive, "session_inactive");
+      // ingest that is meant as a new broadcast, so start one and notify. If
+      // the row changed meanwhile, the insert below rejects this ingest.
+      await liveState.endLive(userId, existingLive.sessionId);
     }
   }
 
@@ -504,8 +489,7 @@ app.post("/ingest/:userId", async (c) => {
   // while keeping the broadcast and its start notification.
   if (
     resumableLive &&
-    (await db.resumeLive(
-      c.env.LIVE_DB,
+    (await liveState.resumeLive(
       userId,
       resumableLive.sessionId,
       result.sessionId,
@@ -526,8 +510,7 @@ app.post("/ingest/:userId", async (c) => {
 
   // Either there was nothing to resume, or the broadcast ended while this
   // session was negotiated; start a new broadcast.
-  const broadcastId = await db.insertLive(
-    c.env.LIVE_DB,
+  const broadcastId = await liveState.insertLive(
     userId,
     result.sessionId,
     result.tracks,
@@ -567,7 +550,8 @@ app.get("/ingest/:userId/:sessionId", async () => {
 app.delete("/ingest/:userId/:sessionId", async (c) => {
   const { userId, sessionId } = c.req.param();
 
-  const existingLive = await db.getLive(c.env.LIVE_DB, userId);
+  const liveState = getLiveState(c.env);
+  const existingLive = await liveState.getLive(userId);
   if (!existingLive) {
     return c.text("No live stream found for this user", 400);
   }
@@ -590,15 +574,13 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
 
   // OBS also sends DELETE right before it reconnects, which cannot be told
   // apart from stopping the stream. Keep the broadcast and its notification
-  // for a grace period; a Workflow ends it unless a new ingest resumes it.
-  const graceExpiresAt = Date.now() + LIVE_RECONNECT_GRACE_MS;
-  const graceStarted = await db.startLiveReconnectGrace(
-    c.env.LIVE_DB,
+  // for a grace period; the live state ends it unless a new ingest resumes it.
+  const graceExpiresAt = await liveState.startLiveReconnectGrace(
     userId,
     sessionId,
-    graceExpiresAt,
+    LIVE_RECONNECT_GRACE_MS,
   );
-  if (!graceStarted) {
+  if (graceExpiresAt === null) {
     return c.text("Failed to delete the requested live stream", 400);
   }
 
@@ -610,7 +592,6 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     `Failed to close live tracks for user ${userId}:`,
     `SFU reported track close errors for user ${userId}:`,
   );
-  scheduleReconnectGraceEnd(c, { graceExpiresAt, sessionId, userId });
 
   return c.text("OK", 200);
 });
@@ -657,28 +638,18 @@ app.post("/play/:userId", async (c) => {
   const jwtPayload = c.get("jwtPayload");
 
   const now = Date.now();
-  const liveTrackRecord = await db.getLive(c.env.LIVE_DB, userId);
+  const liveState = getLiveState(c.env);
+  const liveTrackRecord = await liveState.getLive(userId);
   const tracks = liveTrackRecord?.tracks ?? [];
-  if (liveTrackRecord && isInReconnectGrace(liveTrackRecord, now)) {
-    // The stored tracks were closed when OBS sent DELETE. Viewers retry until
-    // OBS resumes the broadcast or the grace period ends it.
-    return respondLiveReconnecting(c);
-  }
   if (liveTrackRecord && liveTrackRecord.graceExpiresAt !== null) {
-    // The grace period passed but its scheduled end has not run (yet). If the
-    // row changed meanwhile, OBS may have resumed just in time; let the viewer
-    // retry against the new state.
-    return (await endObservedLive(
-      c,
-      liveTrackRecord,
-      "reconnect_grace_expired",
-    ))
-      ? c.text(`Live stream not found: ${userId}`, 404)
-      : respondLiveReconnecting(c);
+    // The stored tracks were closed when OBS sent DELETE. Viewers retry until
+    // OBS resumes the broadcast or the grace period ends it, after which the
+    // live state no longer returns a row.
+    return respondLiveReconnecting(c);
   }
   if (liveTrackRecord) {
     // Playback names one live owner, so this is the cheapest safe point to
-    // reconcile stale D1 state with Calls without scanning every live row.
+    // reconcile stale live state with Calls without scanning every live row.
     let isActive: boolean;
     try {
       isActive = await isSessionActive(c.env, liveTrackRecord.sessionId);
@@ -695,12 +666,12 @@ app.post("/play/:userId", async (c) => {
     }
     if (!isActive) {
       if (wasSessionSeenActiveRecently(liveTrackRecord, now)) {
-        await startLostSessionGrace(c, liveTrackRecord, now);
+        await startLostSessionGrace(c, liveTrackRecord);
         return respondLiveReconnecting(c);
       }
       // If the row changed meanwhile (OBS sent DELETE or resumed), let the
       // viewer retry against the new state instead of reporting an end.
-      return (await endObservedLive(c, liveTrackRecord, "session_inactive"))
+      return (await liveState.endLive(userId, liveTrackRecord.sessionId))
         ? c.text(`Live stream not found: ${userId}`, 404)
         : respondLiveReconnecting(c);
     }
@@ -732,7 +703,7 @@ app.post("/play/:userId", async (c) => {
       if (liveTrackRecord) {
         // The ingest session was active when checked above, so Calls
         // garbage-collected it just now.
-        await startLostSessionGrace(c, liveTrackRecord, Date.now());
+        await startLostSessionGrace(c, liveTrackRecord);
         return respondLiveReconnecting(c);
       }
       return c.text(`Live stream not found: ${userId}`, 404);
@@ -887,7 +858,7 @@ app.get("/api/turn-credentials", async (c) => {
 });
 
 // Live tokens can be rotated at any time. Return the raw token only on creation;
-// D1 stores only the peppered HMAC.
+// only the peppered HMAC is stored.
 app.post("/api/me/livetoken", async (c) => {
   const jwtPayload = c.get("jwtPayload");
   const userId = jwtPayload.userId;
@@ -895,7 +866,7 @@ app.post("/api/me/livetoken", async (c) => {
   const tokenHash = await hashTokenWithPepper(c.env.LIVE_TOKEN_PEPPER, token);
 
   try {
-    await db.setLiveToken(c.env.LIVE_DB, userId, tokenHash);
+    await getLiveState(c.env).setLiveToken(userId, tokenHash);
   } catch (error: unknown) {
     logError(c.env, "live_token.save_failed", {
       ...createErrorLogFields(error),
@@ -916,7 +887,7 @@ app.get("/api/me/livetoken", async (c) => {
   const userId = jwtPayload.userId;
   let hasToken: boolean;
   try {
-    hasToken = await db.hasLiveToken(c.env.LIVE_DB, userId);
+    hasToken = await getLiveState(c.env).hasLiveToken(userId);
   } catch (error: unknown) {
     logError(c.env, "live_token.status_check_failed", {
       ...createErrorLogFields(error),
@@ -931,7 +902,7 @@ app.get("/api/me/livetoken", async (c) => {
 app.get("/api/lives", async (c) => {
   // Keep listing cheap: do not poll Calls for every live row here. Stale rows are
   // reconciled when a user tries to ingest or play the specific stream.
-  const lives = await db.getAllLives(c.env.LIVE_DB, Date.now());
+  const lives = await getLiveState(c.env).getAllLives();
   return c.json(lives);
 });
 
