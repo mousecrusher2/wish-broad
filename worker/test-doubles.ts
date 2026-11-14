@@ -8,6 +8,12 @@ import type { Bindings } from "./types";
  * A Durable Object's storage backed by an in-memory SQLite database, so that
  * the SQL in ./database runs against a real engine. `getAlarm` reports the
  * alarm the code under test left behind.
+ *
+ * `transaction` does what the Durable Objects storage documentation promises
+ * and no more: every operation made while its closure runs, alarm calls
+ * included, belongs to the transaction, and it is rolled back only when the
+ * closure calls `rollback()`. A closure that merely throws keeps what it
+ * wrote, so code that counts on an undocumented rollback fails its tests.
  */
 export function createTestStorage(): {
   getAlarm(): number | null;
@@ -30,6 +36,26 @@ export function createTestStorage(): {
           const rows = database.prepare(query).all(...bindings);
           return { toArray: () => rows };
         },
+      },
+      async transaction(closure) {
+        const alarmBefore = alarmAt;
+        const state = { isRolledBack: false };
+        database.exec("BEGIN");
+        try {
+          return await closure({
+            rollback() {
+              if (!state.isRolledBack) {
+                database.exec("ROLLBACK");
+                alarmAt = alarmBefore;
+                state.isRolledBack = true;
+              }
+            },
+          });
+        } finally {
+          if (!state.isRolledBack) {
+            database.exec("COMMIT");
+          }
+        }
       },
       transactionSync(closure) {
         database.exec("BEGIN");

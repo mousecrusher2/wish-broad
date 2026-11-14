@@ -308,6 +308,49 @@ describe("live state", () => {
     expect(testStorage.getAlarm()).toBe(NOW + GRACE_MS);
   });
 
+  it("does not store a deadline whose alarm could not be set", async () => {
+    const { core, testStorage } = createCore();
+    await core.insertLive("user-1", "session-1", []);
+    vi.spyOn(testStorage.storage, "setAlarm").mockRejectedValueOnce(
+      new Error("storage unavailable"),
+    );
+
+    await expect(
+      core.startLiveReconnectGrace("user-1", "session-1", GRACE_MS),
+    ).rejects.toThrow("storage unavailable");
+
+    // The alarm is set in the transaction that stores the deadline, so
+    // neither exists without the other.
+    await expect(core.getLive("user-1")).resolves.toMatchObject({
+      graceExpiresAt: null,
+    });
+    expect(testStorage.getAlarm()).toBeNull();
+
+    // The failed call is not remembered as done.
+    await expect(
+      core.startLiveReconnectGrace("user-1", "session-1", GRACE_MS),
+    ).resolves.toBe(NOW + GRACE_MS);
+    expect(testStorage.getAlarm()).toBe(NOW + GRACE_MS);
+  });
+
+  it("leaves nothing behind when a command fails halfway", async () => {
+    const { core, testStorage } = createCore();
+    await startNotifiedLive(core);
+    // Ending this broadcast deletes its row and then rejects the stored id.
+    testStorage.storage.sql.exec(
+      "UPDATE lives SET notification_message_id = 'not-an-id'",
+    );
+
+    await expect(core.endLive("user-1", "session-1")).rejects.toThrow(
+      "Invalid ended lives row",
+    );
+
+    await expect(core.getLive("user-1")).resolves.toMatchObject({
+      sessionId: "session-1",
+    });
+    expect(testStorage.getAlarm()).toBeNull();
+  });
+
   it("sets the alarm again after a restart only when work is pending", async () => {
     const testStorage = createTestStorage();
     const first = createCore(testStorage);

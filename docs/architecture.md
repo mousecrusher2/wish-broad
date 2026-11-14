@@ -24,7 +24,7 @@ tests run against Node's SQLite.
 A Durable Object is billed for the wall-clock time it spends running or
 awaiting, so `LiveState` must never call Realtime SFU, Discord, or any other
 external API, and must not await anything except its own storage and alarm
-calls. Each of its methods is synchronous SQL in one transaction. The Worker
+calls. Each of its methods is one short storage transaction. The Worker
 makes the external calls between two of those methods and reports what it
 observed. When the object itself has to start external work, it calls the
 Worker's `LiveEffects` entrypoint through `ctx.exports`. That method returns at
@@ -32,12 +32,23 @@ once and does the work in `waitUntil`, so the object is finished within
 milliseconds while the Worker waits for the external service.
 
 The one scheduled task is ending a broadcast once its OBS reconnect grace period
-passes (see Ingest Lifecycle). It is the object's alarm, which is set in the
-same commit as the change that needs it, and only while a broadcast is waiting
-for OBS or a notification delete is pending, so nothing runs otherwise. The
-alarm is only a trigger: `lives.grace_expires_at` is authoritative, and every
-`LiveState` method first ends the broadcasts whose deadline passed, so a late
-alarm never lets a request see one.
+passes (see Ingest Lifecycle). It is the object's alarm, which is set inside
+the transaction that makes the change it serves, so a deadline is never stored
+without its alarm. It is set only while a broadcast is waiting for OBS or a
+notification delete is pending, so nothing runs otherwise. The alarm is only a
+trigger: `lives.grace_expires_at` is authoritative, and every `LiveState`
+method first ends the broadcasts whose deadline passed, so a late alarm never
+lets a request see one.
+
+That transaction is `ctx.storage.transaction()`, and the choice rests on what
+the Durable Objects storage documentation states rather than on observed
+runtime behavior. With SQLite storage, every storage operation made on
+`ctx.storage` while the closure runs is part of the transaction, and alarm
+operations follow the same rules as other storage operations. A command that
+fails calls `rollback()`, the documented way to discard what it wrote.
+`transactionSync()` cannot hold the alarm: only synchronous storage operations
+are part of it, and the alarm calls return promises. It is used only for the
+schema migration in the constructor, which is SQL alone.
 
 ## Logging
 

@@ -3,10 +3,10 @@
 // period passes.
 //
 // The object is billed for the wall-clock time it spends running or awaiting,
-// so it only runs synchronous SQL and never calls Calls, Discord, or any other
-// external API. The Worker makes those calls and reports what happened. The one
-// thing the object starts by itself, deleting the start notification of a
-// broadcast that ended, is handed to the Worker through `dispatch` and
+// so it only works on its own storage and never calls Calls, Discord, or any
+// other external API. The Worker makes those calls and reports what happened.
+// The one thing the object starts by itself, deleting the start notification
+// of a broadcast that ended, is handed to the Worker through `dispatch` and
 // finishes there.
 import * as db from "./database";
 import { createErrorLogFields, logInfo, logWarn } from "./logger";
@@ -38,11 +38,22 @@ type LiveEndReason = "reconnect_grace_expired" | "session_inactive";
 
 type LiveStateEnv = Pick<Bindings, "ENVIRONMENT" | "LOG_LEVEL">;
 
-/** The part of a Durable Object's storage that LiveStateCore uses. */
+/**
+ * The part of a Durable Object's storage that LiveStateCore uses.
+ *
+ * Per the Durable Objects storage documentation, every storage operation made
+ * on the storage while a `transaction` closure runs is part of that
+ * transaction, and `rollback()` discards them. Alarm calls are storage
+ * operations too. `transactionSync` only covers synchronous operations, which
+ * leaves the alarm calls out.
+ */
 export type LiveStateStorage = {
   deleteAlarm(): Promise<void>;
   setAlarm(scheduledTime: number): Promise<void>;
   sql: db.Sql;
+  transaction<T>(
+    closure: (txn: { rollback(): void }) => Promise<T>,
+  ): Promise<T>;
   transactionSync<T>(closure: () => T): T;
 };
 
@@ -165,8 +176,8 @@ export class LiveStateCore {
 
   /**
    * Gives the publisher `graceMs` to reconnect before the broadcast ends, and
-   * sets the alarm that ends it in the same commit. Returns the deadline, or
-   * null when the row no longer holds `sessionId` outside a grace period.
+   * sets the alarm that ends it in the same transaction. Returns the deadline,
+   * or null when the row no longer holds `sessionId` outside a grace period.
    */
   async startLiveReconnectGrace(
     userId: string,
@@ -281,21 +292,36 @@ export class LiveStateCore {
   }
 
   /**
-   * Runs one command in a transaction, after ending the broadcasts whose grace
-   * period passed, and then moves the alarm to the next time state needs
-   * attention. Nothing is awaited between the SQL and the alarm call, so they
-   * commit together.
+   * Runs one command in a storage transaction, after ending the broadcasts
+   * whose grace period passed. The same transaction moves the alarm to the
+   * next time state needs attention, so a deadline or a notification delete is
+   * never stored without the alarm that acts on it. The closure awaits nothing
+   * but the alarm call.
    */
   async #run<T>(command: (now: number) => T): Promise<T> {
-    const result = this.#storage.transactionSync(() => {
-      const now = Date.now();
-      for (const ended of db.endOverdueLives(this.#storage.sql, now)) {
-        this.#finishEndedLive(ended, "reconnect_grace_expired", now);
-      }
-      return command(now);
-    });
-    await this.#syncAlarm();
-    return result;
+    try {
+      return await this.#storage.transaction(async (txn) => {
+        try {
+          const now = Date.now();
+          for (const ended of db.endOverdueLives(this.#storage.sql, now)) {
+            this.#finishEndedLive(ended, "reconnect_grace_expired", now);
+          }
+          const result = command(now);
+          await this.#moveAlarm();
+          return result;
+        } catch (error: unknown) {
+          // A failed command or alarm call must not leave part of its work.
+          txn.rollback();
+          throw error;
+        }
+      });
+    } catch (error: unknown) {
+      // Nothing was committed, so the alarm this instance remembers may not
+      // be the stored one. Forgetting it makes the next command write the
+      // alarm again.
+      this.#alarmAt = undefined;
+      throw error;
+    }
   }
 
   #finishEndedLive(
@@ -309,7 +335,7 @@ export class LiveStateCore {
       userId: ended.userId,
     });
     if (ended.notificationMessageId !== null) {
-      // Due at once: the alarm set after this command hands it to the Worker.
+      // Due at once: the alarm this command sets hands it to the Worker.
       db.enqueueNotificationDelete(
         this.#storage.sql,
         ended.notificationMessageId,
@@ -341,21 +367,27 @@ export class LiveStateCore {
     return jobs;
   }
 
-  async #syncAlarm(): Promise<void> {
+  /**
+   * Moves the alarm to the next time state needs attention. Call it inside
+   * the transaction that changed the state.
+   */
+  async #moveAlarm(): Promise<void> {
     const wakeAt = db.getNextWakeAt(this.#storage.sql);
     const scheduledAt = this.#alarmAt;
     if (wakeAt === scheduledAt) {
       return;
     }
 
-    this.#alarmAt = wakeAt;
     if (wakeAt !== null) {
       await this.#storage.setAlarm(wakeAt);
     } else if (scheduledAt !== undefined) {
-      // A restarted instance does not know whether an alarm is set. Leaving
-      // one set is harmless: it fires, finds nothing to do, and is not set
-      // again, which costs less than clearing on every first call.
+      // Only an alarm this instance knows of is cleared. A restarted instance
+      // may leave one set, which is harmless: it fires, finds nothing to do,
+      // and is not set again. That costs less than clearing on every first
+      // call.
       await this.#storage.deleteAlarm();
     }
+    // Remembered only once the storage call succeeded.
+    this.#alarmAt = wakeAt;
   }
 }
