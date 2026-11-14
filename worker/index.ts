@@ -46,25 +46,20 @@ type AppEnv = {
   };
 };
 
-// プレーヤー側の固定再接続間隔と一致させている。
+/** 再接続待ちの 503 に付ける Retry-After。プレーヤー側の固定リトライ間隔と一致させている。 */
 const LIVE_RECONNECTING_RETRY_AFTER_SECONDS = 2;
 
-// OBS はクラッシュやネットワーク切断などで DELETE を送らずにインジェストセッションを
-// 失う場合があり、Calls は約 30 秒後にそのセッションをガベージコレクションする。
-// セッションの生存を確認したリクエストは最大この間隔で時刻を記録し、後から
-// ガベージコレクション済みと判明した際に配信者が失われたのが直前かずっと前かを判定できるようにする。
+// DELETE なしで失われたインジェストセッションの扱いに使う値。それぞれの根拠は
+// docs/architecture.md の「インジェストのライフサイクル」を参照。
+/** リクエストがセッションの生存確認時刻を記録する最小間隔。 */
 const LIVE_SESSION_SEEN_ACTIVE_WRITE_INTERVAL_MS = 10_000;
-// 最後に生存確認されてからこの時間以内にガベージコレクションされたセッションは
-// 直前に失われたとみなす。DELETE 後の猶予期間と一致しており、OBS の伸長する再接続間隔と
-// 上記の書き込み間隔の両方をカバーする。
+/** 最後の生存確認からこの時間以内に失われたセッションは、たった今失われたとみなす。 */
 const LIVE_SESSION_RECENTLY_ACTIVE_MS = 60_000;
-// Calls はセッションをガベージコレクションする前にすでに約 30 秒待機しているため、
-// この値によって配信の保持期間は DELETE 後の猶予期間とほぼ同じ長さになる。
+/** たった今失われたセッションの配信に与える再接続猶予期間。 */
 const LIVE_LOST_SESSION_GRACE_MS = 30_000;
 
-// 一時的な理由で失敗した際に、開始通知の保存を最大この回数まで試行する。
-// 永続化が最後まで成功しなかった場合に waitUntil 内でメッセージを削除する時間を残すため、
-// 各試行に対するランタイム側の自動リトライ間隔は短く保つ。
+// 一時的な失敗で開始通知の保存をやり直す回数と間隔。最後まで保存できなかった通知は
+// 同じ waitUntil 内で削除するため、その時間が残るよう短く保つ。
 const NOTIFICATION_PERSIST_MAX_ATTEMPTS = 2;
 const NOTIFICATION_PERSIST_RETRY_DELAY_MS = 500;
 const NOTIFICATION_PERSIST_RPC_RETRY = {
@@ -106,9 +101,10 @@ function getRequestedTrackMids(requestUrl: string): string[] {
   return [...new Set(normalizedMids)];
 }
 
-// Calls のセッション ID は不透明（opaque）な URL セーフ文字列である。WHEP セッション
-// ルートはデコード済みのパスパラメーターを Calls API の URL に埋め込むため、
-// デコード後の "/" や "?" など URL を書き換えてしまいうる値は拒否する。
+/**
+ * Calls のセッション ID として妥当な URL セーフ文字列か。WHEP セッションルートはデコード済みの
+ * パスパラメーターを Calls API の URL に埋め込むため、"/" や "?" など URL を書き換えうる値を拒否する。
+ */
 function isCallsSessionId(sessionId: string): boolean {
   return /^[0-9A-Za-z_-]+$/u.test(sessionId);
 }
@@ -125,6 +121,10 @@ function createWhepCloseTracks(
   }));
 }
 
+/**
+ * トラックを waitUntil 内で閉じる。クリーンアップにすぎないため、失敗はログ出力だけで済ませる
+ * （配信行はすでに更新済みで、無効なトラックロケーターが公開され続けることはない）。
+ */
 function scheduleTrackClose(
   c: Context<AppEnv>,
   sessionId: string,
@@ -132,9 +132,6 @@ function scheduleTrackClose(
   failureLabel: string,
   errorLabel: string,
 ): void {
-  // トラックのクローズはクリーンアップ目的にすぎない。この処理が走る時点で配信行は
-  // すでに更新済みのため、Calls の一時的な失敗によって無効なトラックロケーターが
-  // 公開され続けることはない。
   c.executionCtx.waitUntil(
     closeTracks(c.env, sessionId, tracks).then(
       (response) => {
@@ -172,9 +169,11 @@ async function wait(milliseconds: number): Promise<void> {
   });
 }
 
-// 開始通知を LiveState に報告する。LiveState は配信にメッセージ ID を保存するか、
-// 配信がすでに終了している場合は削除キューへ直接追加する。LiveState に報告できなかった
-// 場合は理由をログ出力したうえで false を返す。
+/**
+ * 開始通知を LiveState に報告する。LiveState は配信にメッセージ ID を保存するか、
+ * 配信がすでに終了している場合は削除キューへ追加する。報告できなかった場合は
+ * ログ出力して false を返す。
+ */
 async function persistLiveStartNotification(
   c: Context<AppEnv>,
   userId: string,
@@ -214,8 +213,10 @@ async function persistLiveStartNotification(
   }
 }
 
-// インジェスト応答の返却後に waitUntil 内で実行されるため、失敗はすべて
-// スローせずここでログ出力する。
+/**
+ * 開始通知を送信し、そのメッセージ ID を LiveState に報告する。インジェスト応答の返却後に
+ * waitUntil 内で実行されるため、失敗はすべてスローせずログ出力する。
+ */
 async function sendLiveStartNotification(
   c: Context<AppEnv>,
   userId: string,
@@ -235,7 +236,6 @@ async function sendLiveStartNotification(
     return;
   }
 
-  // 通知は OBS の再接続をまたいで維持される配信本体に紐づいている。
   if (
     await persistLiveStartNotification(
       c,
@@ -269,15 +269,17 @@ function wasSessionSeenActiveRecently(live: LiveRecord, now: number): boolean {
   );
 }
 
-// ベストエフォート処理: この記録がない場合、後から DELETE なしでセッションを失うと
-// OBS の再開を待たずに即座に配信が終了する。
+/**
+ * リクエストがセッションの生存を確認したことを waitUntil 内で LiveState に記録する。
+ * ベストエフォートであり、失敗はログ出力する。
+ */
 function recordLiveSessionSeenActive(
   c: Context<AppEnv>,
   live: LiveRecord,
   now: number,
 ): void {
-  // 健全な配信に参加する視聴者のほとんどは新鮮な記録を見つける。ここで書き込みだけでなく
-  // 呼び出し自体をスキップすることで、視聴者が LiveState を起こさないようにする。
+  // 記録が新しければ LiveState の呼び出し自体を省き、健全な配信の視聴者が
+  // オブジェクトを起こさないようにする。
   if (
     live.sessionSeenActiveAt !== null &&
     now - live.sessionSeenActiveAt < LIVE_SESSION_SEEN_ACTIVE_WRITE_INTERVAL_MS
@@ -302,15 +304,14 @@ function recordLiveSessionSeenActive(
   );
 }
 
-// リクエストが生存を確認した直後に Calls がインジェストセッションをガベージコレクション
-// したため、OBS は DELETE を送らずにたった今セッションを失ったとみなせる。遅延した DELETE と
-// 同様に扱い、再接続した OBS が再通知なしで再開できるよう配信と開始通知を短い猶予期間だけ保持する。
+/**
+ * DELETE なしでたった今失われたセッションの配信に、遅延した DELETE と同様の短い再接続猶予を与える。
+ * その間に行が更新されていた（DELETE や再開があった）場合は何もしない。
+ */
 async function startLostSessionGrace(
   c: Context<AppEnv>,
   live: LiveRecord,
 ): Promise<void> {
-  // その間に行が更新されていた場合（OBS が DELETE を送信または再開済み）、
-  // 新しい状態に従ってすでに次の挙動が決まっている。
   const graceExpiresAt = await getLiveState(c.env).startLiveReconnectGrace(
     live.userId,
     live.sessionId,
@@ -327,8 +328,8 @@ async function startLostSessionGrace(
   });
 }
 
+/** 配信者の再接続待ちを示す 503。視聴者はこれを受けてリトライを続け、404 は配信終了を表す。 */
 function respondLiveReconnecting(c: Context<AppEnv>): Response {
-  // 503 は視聴者にリトライ継続を指示し、404 は終了した配信に対してのみ返す。
   return c.text("Live stream is waiting for the publisher to reconnect", 503, {
     "Retry-After": String(LIVE_RECONNECTING_RETRY_AFTER_SECONDS),
   });
@@ -416,9 +417,6 @@ app.post("/ingest/:userId", async (c) => {
   if (existingLive && existingLive.graceExpiresAt !== null) {
     resumableLive = existingLive;
   } else if (existingLive) {
-    // Worker 内で SFU 全体の走査は行わない。今回のインジェスト試行をブロックしている
-    // 1 行だけを確認する（OBS がクラッシュやネットワーク切断で DELETE せずに終了し、
-    // Calls が元のセッションをガベージコレクションした後に重要となる）。
     let isActive: boolean;
     try {
       isActive = await isSessionActive(c.env, existingLive.sessionId);
@@ -435,9 +433,8 @@ app.post("/ingest/:userId", async (c) => {
     }
 
     if (isActive) {
-      // DELETE なしでセッションを失った直後に OBS が再試行している可能性がある。
-      // Calls 上でセッションがまだ生存していたことを記録しておき、Calls による
-      // ガベージコレクション後の再試行時に配信を再開できるようにする。
+      // セッションを失ったばかりの OBS は Calls が GC するまで再試行を続けるため、
+      // GC 後の再試行で配信を再開できるよう生存を記録しておく。
       recordLiveSessionSeenActive(c, existingLive, now);
       return c.text("A live stream is already active for this user", 400);
     }
@@ -446,9 +443,8 @@ app.post("/ingest/:userId", async (c) => {
       // セッションはたった今失われたばかりなので、これは OBS の再接続とみなす。
       resumableLive = existingLive;
     } else {
-      // セッションは、たとえば新しい配信として開始された今回のインジェストより
-      // 何日も前に失われていた可能性もあるため、新規配信として開始して通知する。
-      // その間に行が更新されていた場合は、後続の挿入処理でこのインジェストを拒否する。
+      // ずっと前に失われたセッションかもしれないため、新しい配信として開始して通知する。
+      // その間に行が更新されていた場合は、後続の insertLive がこのインジェストを拒否する。
       await liveState.endLive(userId, existingLive.sessionId);
     }
   }
@@ -481,9 +477,6 @@ app.post("/ingest/:userId", async (c) => {
       location: `/ingest/${userId}/${result.sessionId}`,
     });
 
-  // live 行はこの特定の Calls セッションとトラックセットを指している。OBS の再接続時は
-  // 新しい SDP・セッション・mid が作られるため、再開時は配信本体と開始通知を維持したまま
-  // それらを置き換える。
   if (
     resumableLive &&
     (await liveState.resumeLive(
@@ -513,9 +506,8 @@ app.post("/ingest/:userId", async (c) => {
     result.tracks,
   );
   if (broadcastId === null) {
-    // 上で行を読み取った後で同じ配信者の競合する別インジェストが行を作成または
-    // 再開したため、配信と通知の所有権はそちらにある。このインジェストの Calls セッションには
-    // 誰も接続しないため、Calls 側で自動的にクリーンアップされる。
+    // 行を読み取った後で、競合する別のインジェストが先に行を作成または再開した。
+    // このインジェストの Calls セッションは誰も使わず、Calls が自動で片付ける。
     logWarn(c.env, "ingest.concurrent_ingest_rejected", {
       sessionId: result.sessionId,
       userId,
@@ -539,11 +531,11 @@ app.post("/ingest/:userId", async (c) => {
   return respondWithAnswer();
 });
 
-// WHIP インジェストの終了。現在保存されているセッションのみがそのインジェストを終了できる。
 app.get("/ingest/:userId/:sessionId", async () => {
   return new Response(null, { status: 204 });
 });
 
+// WHIP インジェストの終了。現在保存されているセッションのみがそのインジェストを終了できる。
 app.delete("/ingest/:userId/:sessionId", async (c) => {
   const { userId, sessionId } = c.req.param();
 
@@ -569,9 +561,8 @@ app.delete("/ingest/:userId/:sessionId", async (c) => {
     return c.text("Stored live track data is invalid", 500);
   }
 
-  // OBS は再接続の直前にも DELETE を送信するため、配信停止と区別できない。
-  // 配信本体と開始通知を猶予期間だけ維持し、新しいインジェストが再開しなければ
-  // LiveState が配信を終了させる。
+  // DELETE は再接続と区別できないため、配信は終了させず再接続猶予を始める
+  // （docs/architecture.md「インジェストのライフサイクル」）。
   const graceExpiresAt = await liveState.startLiveReconnectGrace(
     userId,
     sessionId,
@@ -623,12 +614,12 @@ app.use("/play/*", async (c, next) => {
   await next();
 });
 
-// WHEP 再生の開始。公開された汎用 WHEP エンドポイントではなく、意図的にアプリ固有かつ
-// Cookie 保護されたエンドポイントとしている。
 app.get("/play/:userId", async (c) => {
   return c.body(null, 204);
 });
 
+// WHEP 再生の開始。公開された汎用 WHEP エンドポイントではなく、意図的にアプリ固有かつ
+// Cookie 保護されたエンドポイントとしている。
 app.post("/play/:userId", async (c) => {
   const { userId } = c.req.param();
 
@@ -639,14 +630,10 @@ app.post("/play/:userId", async (c) => {
   const liveTrackRecord = await liveState.getLive(userId);
   const tracks = liveTrackRecord?.tracks ?? [];
   if (liveTrackRecord && liveTrackRecord.graceExpiresAt !== null) {
-    // OBS が DELETE を送信した時点で保存済みトラックは閉じられている。OBS が配信を
-    // 再開するか猶予期間経過で配信が終了する（その後 LiveState は行を返さなくなる）まで、
-    // 視聴者はリトライし続ける。
+    // 保存済みトラックは DELETE 時に閉じられているため、再開か配信終了まで視聴者にリトライさせる。
     return respondLiveReconnecting(c);
   }
   if (liveTrackRecord) {
-    // 再生リクエストは 1 人の配信者を特定するため、すべての配信行を走査せずに
-    // 古いライブ状態と Calls の整合をとれる最も低コストかつ安全なポイントとなっている。
     let isActive: boolean;
     try {
       isActive = await isSessionActive(c.env, liveTrackRecord.sessionId);
@@ -672,8 +659,7 @@ app.post("/play/:userId", async (c) => {
         ? c.text(`Live stream not found: ${userId}`, 404)
         : respondLiveReconnecting(c);
     }
-    // 配信者のセッションが失われた後もガベージコレクション待ちの間は視聴者が
-    // 再生リクエストを送り続けるため、視聴者側でもセッション喪失を検知できる。
+    // 視聴者はメディアが止まっても再生リクエストを送り続けるため、ここでも生存を記録する。
     recordLiveSessionSeenActive(c, liveTrackRecord, now);
   }
 
@@ -721,9 +707,8 @@ app.post("/play/:userId", async (c) => {
   }
 
   const status = result.sdpType === "offer" ? 406 : 201;
-  // ネゴシエートされた再生トラック数ではなく、保存されているライブ配信のトラック数を
-  // 使用する。再生がトラックの一部しかネゴシエートできなかった場合、劣化したセッションを
-  // 正常として受け入れるのではなく不完全とみなしてクライアントに再接続させる。
+  // ネゴシエート済みの数ではなく保存済みの数を返し、一部のトラックしか得られなかった
+  // 再生をクライアントに作り直させる。
   const expectedTrackCount = tracks.length;
 
   return c.body(result.sdpAnswer, status, {
@@ -764,7 +749,8 @@ app
     );
 
     return c.body(null, 200);
-  }) // この PATCH はトリクル ICE ではなく、406 カウンターオファーへのアンサーを送信する。
+  })
+  // この PATCH はトリクル ICE ではなく、406 カウンターオファーへのアンサーを送信する。
   .patch(async (c) => {
     const { sessionId } = c.req.param();
     if (!isCallsSessionId(sessionId)) {
@@ -831,8 +817,6 @@ app.get("/api/me", async (c) => {
 
 app.get("/api/turn-credentials", async (c) => {
   const jwtPayload = c.get("jwtPayload");
-  // TURN クレデンシャルは認証済み Worker API の背後に保持する。ブラウザ
-  // クライアントは非認証の汎用 WHEP エンドポイントクライアントとしては設計していない。
   let iceServers: TurnIceServer[];
   try {
     iceServers = await generateTurnIceServers(c.env, jwtPayload.userId);
@@ -897,8 +881,8 @@ app.get("/api/me/livetoken", async (c) => {
 });
 
 app.get("/api/lives", async (c) => {
-  // 一覧取得を軽量に保つため、ここではすべての配信行に対して Calls をポーリングしない。
-  // 古い行は、ユーザーが特定のストリームに対してインジェストまたは再生を試みたときに整合をとる。
+  // 一覧を軽量に保つため Calls には問い合わせない。古い行はインジェストや再生のときに整合をとる
+  // （docs/architecture.md「配信行（lives）のセマンティクス」）。
   const lives = await getLiveState(c.env).getAllLives();
   return c.json(lives);
 });

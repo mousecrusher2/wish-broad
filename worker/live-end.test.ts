@@ -17,12 +17,12 @@ import { getDueNotificationDeletes } from "./database";
 import { LIVE_RECONNECT_GRACE_MS, runNotificationDeletes } from "./live-end";
 import { getLiveState, LiveState } from "./live-state";
 
-// 実時間でアラームが自動発火しないよう、テストの時計は遠い未来に置く。
+/** 実際のアラームが自動発火しないよう、テストの時計は遠い未来に置く。 */
 const NOW = Date.UTC(2100, 0, 1);
 
 const WEBHOOK_URL = env.NOTIFICATIONS_DISCORD_WEBHOOK_URL;
 
-// 終了済みの配信に対する開始通知を報告し、LiveState の削除キューへ追加させる。
+/** 終了済みの配信に対する開始通知を報告し、LiveState の削除キューへ追加させる。 */
 async function queueNotificationDelete(
   messageId: string,
   userId: string,
@@ -34,7 +34,7 @@ async function queueNotificationDelete(
   );
 }
 
-// リース中のものも含め、LiveState がまだ Discord から削除済みと把握していない通知。
+/** リース中のものも含め、LiveState がまだ Discord から削除済みと把握していない通知。 */
 async function getQueuedMessageIds(): Promise<string[]> {
   return runInDurableObject(getLiveState(env), (_instance, state) =>
     getDueNotificationDeletes(state.storage.sql, Number.MAX_SAFE_INTEGER).map(

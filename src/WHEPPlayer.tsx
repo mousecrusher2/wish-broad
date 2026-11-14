@@ -15,6 +15,12 @@ function VideoPlaceholder({ message }: Readonly<{ message: string }>) {
   );
 }
 
+/**
+ * 1 人の配信者の再生を所有するプレーヤー。コントローラーはマウントごとに 1 つ作るため、
+ * 配信者を変えるときや同じ配信を読み込み直すときは `key` を変えて再マウントすること。
+ *
+ * @throws {Error} 再マウントせずに `resourceUserId` が変わった場合。
+ */
 export function WHEPPlayer({
   onSnapshotChange,
   resourceUserId,

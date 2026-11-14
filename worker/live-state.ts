@@ -1,11 +1,6 @@
-// LiveState Durable Object の状態とタイマー管理: ライブ配信、配信者トークン、ユーザー、
-// および再接続猶予期間の経過後に配信を終了させるアラームを扱う。
-//
-// このオブジェクトは実行または待機に費やした実時間（wall-clock time）に対して課金されるため、
-// 自身のストレージ操作のみを行い、Calls・Discord・その他の外部 API は一切呼び出さない。
-// それらの呼び出しと結果の報告は Worker 側が行う。オブジェクトが自律的に開始する唯一の外部処理
-// である「終了した配信の開始通知の削除」も、`LiveEffects` エントリーポイント（./live-end）に
-// 委譲してそちらで完了させる。
+// LiveState Durable Object。オブジェクトは自身のストレージとアラーム以外を await せず、
+// 外部 API は Worker と LiveEffects（./live-end）が呼び出す。理由は docs/architecture.md の
+// 「ランタイムモデル」を参照。
 import { retryable } from "cloudflare:durable-objects";
 import { DurableObject } from "cloudflare:workers";
 import * as db from "./database";
@@ -13,20 +8,21 @@ import { createErrorLogFields, logInfo, logWarn } from "./logger";
 import type { StoredTrack } from "./sfu";
 import type { Bindings } from "./types";
 
-// 配信一覧の取得ではすべての配信とその配信者名がまとめて必要になるため、1 つの
-// オブジェクトで全配信を保持する。負荷は視聴者または配信者の操作ごとに数回の短い呼び出しが
-// 発生する程度である。
+/**
+ * すべての状態を保持する唯一のオブジェクトの名前。1 つにまとめている理由は
+ * docs/architecture.md の「ランタイムモデル」を参照。
+ */
 const LIVE_STATE_NAME = "global";
 
-// Worker に払い出された通知削除タスクは、再度払い出されるまでこの期間だけ非表示になり、
-// 試行のたびに倍増する。最初のリース時間は Worker の waitUntil が実行されうる最大 30 秒を
-// カバーしており、次の試行が始まる前に前回の試行が確実に終わるようにしている。
+/**
+ * 払い出した通知削除タスクを再び払い出すまでの最初の期間で、試行のたびに倍になる。
+ * Worker の waitUntil が動きうる最大 30 秒をカバーし、前回の試行が終わる前に次の試行を始めない。
+ */
 const NOTIFICATION_DELETE_LEASE_MS = 30_000;
-// 30 秒〜8 分のリース時間により、試行全体が約 15 分以内に収まる。
-// 最後の試行でも完了しなかった削除タスクは破棄され、その通知は Discord 上に残る。
+/** 通知削除の最大試行回数。リース期間と合わせて試行全体が約 15 分に収まる。 */
 const NOTIFICATION_DELETE_MAX_ATTEMPTS = 6;
 
-// これまでの払い出し回数に応じて、削除タスクが払い出された後どれだけの時間非表示になるか。
+/** これまでの払い出し回数 `attempts` の削除タスクを、今回の払い出し後に非表示にしておく期間。 */
 function getNotificationDeleteLeaseMs(attempts: number): number {
   // 最終試行の後には次の試行がないため、削除タスクが破棄される前に結果を報告するだけの
   // 猶予時間を確保している。
@@ -37,7 +33,7 @@ function getNotificationDeleteLeaseMs(attempts: number): number {
 
 /** Worker が Discord から削除すべき開始通知。 */
 export type NotificationDeleteJob = {
-  // Discord snowflake（10 進数文字列）。
+  /** Discord snowflake（10 進数文字列）。 */
   messageId: string;
   userId: string;
 };
@@ -55,8 +51,8 @@ type CommandRun = {
 };
 
 /**
- * すべてのライブ状態を保持する Durable Object。各メソッドは短時間で完了し、
- * 外部サービスを待機することは一切ない。
+ * すべてのライブ状態を保持する LiveState オブジェクトのスタブを返す。`retry` を渡すと、
+ * このスタブ経由の呼び出しにランタイムの再試行設定を適用する。
  */
 export function getLiveState(
   env: Pick<Bindings, "LIVE_STATE">,
@@ -90,14 +86,10 @@ export function isTransientLiveStateError(error: unknown): boolean {
  * ライブ配信、配信者トークン、およびユーザーを保持し、再接続猶予期間の経過後に
  * 配信を終了させる Durable Object。
  *
- * すべてのメソッドは最初に再接続猶予期間を過ぎた配信を終了させるため、アラームの発火が
- * 遅れていても呼び出し側が期限切れの配信を目にすることはない。Worker が行った Calls
- * リクエストに依存する状態遷移は、Worker が観測したセッションに対する Compare-And-Set で
- * 行う（オブジェクトは自身のメソッド呼び出しは直列化するが、2 つのメソッド間で Worker が
- * 行う外部リクエストまでは直列化しないため）。
- *
- * reject するメソッドは何も保存していない（ストレージ障害であっても値の拒否であっても、
- * トランザクションはロールバックされる）。
+ * すべてのメソッドは 1 つのトランザクションで実行され、最初に期限切れの配信を終了させる。
+ * Worker が Calls で観測した結果に基づく状態遷移は、Worker が観測したセッションに対する
+ * Compare-And-Set になっている（docs/architecture.md「配信行（lives）のセマンティクス」）。
+ * reject したメソッドは何も保存していない。
  */
 export class LiveState extends DurableObject<Bindings> {
   static {
@@ -225,7 +217,10 @@ export class LiveState extends DurableObject<Bindings> {
     });
   }
 
-  /** Worker が Calls 上で配信中インジェストセッションの生存を確認したことを記録する。 */
+  /**
+   * Worker が Calls 上で配信中インジェストセッションの生存を確認したことを、
+   * `minIntervalMs` ごとに最大 1 回記録する。記録しなかった場合は false を返す。
+   */
   async markLiveSessionSeenActive(
     userId: string,
     sessionId: string,
@@ -316,11 +311,8 @@ export class LiveState extends DurableObject<Bindings> {
    * 猶予期間を過ぎた配信を終了させたうえで、1 つのコマンドをストレージトランザクション内で
    * 実行する。同じトランザクション内で次に状態処理が必要となる時刻へアラームを移動するため、
    * 期限や通知削除タスクが対応するアラームなしに保存されることはない。クロージャーは
-   * アラーム操作以外では一切 await しない。
-   *
-   * `transaction` クロージャーの実行中に行ったストレージ操作（アラーム操作を含む）はすべて
-   * そのトランザクションに属し、`rollback()` で破棄される。`transactionSync` は同期操作しか
-   * 対象にできず、アラーム呼び出しがその外に漏れてしまうため使用しない。
+   * アラーム操作以外では一切 await しない。`transactionSync()` ではなく `transaction()` を
+   * 使う理由は docs/architecture.md の「ランタイムモデル」を参照。
    */
   async #run<T>(command: (run: CommandRun) => T): Promise<T> {
     const { storage } = this.ctx;

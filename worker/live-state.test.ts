@@ -16,22 +16,21 @@ import {
 import { LiveEffects } from "./live-end";
 import type { LiveState } from "./live-state";
 
-// 実時間でアラームが自動発火しないよう、テストの時計は遠い未来に置く。オブジェクトも
-// 同じアイソレート内で動くため同じ時計を参照し、アラームは runDurableObjectAlarm で
-// 明示的に発火させる。
+/** 実際のアラームが自動発火しないよう、テストの時計は遠い未来に置く。 */
 const NOW = Date.UTC(2100, 0, 1);
 const GRACE_MS = 60_000;
 
 type LiveStateStub = DurableObjectStub<LiveState>;
 
-// テストごとに空のストレージを持つ新しいオブジェクト。
+/** テストごとに空のストレージを持つ新しいオブジェクト。 */
 function createLiveState(): LiveStateStub {
   return env.LIVE_STATE.get(env.LIVE_STATE.newUniqueId());
 }
 
-// スタブの RPC 呼び出しが返す Promise はパイプライン呼び出しのために関数でもあり、
-// expect(...).rejects は関数を渡されるとそれを呼び出してしまう。reject を検証する前に
-// 通常の Promise に包む。
+/**
+ * スタブの RPC 呼び出しが返す Promise は関数でもあり、expect(...).rejects はそれを
+ * 呼び出してしまうため、通常の Promise に包んでから検証する。
+ */
 async function asPromise<T>(call: PromiseLike<T>): Promise<T> {
   return call;
 }
@@ -42,7 +41,7 @@ async function getAlarm(stub: LiveStateStub): Promise<number | null> {
   );
 }
 
-// 次のアラーム設定だけをストレージ障害として失敗させる。
+/** 次のアラーム設定だけをストレージ障害として失敗させる。 */
 async function failNextSetAlarm(stub: LiveStateStub): Promise<void> {
   await runInDurableObject(stub, (_instance, state) => {
     vi.spyOn(state.storage, "setAlarm").mockRejectedValueOnce(
@@ -51,7 +50,7 @@ async function failNextSetAlarm(stub: LiveStateStub): Promise<void> {
   });
 }
 
-// 開始通知付きの配信を user-1 / session-1 で開始する。
+/** 開始通知付きの配信を user-1 / session-1 で開始する。 */
 async function startNotifiedLive(stub: LiveStateStub): Promise<void> {
   const broadcastId = await stub.insertLive("user-1", "session-1", []);
   if (broadcastId === null) {
@@ -61,8 +60,10 @@ async function startNotifiedLive(stub: LiveStateStub): Promise<void> {
 }
 
 describe("live state", () => {
-  // オブジェクトが削除タスクを引き渡す LiveEffects エントリーポイント。実際の削除処理は
-  // ./live-end.test.ts で検証する。
+  /**
+   * オブジェクトが削除タスクを引き渡す LiveEffects エントリーポイント。実際の削除処理は
+   * ./live-end.test.ts で検証する。
+   */
   let dispatch: MockInstance<LiveEffects["deleteStartNotifications"]>;
   // テストランナーの console はアクセスのたびに別の関数を返すため、スパイは戻り値で参照する。
   let info: MockInstance<Console["info"]>;

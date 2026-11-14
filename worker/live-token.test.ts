@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createLiveToken } from "./live-token";
 
-// 乱数源だけを差し替え、指定したバイト列で配列を埋めさせる。
+/** 乱数源だけを差し替え、指定したバイト列で配列を埋めさせる。 */
 function mockRandomBytes(fill: (bytes: Uint8Array) => void) {
   return vi.spyOn(crypto, "getRandomValues").mockImplementation((array) => {
     fill(new Uint8Array(array.buffer, array.byteOffset, array.byteLength));

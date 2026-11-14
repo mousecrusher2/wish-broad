@@ -90,15 +90,18 @@ function toUrlList(urls: string | string[]): string[] {
   return Array.isArray(urls) ? urls : [urls];
 }
 
-// STUN / TURN URI の形式は `scheme:host[:port][?transport=udp|tcp]`（RFC 7064、
-// RFC 7065）であるため、ポート指定がある場合はクエリ文字列または末尾の直前に現れる。
-// 53 で終わる IPv6 ホストは直後に "]" が続くため一致しない。
+/**
+ * ポート 53 を指す STUN / TURN URI。URI の形式は `scheme:host[:port][?transport=udp|tcp]`
+ * （RFC 7064、RFC 7065）であるため、ポートはクエリ文字列または末尾の直前に現れる。
+ * 53 で終わる IPv6 ホストは直後に "]" が続くため一致しない。
+ */
 const PORT_53_PATTERN = /:0*53(?:\?|$)/u;
 
+/**
+ * ブラウザがブロックするポート 53 の URL を取り除く（理由は docs/architecture.md の
+ * 「WHEPクライアントの設計判断」）。URL が残らなければ null を返す。
+ */
 function filterIceServerUrls(iceServer: RawIceServer): TurnIceServer | null {
-  // Cloudflare はプライマリと代替の TURN ポートを返すが、ブラウザがポート 53 をブロックする
-  // ことが知られている。このクライアントはトリクル ICE ではなく完全な ICE 収集を待つため、
-  // セットアップのタイムアウトを防ぐ目的でブロック対象候補を除外する。
   const urls = toUrlList(iceServer.urls).filter((url) => {
     return !PORT_53_PATTERN.test(url);
   });

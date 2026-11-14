@@ -28,8 +28,10 @@ export type DiscordOAuthToken = {
   refreshToken?: string | undefined;
 };
 
-// サーバーメンバーのレスポンスにユーザーオブジェクトがすでに含まれているため、
-// `/users/@me` のみを解放する `identify` スコープは不要。
+/**
+ * サーバーメンバーのレスポンスにユーザーオブジェクトがすでに含まれているため、
+ * `/users/@me` のためだけの `identify` スコープは要求しない。
+ */
 const DISCORD_OAUTH_SCOPE = "guilds.members.read";
 
 export const DISCORD_STATE_COOKIE_NAME = "discord_oauth_state";

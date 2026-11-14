@@ -10,11 +10,16 @@ const turnCredentialsResponseSchema = v.object({
   iceServers: v.array(turnIceServerSchema),
 });
 
+/**
+ * 認証済みの `/api/turn-credentials` から ICE サーバーを取得する。汎用 WHEP の OPTIONS/Link
+ * 探索は使わない（docs/architecture.md「WHEPクライアントの設計判断」）。取得できなかった場合は
+ * ログ出力して null を返し、呼び出し側は TURN なしで接続する。
+ *
+ * @throws {Error} `signal` が中断された場合（AbortError）。
+ */
 export async function fetchTurnIceServers(
   signal: AbortSignal,
 ): Promise<RTCIceServer[] | null> {
-  // このアプリは認証済み Worker 配下でのみ視聴を許可しているため、TURN の取得には
-  // 汎用的な WHEP OPTIONS/Link ディスカバリーではなく専用 API を使用する。
   const response = await fetch("/api/turn-credentials", {
     credentials: "include",
     headers: {

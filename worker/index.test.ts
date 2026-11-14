@@ -97,8 +97,7 @@ vi.mock("./turn", async () => ({
 
 import app from "./index";
 
-// 実時間でアラームが自動発火しないよう、テストの時計は遠い未来に置く。LiveState も
-// 同じアイソレート内で動くため同じ時計を参照する。
+/** 実際のアラームが自動発火しないよう、テストの時計は遠い未来に置く。 */
 const NOW = Date.UTC(2100, 0, 1);
 
 function createTracks(sessionId: string): StoredTrack[] {
@@ -274,7 +273,7 @@ async function getLive(userId = "user-1") {
   return getLiveState(env).getLive(userId);
 }
 
-// 配信行に保存されている開始通知のメッセージ ID。
+/** 配信行に保存されている開始通知のメッセージ ID。 */
 async function getStoredNotificationMessageId(
   userId = "user-1",
 ): Promise<SqlStorageValue> {
@@ -290,7 +289,7 @@ async function getStoredNotificationMessageId(
   );
 }
 
-// LiveState が Discord から削除するためにキューに積んでいる開始通知。
+/** LiveState が Discord から削除するためにキューに積んでいる開始通知。 */
 async function getQueuedNotificationDeletes(): Promise<string[]> {
   return runInDurableObject(getLiveState(env), (_instance, state) =>
     getDueNotificationDeletes(state.storage.sql, Number.MAX_SAFE_INTEGER).map(
@@ -1458,8 +1457,7 @@ describe("worker app", () => {
     expect(
       notificationsMocks.sendLiveStartedNotification,
     ).not.toHaveBeenCalled();
-    // DELETE なしでセッションを失った後の OBS による再試行かもしれないため、
-    // 拒否時に Calls 上でまだセッションが存在していたことを記録する。
+    // 拒否したインジェストでもセッションの生存を記録する。
     await expect(getLive()).resolves.toMatchObject({
       broadcastId,
       sessionId: "active-session",
@@ -1508,8 +1506,7 @@ describe("worker app", () => {
       const response = await requestIngestOffer(executionContext);
 
       expect(response.status).toBe(201);
-      // 新規配信として開始されるインジェストの数日前にセッションが失われていた可能性もあるため、
-      // その新規配信の開始通知が失われてはならない。
+      // 再開ではなく新しい配信として開始し、開始通知を送る。
       const live = await getLive();
       expect(live).toMatchObject({ sessionId: "new-session" });
       expect(live?.broadcastId).not.toBe(lostBroadcastId);

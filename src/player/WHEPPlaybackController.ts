@@ -464,10 +464,8 @@ export class WHEPPlaybackController {
       cleanup: () => {},
     };
 
-    // これがストリーム終了を検知する主要な経路。インジェストが終了しても、視聴者が
-    // PeerConnection を開いたままにできるほど長く SFU のセッション/トラックメタデータが
-    // 有効に見え続ける場合があるが、RTP バイト数の増加は止まる。レシーバーごとの
-    // bytesReceived を監視し、想定されたメディアの受信が止まったら再接続する。
+    // レシーバーごとの bytesReceived の監視は、配信終了を検知する主要な経路である
+    // （docs/architecture.md「フロントエンドのリカバリー」）。
     const stopInterval = () => {
       if (playbackMonitor.intervalId !== null) {
         window.clearInterval(playbackMonitor.intervalId);
@@ -507,10 +505,8 @@ export class WHEPPlaybackController {
         playbackMonitor.requiredReceiverIds === null &&
         playbackMonitor.discoveryTimeoutId === null
       ) {
-        // レシーバーの統計情報は SDP/track イベントより遅れて現れることがある。
-        // 想定されるすべての受信側 RTP レシーバーが揃うまでは、bytesReceived の監視だけでは
-        // 再生の健全性を証明できない。レシーバーが最後まで揃わない場合は、ネゴシエート済み
-        // セッションが不完全であるため置き換える必要がある。
+        // レシーバーの統計情報は SDP や track イベントより遅れて現れることがあり、すべて揃うまで
+        // bytesReceived では再生の健全性を判断できない。揃わないまま期限が来たら作り直す。
         playbackMonitor.discoveryTimeoutId = window.setTimeout(() => {
           playbackMonitor.discoveryTimeoutId = null;
 

@@ -42,8 +42,7 @@ type WHEPSessionLifecycle =
   | { cleanupPromise: Promise<void>; kind: "closingServerSession" }
   | { kind: "disposed" };
 
-// セッションは再生ソースの差し替えと再生開始のみを行うため、
-// HTMLVideoElement のそれ以外の機能は不要。
+/** セッションが使うのは再生ソースの差し替えと再生開始だけで、HTMLVideoElement の他の機能は不要。 */
 type WHEPVideoElement = Pick<HTMLVideoElement, "srcObject" | "play">;
 
 type WHEPSessionOptions = {
@@ -278,6 +277,7 @@ function isIceGatheringFinished(pc: RTCPeerConnection): boolean {
   return pc.signalingState === "closed" || pc.connectionState === "closed";
 }
 
+/** @throws {WHEPSessionError} 収集の完了前に `signal` が中断された場合。 */
 async function waitForIceGatheringComplete(
   pc: RTCPeerConnection,
   signal: AbortSignal,
@@ -342,9 +342,10 @@ export class WHEPSession {
   private maxRemoteTrackCount = 0;
   private runtimeState: WHEPSessionRuntimeState =
     createRuntimeState("disconnected");
-  // POST /play 成功後に Worker が返した WHEP セッション URL。
+  /** POST /play 成功後に Worker が返した WHEP セッション URL。 */
   private serverSessionLocation: string | null = null;
 
+  /** @throws {Error} `resourceUserId` が空白だけの場合。 */
   constructor({
     callbacks = {},
     resourceUserId,
@@ -625,6 +626,7 @@ export class WHEPSession {
 
       this.remoteStream.addTrack(event.track);
       this.attachRemoteTrackListeners(event.track);
+      // MediaStream.addTrack() は "addtrack" イベントを発火しないため、ここで直接更新する。
       this.refreshStreamState();
       void this.videoElement.play().catch((error: Error) => {
         console.warn("Autoplay failed:", error);
@@ -770,8 +772,8 @@ export class WHEPSession {
 
       const localOffer = await this.pc.createOffer();
       await this.pc.setLocalDescription(localOffer);
-      // 現在の Calls ベースの Worker 経路は実質的にノン・トリクルである。後続の
-      // トリクル ICE 用 PATCH に頼らず、完全なローカルオファーを送信する。
+      // Worker 経路はトリクル ICE を扱わないため、ICE 収集を終えた完全なオファーを送る
+      // （docs/architecture.md「WHEPクライアントの設計判断」）。
       await waitForIceGatheringComplete(this.pc, signal);
 
       const localOfferSdp = this.pc.localDescription?.sdp;
@@ -779,9 +781,8 @@ export class WHEPSession {
         throw new Error("Failed to create local SDP offer");
       }
 
-      // 破棄時はこの POST を中断する。その時点で Worker がすでに Calls 再生セッションを
-      // 作成していた場合、DELETE は送られないが誰も接続しないため、Calls がクリーンアップ
-      // するまでメディアは一切流れない。
+      // 破棄時はこの POST を中断する。作成済みの Calls 再生セッションには DELETE を送らないが、
+      // 誰も接続しないまま Calls が片付ける。
       const offerResponse = await fetch(resourceUrl, {
         method: "POST",
         headers: {
@@ -795,8 +796,8 @@ export class WHEPSession {
         offerResponse,
         resourceUrl,
       );
-      // Worker 独自のヘッダー: 期待されるインジェストトラック数。トラックの一部しか
-      // ネゴシエートされない劣化再生をコントローラー側で拒否できるようにする。
+      // Worker 独自の Wish-Live-Track-Count ヘッダー。一部のトラックしか得られなかった
+      // 再生をコントローラーが不完全とみなすために使う。
       this.expectedRemoteTrackCount =
         sessionResponse.expectedRemoteTrackCount ?? 0;
       this.serverSessionLocation = sessionResponse.sessionUrl.toString();
@@ -817,8 +818,8 @@ export class WHEPSession {
 
           const localAnswer = await this.pc.createAnswer();
           await this.pc.setLocalDescription(localAnswer);
-          // この PATCH は WHEP 406 カウンターオファーへの応答であり、トリクル ICE 候補の
-          // PATCH ではないため、送信前に完全なアンサーを収集する。
+          // この PATCH は 406 カウンターオファーへのアンサーであり、トリクル ICE ではないため
+          // 完全なアンサーを送る。
           await waitForIceGatheringComplete(this.pc, signal);
 
           const localAnswerSdp = this.pc.localDescription.sdp;

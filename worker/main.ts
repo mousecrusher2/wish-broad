@@ -1,5 +1,5 @@
 // Worker のエントリーポイント。Wrangler がバインドするクラスとルーティング（./index）を
-// まとめてエクスポートする。
+// 再エクスポートするだけで、処理は書かない。
 import app from "./index";
 
 export { LiveEffects } from "./live-end";

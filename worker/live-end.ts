@@ -7,9 +7,10 @@ import {
 } from "./notifications";
 import type { Bindings } from "./types";
 
-// OBS は再接続のたびに DELETE を送信するため、配信本体は各インジェストセッションより
-// この時間だけ長く存続する。この期間内の新しいインジェストは、再度開始通知を送らずに
-// 配信を再開する。
+/**
+ * インジェストの DELETE 後も配信を維持する再接続猶予期間。この期間内の新しいインジェストは
+ * 開始通知を送らずに配信を再開する（docs/architecture.md「インジェストのライフサイクル」）。
+ */
 export const LIVE_RECONNECT_GRACE_MS = 60_000;
 
 type LiveEndEnv = Pick<
@@ -20,8 +21,10 @@ type LiveEndEnv = Pick<
   | "NOTIFICATIONS_DISCORD_WEBHOOK_URL"
 >;
 
-// 削除が完了したかどうかを返す。すでに削除済みのメッセージなど、再試行しても
-// 回復しない失敗も完了扱いに含める。
+/**
+ * 削除が完了したかどうかを返す。すでに削除済みのメッセージなど、再試行しても
+ * 回復しない失敗も完了扱いに含める。失敗はスローせずログ出力する。
+ */
 async function deleteNotification(
   env: LiveEndEnv,
   job: NotificationDeleteJob,
@@ -46,9 +49,7 @@ async function deleteNotification(
  * 終了した配信の開始通知を Discord から削除し、どの削除が完了したかを LiveState
  * オブジェクトに報告する。ネットワークエラー、タイムアウト、429、または 5xx で
  * 失敗した削除は未報告のまま残すため、リース期限が切れるとオブジェクトが再び払い出す。
- *
- * この処理はオブジェクト呼び出しの返却後に Worker の waitUntil 内で実行されるため、
- * Discord の応答待ちの間もオブジェクトを実行し続けずに済む。すべての失敗はスローせずここでログ出力する。
+ * waitUntil 内で実行されるため、すべての失敗はスローせずログ出力する。
  */
 export async function runNotificationDeletes(
   env: LiveEndEnv,
@@ -82,8 +83,8 @@ export async function runNotificationDeletes(
  */
 export class LiveEffects extends WorkerEntrypoint<Bindings> {
   /**
-   * 即座に返却して waitUntil 内で通知を削除することで、呼び出し元オブジェクトが
-   * Discord の応答待ち時間に対して課金されないようにする。
+   * 即座に返却し、waitUntil 内で通知を削除する。呼び出し元のオブジェクトは Discord の
+   * 応答を待たない。
    */
   deleteStartNotifications(jobs: NotificationDeleteJob[]): void {
     this.ctx.waitUntil(runNotificationDeletes(this.env, jobs));

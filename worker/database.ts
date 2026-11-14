@@ -12,22 +12,27 @@ type Live = {
   owner: User;
 };
 
+/** 配信者ごとに 1 つ存在する配信（`lives` の 1 行）。 */
 export type LiveRecord = {
+  /** OBS の再接続をまたいで変わらない配信 ID。 */
   broadcastId: string;
-  // インジェストセッションが配信中の場合は null、それ以外は再接続猶予期間の
-  // 終了時刻（Unix エポックミリ秒）。
+  /** 再接続猶予期間の終了時刻（Unix エポックミリ秒）。インジェストセッションが配信中なら null。 */
   graceExpiresAt: number | null;
-  // リクエストが Calls 上でインジェストセッションの生存を最後に確認した時刻
-  // （Unix エポックミリ秒）。セッション保存後に確認がまだない場合は null。
+  /**
+   * リクエストが Calls 上でインジェストセッションの生存を最後に確認した時刻
+   * （Unix エポックミリ秒）。このセッションでまだ確認がなければ null。
+   */
   sessionSeenActiveAt: number | null;
   userId: string;
+  /** 現在の Calls インジェストセッション。再接続のたびに置き換わる。 */
   sessionId: string;
+  /** `sessionId` のトラック。再接続のたびに置き換わる。 */
   tracks: StoredTrack[];
 };
 
 /** 行が削除された直後の配信。 */
 export type EndedLive = {
-  // 開始通知メッセージの Discord snowflake（10 進数文字列）。
+  /** 開始通知の Discord snowflake（10 進数文字列）。 */
   notificationMessageId: string | null;
   sessionId: string;
   userId: string;
@@ -35,35 +40,22 @@ export type EndedLive = {
 
 /** まだ Discord から削除されていない開始通知。 */
 export type NotificationDelete = {
-  // これまでに削除タスクが払い出された回数。
+  /** これまでに削除タスクを Worker に払い出した回数。 */
   attempts: number;
   messageId: string;
   userId: string;
 };
 
-// 各エントリは 1 つのスキーマバージョンを表す。オブジェクトは起動時に未適用バージョンを
-// 順次適用するため、デプロイ済みエントリは編集せず新しいエントリを末尾に追記すること。
-//
-// 配信者（owner）ごとに 1 行の live 行が存在して 1 つの配信を表し、user_id がそのまま
-// live id になる。OBS の再接続中も broadcast_id は変わらない一方、session_id と
-// tracks_json（StoredTrack の配列）は現在の Cloudflare Calls インジェストセッションを
-// 指しており、再接続のたびに置き換わる。
-// grace_expires_at はインジェストセッションの配信中は NULL となり、OBS が DELETE を
-// 送信した後は、新しいインジェストが同じ配信を再開できる期限（Unix エポックミリ秒）を保持する。
-// その期限を過ぎると配信は終了する。
-// notification_message_id は JavaScript の数値型に収まらない Discord snowflake を
-// 10 進数文字列として保存したもの。
-// session_seen_active_at はリクエストが Calls 上でインジェストセッションの生存を
-// 最後に確認した時刻（Unix エポックミリ秒、最大 10 秒ごとに記録）、または NULL。
-// OBS が DELETE を送らずに Calls によってガベージコレクションされたセッションが直前に
-// 失われたものかを判別し、OBS が配信を再開できるようにするために用いる。
-//
-// 配信者トークンは生の Bearer トークンではなく HMAC ハッシュとして保存する。各ユーザーは
-// 最新のトークンを 1 つ持つ。
-//
-// notification_deletes は Discord から削除すべき開始通知のアウトボックスである。
-// attempts は削除タスクを Worker に払い出した回数、next_attempt_at は次に払い出し
-// （再払い出し）が可能になる時刻（Unix エポックミリ秒）を表す。
+/**
+ * 各エントリは 1 つのスキーマバージョンを表す。オブジェクトは起動時に未適用のエントリを
+ * 順に適用するため、デプロイ済みのエントリは編集せず、変更は末尾に新しいエントリとして追加する。
+ *
+ * lives の列は LiveRecord と EndedLive の各フィールドに対応する（tracks_json は
+ * StoredTrack[] の JSON）。live_tokens.token_hash は生トークンではなく HMAC。
+ * notification_deletes は削除待ちの開始通知のアウトボックスで、next_attempt_at
+ * （Unix エポックミリ秒）以降に Worker へ払い出す。状態遷移は docs/architecture.md の
+ * 「配信行（lives）のセマンティクス」と「通知」を参照。
+ */
 const SCHEMA_MIGRATIONS: readonly (readonly string[])[] = [
   [
     `CREATE TABLE lives (
@@ -92,12 +84,11 @@ const SCHEMA_MIGRATIONS: readonly (readonly string[])[] = [
   ],
 ];
 
-// オブジェクトの全メソッドは期限切れの配信を終了させて次のアラームを計算し、
-// いずれの処理も以下の 2 種類の値を読み取る。読み戻せない値が保存されると後続の
-// すべての呼び出しが失敗するため、書き込み時に読み取り用スキーマで検証し、不正な値を
-// 保存前に拒否する。
+// 以下の 2 種類の値は、期限切れの配信の終了や次のアラームの計算のために、オブジェクトの
+// すべてのメソッドが読み取る。読み戻せない値が 1 つでも保存されると後続のすべての呼び出しが
+// 失敗するため、書き込み時にも読み取りと同じスキーマで検証して保存前に拒否する。
 
-// 10 進数文字列として表現された Discord snowflake。
+/** 10 進数文字列として表現された Discord snowflake。 */
 function createNotificationMessageIdSchema() {
   return v.pipe(v.string(), v.regex(/^[0-9]+$/u));
 }
@@ -111,7 +102,7 @@ function getNotificationMessageIdSchema() {
   return notificationMessageIdSchema;
 }
 
-// Unix エポックミリ秒。
+/** Unix エポックミリ秒。 */
 function createTimestampSchema() {
   return v.pipe(v.number(), v.integer());
 }
@@ -124,12 +115,14 @@ function getTimestampSchema() {
   return timestampSchema;
 }
 
+/** @throws {Error} `value` が 10 進数文字列の Discord snowflake でない場合。 */
 function assertNotificationMessageId(value: string, column: string): void {
   if (!v.is(getNotificationMessageIdSchema(), value)) {
     throw new Error(`Invalid ${column}`);
   }
 }
 
+/** @throws {Error} `value` が整数でない場合。 */
 function assertTimestamp(value: number, column: string): void {
   if (!v.is(getTimestampSchema(), value)) {
     throw new Error(`Invalid ${column}`);
@@ -275,6 +268,7 @@ function getNextWakeRowSchema() {
   return nextWakeRowSchema;
 }
 
+/** @throws {Error} 行の形式が本モジュールの書き込む形式と一致しない場合。 */
 function parseEndedLiveRow(row: unknown): EndedLive {
   const rowResult = v.safeParse(getEndedLiveRowSchema(), row);
   if (!rowResult.success) {
@@ -416,7 +410,8 @@ export function setLiveNotificationMessageId(
 /**
  * リクエストが Calls 上で配信中インジェストセッションの生存を確認したことを記録する。
  * 健全な配信の同時視聴者全員が毎回行を書き込まないよう、`minIntervalMs` ごとに
- * 最大 1 回のみ記録する。
+ * 最大 1 回のみ記録する。記録した場合は true、間隔内の記録がすでにあるか行がその
+ * セッションを保持していない場合は false を返す。
  *
  * @throws {Error} `now` が整数でない場合。この場合、何も保存されない。
  */
@@ -683,14 +678,11 @@ export function setUser(sql: SqlStorage, user: User): void {
 }
 
 /**
- * OBS の再接続待ち中のものも含め、すべての配信の配信者一覧を返す。
+ * 再接続猶予期間中のものも含め、すべての配信の配信者一覧を返す。
  *
  * @throws {Error} 保存されている行の形式が本モジュールの書き込む形式と一致しない場合。
  */
 export function getAllLives(sql: SqlStorage): Live[] {
-  // ここでは意図的に全 Calls セッションの生存確認を行わない。一覧取得は軽量に保ち、
-  // 古い行の整合はユーザー指定のインジェスト/再生リクエスト時に行う。
-  // OBS の再接続待ち中の配信は、猶予期間が経過するまで一覧に残る。
   return sql
     .exec(
       "SELECT users.user_id, display_name FROM lives JOIN users ON lives.user_id = users.user_id ORDER BY users.user_id",

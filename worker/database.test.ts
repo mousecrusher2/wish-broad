@@ -36,8 +36,10 @@ function createTracks(sessionId: string) {
   ];
 }
 
-// 新しい LiveState オブジェクトの SQLite ストレージ上でクエリを実行する。オブジェクトは
-// 起動時にスキーマを適用するため、各テストは空のテーブルから始まる。
+/**
+ * 新しい LiveState オブジェクトの SQLite ストレージ上でクエリを実行する。オブジェクトは
+ * 起動時にスキーマを適用するため、各テストは空のテーブルから始まる。
+ */
 async function withSql(test: (sql: SqlStorage) => void): Promise<void> {
   const stub = env.LIVE_STATE.get(env.LIVE_STATE.newUniqueId());
   await runInDurableObject(stub, (_instance, state) => {
@@ -45,7 +47,7 @@ async function withSql(test: (sql: SqlStorage) => void): Promise<void> {
   });
 }
 
-// 型付きヘルパーでは決して書き込まない形式の行を保存する。
+/** 型付きヘルパーでは決して書き込まない形式の行を保存する。 */
 function insertRawLive(
   sql: SqlStorage,
   overrides: Record<string, string>,

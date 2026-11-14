@@ -10,9 +10,11 @@ type DiscordWebhookErrorKind =
 
 const REDACTED = "[redacted]";
 
-// Discord Webhook の URL 形式は `/api[/vN]/webhooks/{id}/{token}[/...]` であり、
-// token 部分だけでチャンネルメッセージの投稿と削除の権限を持つ。エラーログには
-// エンドポイントが記録されるため、ログには必ずこのように伏字化した形式のみを含める。
+/**
+ * Webhook URL の token 部分を伏字にする。URL の形式は `/api[/vN]/webhooks/{id}/{token}[/...]`
+ * で、token だけでチャンネルへの投稿と削除ができる。エラーログにはエンドポイントが記録される
+ * ため、ログには必ずこの形式だけを含める。
+ */
 function redactWebhookUrl(webhookUrl: string): string {
   let url: URL;
   try {
@@ -80,8 +82,7 @@ function getErrorMessage(error: unknown): string {
 
 function createWebhookExecutionEndpoint(webhookUrl: string): string {
   const url = new URL(webhookUrl);
-  // 対応する配信行が削除された際にベストエフォートで送信した開始通知を削除するには
-  // 返却されるメッセージ ID が必要になるため、wait=true が必須。
+  // 配信の終了時に開始通知を削除するにはメッセージ ID が必要で、wait=true のときだけ返される。
   url.searchParams.set("wait", "true");
   return url.toString();
 }
