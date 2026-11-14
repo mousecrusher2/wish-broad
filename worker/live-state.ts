@@ -89,7 +89,8 @@ export function isTransientLiveStateError(error: unknown): boolean {
  * すべてのメソッドは 1 つのトランザクションで実行され、最初に期限切れの配信を終了させる。
  * Worker が Calls で観測した結果に基づく状態遷移は、Worker が観測したセッションに対する
  * Compare-And-Set になっている（docs/architecture.md「配信行（lives）のセマンティクス」）。
- * reject したメソッドは何も保存していない。
+ * reject したメソッドは何も保存していない。メソッドがスローしたエラーは RPC を越えると
+ * クラスが失われ、同じメッセージの `Error` として呼び出し元に届く。
  */
 export class LiveState extends DurableObject<Bindings> {
   static {
