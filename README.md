@@ -106,6 +106,8 @@ pnpm deploy
 
 Production secrets must be configured in Cloudflare before deployment. The `LIVE_STATE` Durable Object binding and its storage are created by `wrangler deploy` from `wrangler.jsonc`, and the object creates its own tables when it starts, so there is no database to create or migrate by hand.
 
+Deploying this version over one that still keeps its state in D1 drops that state: the Durable Object starts empty and the D1 rows are not imported. Read [Cutover from D1](docs/architecture.md#cutover-from-d1) before doing so; publishers have to create new live tokens afterwards.
+
 ## Architecture Notes
 
 The Worker is intentionally stateless. Durable state lives in the SQLite storage of one Durable Object (`LiveState`), while media session state is owned by Cloudflare Realtime SFU. The object only runs short transactions on its own storage: it never calls Realtime SFU, Discord, or any other external API, because it is billed for the time it spends waiting. The app avoids designs that poll all live sessions or keep long-lived in-memory state. The one scheduled task is the object's alarm, which ends a broadcast once its 60-second OBS reconnect grace period passes and hands the Discord cleanup to the Worker; it is only set while a broadcast is waiting for OBS or a notification is waiting to be deleted.

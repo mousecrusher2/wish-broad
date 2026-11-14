@@ -78,6 +78,33 @@ The Vitest suite runs the same statements against Node's SQLite
 instead of surfacing after a deploy. It cannot prove that a data-copying
 migration moves or transforms existing rows correctly.
 
+## Cutover from D1
+
+Live state used to be stored in a D1 database (`broad-db`), with a Workflow
+(`whip-worker-live-end`) ending broadcasts. `LiveState` replaced both and
+starts empty: the D1 rows are deliberately not imported. They were reviewed
+before the switch and judged safe to drop, because each table is rebuilt by
+normal use. The deploy that makes the switch has these effects:
+
+- `live_tokens`: every publisher token stops working. OBS gets 401 from
+  `/ingest/:userId` until its publisher creates a new token on the site and
+  enters it in OBS.
+- `users`: a user is stored again at their next login. Someone still signed in
+  from before the switch can create a token and broadcast, but that broadcast
+  is not listed in `/api/lives` until they log in again. The auth cookie lasts
+  one day, so this ends by itself.
+- `lives`: a broadcast running during the deploy is no longer known. It
+  disappears from `/api/lives`, viewers get 404, and its start notification
+  stays in Discord because the message id is gone with the row. Deploy while
+  nobody is broadcasting. Otherwise the publisher has to start the stream
+  again, and the old notification has to be deleted by hand.
+
+The deploy does not remove the old resources, and nothing reads them
+afterwards. Workflow instances that were sleeping through a grace period no
+longer have a class to run. Once the switch is confirmed, delete both with
+`wrangler workflows delete whip-worker-live-end` and
+`wrangler d1 delete broad-db`.
+
 ## Auth and Tokens
 
 Discord OAuth is an admission check, not the long-lived app session. The Worker

@@ -39,6 +39,9 @@
   // Live broadcasts, publisher tokens, users, and the alarm that ends a
   // broadcast once its OBS reconnect grace period passes. See
   // worker/live-state.ts.
+  //
+  // The object starts empty. The rows of the D1 database it replaced are
+  // deliberately not imported; see "Cutover from D1" in docs/architecture.md.
   "durable_objects": {
     "bindings": [
       {
