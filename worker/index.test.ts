@@ -8,6 +8,7 @@ import { env } from "cloudflare:workers";
 import { sign, verify } from "hono/jwt";
 import {
   afterEach,
+  assert,
   beforeEach,
   describe,
   expect,
@@ -189,9 +190,7 @@ function getSetCookieValue(response: Response, name: string): string {
   const cookie = setCookie
     ?.split(/, (?=[^;,]+=)/u)
     .find((value) => value.startsWith(`${name}=`));
-  if (cookie === undefined) {
-    throw new Error(`Missing ${name} cookie`);
-  }
+  assert.isDefined(cookie, `Missing ${name} cookie`);
   return cookie;
 }
 
@@ -246,9 +245,7 @@ async function seedLive({
 } = {}): Promise<string> {
   const liveState = getLiveState(env);
   const broadcastId = await liveState.insertLive(userId, sessionId, tracks);
-  if (broadcastId === null) {
-    throw new Error("Expected a new broadcast");
-  }
+  assert.isNotNull(broadcastId, "Expected a new broadcast");
   if (notificationMessageId !== undefined) {
     await liveState.setLiveNotificationMessageId(
       userId,
@@ -586,9 +583,7 @@ describe("worker app", () => {
     expect(response.headers.get("set-cookie")).toContain("HttpOnly");
     const authCookie = getSetCookieValue(response, "authtoken");
     const token = authCookie.slice("authtoken=".length).split(";", 1)[0];
-    if (!token) {
-      throw new Error("Login response did not contain an auth token");
-    }
+    assert(token, "Login response did not contain an auth token");
     const payload = await verify(token, env.JWT_SECRET, "HS256");
     expect(payload).toMatchObject({ displayName: "Alice", userId: "user-1" });
     expect(payload.iat).toBe(now / 1000);

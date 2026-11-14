@@ -6,6 +6,7 @@ import {
 import { env } from "cloudflare:workers";
 import {
   afterEach,
+  assert,
   beforeEach,
   describe,
   expect,
@@ -53,9 +54,7 @@ async function failNextSetAlarm(stub: LiveStateStub): Promise<void> {
 /** 開始通知付きの配信を user-1 / session-1 で開始する。 */
 async function startNotifiedLive(stub: LiveStateStub): Promise<void> {
   const broadcastId = await stub.insertLive("user-1", "session-1", []);
-  if (broadcastId === null) {
-    throw new Error("Expected a new broadcast");
-  }
+  assert.isNotNull(broadcastId, "Expected a new broadcast");
   await stub.setLiveNotificationMessageId("user-1", broadcastId, "9");
 }
 
@@ -386,9 +385,7 @@ describe("live state", () => {
   it("rejects an invalid notification id without poisoning later calls", async () => {
     const stub = createLiveState();
     const broadcastId = await stub.insertLive("user-1", "session-1", []);
-    if (broadcastId === null) {
-      throw new Error("Expected a new broadcast");
-    }
+    assert.isNotNull(broadcastId, "Expected a new broadcast");
 
     await expect(
       asPromise(

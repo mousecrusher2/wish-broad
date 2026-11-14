@@ -1,6 +1,6 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   endLive,
   endOverdueLives,
@@ -149,9 +149,7 @@ describe("live state SQL", () => {
   it("stores a notification only on the broadcast it was sent for", async () => {
     await withSql((sql) => {
       const broadcastId = insertLive(sql, "user-1", "session-1", []);
-      if (broadcastId === null) {
-        throw new Error("Expected a new broadcast");
-      }
+      assert.isNotNull(broadcastId, "Expected a new broadcast");
 
       expect(
         setLiveNotificationMessageId(sql, "user-1", "other-broadcast", "45"),
@@ -173,9 +171,7 @@ describe("live state SQL", () => {
   it("rejects values that would make cleanup or alarm reads fail", async () => {
     await withSql((sql) => {
       const broadcastId = insertLive(sql, "user-1", "session-1", []);
-      if (broadcastId === null) {
-        throw new Error("Expected a new broadcast");
-      }
+      assert.isNotNull(broadcastId, "Expected a new broadcast");
 
       expect(() =>
         setLiveNotificationMessageId(sql, "user-1", broadcastId, "bad-id"),

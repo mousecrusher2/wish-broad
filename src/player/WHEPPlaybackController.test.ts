@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   WHEPPlaybackController,
   type WHEPPlaybackControllerSnapshot,
@@ -105,9 +113,7 @@ class FakeSessionDescription {
 
 function lastPeer(): FakePeerConnection {
   const pc = FakePeerConnection.instances.at(-1);
-  if (pc === undefined) {
-    throw new Error("Expected a peer connection");
-  }
+  assert.isDefined(pc, "Expected a peer connection");
   return pc;
 }
 

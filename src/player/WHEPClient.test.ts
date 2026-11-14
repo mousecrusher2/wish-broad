@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   type WHEPConnectionStatus,
   WHEPSession,
@@ -205,9 +213,7 @@ function createSession({
     videoElement,
   });
   const pc = FakePeerConnection.instances.at(-1);
-  if (pc === undefined) {
-    throw new Error("Expected the session to create a peer connection");
-  }
+  assert.isDefined(pc, "Expected the session to create a peer connection");
   return { pc, session, statuses, streams, videoElement };
 }
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   type FetchFailureKind,
   fetchWithTimeout,
@@ -24,15 +24,12 @@ function createTestError(kind: FetchFailureKind, failure: unknown): Error {
 async function catchTestError(
   promise: Promise<unknown>,
 ): Promise<TestFetchError> {
-  try {
-    await promise;
-  } catch (error: unknown) {
-    if (error instanceof TestFetchError) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error("Expected the request to fail");
+  const error = await promise.then(
+    () => undefined,
+    (rejection: unknown) => rejection,
+  );
+  assert.instanceOf(error, TestFetchError);
+  return error;
 }
 
 afterEach(() => {

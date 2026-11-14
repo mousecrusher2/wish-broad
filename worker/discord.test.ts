@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   buildDiscordAuthorizationUrl,
   createOAuthState,
@@ -12,15 +12,12 @@ import {
 async function catchDiscordError(
   promise: Promise<unknown>,
 ): Promise<DiscordApiError> {
-  try {
-    await promise;
-  } catch (error: unknown) {
-    if (error instanceof DiscordApiError) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error("Expected a DiscordApiError");
+  const error = await promise.then(
+    () => undefined,
+    (rejection: unknown) => rejection,
+  );
+  assert.instanceOf(error, DiscordApiError);
+  return error;
 }
 
 describe("worker discord helpers", () => {
@@ -176,12 +173,9 @@ describe("worker discord helpers", () => {
         },
       }),
     );
-    const request = fetchSpy.mock.calls[0]?.[1];
-    expect(request?.body).toBeInstanceOf(URLSearchParams);
-    if (!(request?.body instanceof URLSearchParams)) {
-      throw new TypeError("Expected an OAuth form body");
-    }
-    expect([...request.body.entries()]).toEqual([
+    const body = fetchSpy.mock.calls[0]?.[1]?.body;
+    assert.instanceOf(body, URLSearchParams, "Expected an OAuth form body");
+    expect([...body.entries()]).toEqual([
       ...new URLSearchParams({
         code: "code with spaces",
         grant_type: "authorization_code",

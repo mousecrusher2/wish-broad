@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   closeTracks,
   isSessionActive,
@@ -36,9 +36,7 @@ function sessionResponse(): Response {
 
 function requestBody(init: RequestInit | undefined): string {
   const body = init?.body;
-  if (typeof body !== "string") {
-    throw new TypeError("Expected an SFU JSON request body");
-  }
+  assert(typeof body === "string", "Expected an SFU JSON request body");
   return body;
 }
 
@@ -51,15 +49,12 @@ function trackResponse(overrides: Record<string, unknown> = {}): Response {
 }
 
 async function catchSfuError(promise: Promise<unknown>): Promise<SfuApiError> {
-  try {
-    await promise;
-  } catch (error: unknown) {
-    if (error instanceof SfuApiError) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error("Expected an SfuApiError");
+  const error = await promise.then(
+    () => undefined,
+    (rejection: unknown) => rejection,
+  );
+  assert.instanceOf(error, SfuApiError);
+  return error;
 }
 
 describe("SFU API", () => {
@@ -201,15 +196,10 @@ describe("SFU API", () => {
       startIngest(env, "live-id", "offer"),
     );
     expect(invalidJson.kind).toBe("invalid_response_json");
-    const jsonFailureBody = invalidJson.responseBody;
-    if (
-      typeof jsonFailureBody !== "object" ||
-      jsonFailureBody === null ||
-      !("error" in jsonFailureBody)
-    ) {
-      throw new Error("Expected SFU JSON parser error details");
-    }
-    expect(typeof jsonFailureBody.error).toBe("string");
+    expect(invalidJson.responseBody).toHaveProperty(
+      "error",
+      expect.any(String),
+    );
 
     const requestFailed = await catchSfuError(
       startIngest(env, "live-id", "offer"),
@@ -399,7 +389,7 @@ describe("SFU API", () => {
     let caseIndex = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(() => {
       const testCase = cases[caseIndex];
-      if (!testCase) throw new Error("Unexpected SFU HTTP case");
+      assert.isDefined(testCase, "Unexpected SFU HTTP case");
       caseIndex += 1;
       return Promise.resolve(new Response("failure", { status: testCase[0] }));
     });
@@ -410,7 +400,7 @@ describe("SFU API", () => {
     );
     errors.forEach((error, index) => {
       const testCase = cases[index];
-      if (!testCase) throw new Error("Missing expected SFU HTTP case");
+      assert.isDefined(testCase, "Missing expected SFU HTTP case");
       const [status, kind] = testCase;
       expect(error.kind).toBe(kind);
       expect(error.isSessionNotFound()).toBe(status === 404);
@@ -559,7 +549,7 @@ describe("SFU API", () => {
     const inactiveStatuses = [404, 410] as const;
     vi.spyOn(globalThis, "fetch").mockImplementation(() => {
       const status = inactiveStatuses[responseIndex];
-      if (status === undefined) throw new Error("Unexpected session probe");
+      assert.isDefined(status, "Unexpected session probe");
       responseIndex += 1;
       return Promise.resolve(new Response("gone", { status }));
     });

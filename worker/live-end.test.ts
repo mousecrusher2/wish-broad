@@ -6,6 +6,7 @@ import {
 import { env, exports } from "cloudflare:workers";
 import {
   afterEach,
+  assert,
   beforeEach,
   describe,
   expect,
@@ -216,9 +217,7 @@ describe("live end", () => {
   it("deletes an ended broadcast's notification once the alarm hands it to the Worker", async () => {
     const liveState = getLiveState(env);
     const broadcastId = await liveState.insertLive("user-1", "session-1", []);
-    if (broadcastId === null) {
-      throw new Error("Expected a new broadcast");
-    }
+    assert.isNotNull(broadcastId, "Expected a new broadcast");
     await liveState.setLiveNotificationMessageId("user-1", broadcastId, "9");
     await liveState.startLiveReconnectGrace(
       "user-1",
