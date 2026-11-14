@@ -226,9 +226,9 @@ describe("live state", () => {
     await core.endLive("user-1", "session-1");
 
     let now = NOW;
-    for (const leaseMs of [
-      30_000, 60_000, 120_000, 240_000, 480_000, 960_000,
-    ]) {
+    // The last attempt only waits for its result, so the delete is abandoned
+    // 16 minutes after the broadcast ended.
+    for (const leaseMs of [30_000, 60_000, 120_000, 240_000, 480_000, 30_000]) {
       expect(testStorage.getAlarm()).toBe(now);
       vi.setSystemTime(now);
       // oxlint-disable-next-line no-await-in-loop -- Each attempt follows the previous lease.
@@ -236,6 +236,7 @@ describe("live state", () => {
       now += leaseMs;
     }
     expect(dispatch).toHaveBeenCalledTimes(6);
+    expect(now).toBe(NOW + 16 * 60_000);
     expect(testStorage.getAlarm()).toBe(now);
 
     vi.setSystemTime(now);

@@ -334,10 +334,11 @@ trying again cannot succeed, such as for a message that was already deleted.
 A delete that failed with a network error, timeout, 429, or 5xx is not
 reported, so its lease expires and the alarm hands it out again. Leases start
 at 30 seconds, which covers the time a Worker's `waitUntil` may run, and double
-on every attempt. After six attempts, spread over about 15 minutes, the entry
-is dropped with a `live_notification.delete_abandoned` warning and the message
-stays in Discord. The outbox is at-least-once, so a message can be deleted
-twice; Discord answers the second attempt with 404, which finishes it.
+on every attempt, which puts the six attempts within about 15 minutes. If the
+last one does not finish the delete within 30 seconds, the entry is dropped
+with a `live_notification.delete_abandoned` warning and the message stays in
+Discord. The outbox is at-least-once, so a message can be deleted twice;
+Discord answers the second attempt with 404, which finishes it.
 
 A broadcast that ends because a request found its session inactive queues its
 delete the same way, due at once, so the alarm set by that same call hands it

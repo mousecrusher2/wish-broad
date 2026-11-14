@@ -23,9 +23,20 @@ const LIVE_STATE_NAME = "global";
 // 30 seconds a Worker's waitUntil may run, so an attempt is over before the
 // next one starts.
 const NOTIFICATION_DELETE_LEASE_MS = 30_000;
-// Leases of 30 seconds to 8 minutes spread the attempts over about 15 minutes,
-// after which the notification stays in Discord.
+// Leases of 30 seconds to 8 minutes put the attempts within about 15 minutes.
+// A delete that the last attempt did not finish is abandoned, and its
+// notification stays in Discord.
 const NOTIFICATION_DELETE_MAX_ATTEMPTS = 6;
+
+// How long a delete stays hidden once it is handed out, given how often it was
+// handed out before.
+function getNotificationDeleteLeaseMs(attempts: number): number {
+  // No attempt follows the last one, so it only gets the time to report its
+  // result before the delete is abandoned.
+  return attempts + 1 >= NOTIFICATION_DELETE_MAX_ATTEMPTS
+    ? NOTIFICATION_DELETE_LEASE_MS
+    : NOTIFICATION_DELETE_LEASE_MS * 2 ** attempts;
+}
 
 /** A start notification the Worker should delete from Discord. */
 export type NotificationDeleteJob = {
@@ -359,7 +370,7 @@ export class LiveStateCore {
         db.leaseNotificationDelete(
           this.#storage.sql,
           entry.messageId,
-          now + NOTIFICATION_DELETE_LEASE_MS * 2 ** entry.attempts,
+          now + getNotificationDeleteLeaseMs(entry.attempts),
         );
         jobs.push({ messageId: entry.messageId, userId: entry.userId });
       }
