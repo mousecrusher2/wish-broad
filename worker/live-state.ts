@@ -4,7 +4,10 @@
 // このオブジェクトは実行または待機に費やした実時間（wall-clock time）に対して課金されるため、
 // 自身のストレージ操作のみを行い、Calls・Discord・その他の外部 API は一切呼び出さない。
 // それらの呼び出しと結果の報告は Worker 側が行う。オブジェクトが自律的に開始する唯一の外部処理
-// である「終了した配信の開始通知の削除」も、`dispatch` を通じて Worker に委譲してそちらで完了させる。
+// である「終了した配信の開始通知の削除」も、`LiveEffects` エントリーポイント（./live-end）に
+// 委譲してそちらで完了させる。
+import { retryable } from "cloudflare:durable-objects";
+import { DurableObject } from "cloudflare:workers";
 import * as db from "./database";
 import { createErrorLogFields, logInfo, logWarn } from "./logger";
 import type { StoredTrack } from "./sfu";
@@ -41,8 +44,6 @@ export type NotificationDeleteJob = {
 
 type LiveEndReason = "reconnect_grace_expired" | "session_inactive";
 
-type LiveStateEnv = Pick<Bindings, "ENVIRONMENT" | "LOG_LEVEL">;
-
 /** コマンドが実行中のトランザクションから受け取るコンテキスト。 */
 type CommandRun = {
   /**
@@ -51,25 +52,6 @@ type CommandRun = {
    */
   logOnCommit(write: () => void): void;
   now: number;
-};
-
-/**
- * LiveStateCore が使用する Durable Object ストレージのインターフェース。
- *
- * Durable Objects storage のドキュメントにあるとおり、`transaction` クロージャーの
- * 実行中にストレージに対して行われたすべての操作はそのトランザクションの一部となり、
- * `rollback()` で破棄される。アラーム操作もストレージ操作の一種である。`transactionSync` は
- * 同期操作しか対象にできないため、アラーム呼び出しがその外に漏れてしまう。
- */
-export type LiveStateStorage = {
-  deleteAlarm(): Promise<void>;
-  getAlarm(): Promise<number | null>;
-  setAlarm(scheduledTime: number): Promise<void>;
-  sql: db.Sql;
-  transaction<T>(
-    closure: (txn: { rollback(): void }) => Promise<T>,
-  ): Promise<T>;
-  transactionSync<T>(closure: () => T): T;
 };
 
 /**
@@ -105,8 +87,8 @@ export function isTransientLiveStateError(error: unknown): boolean {
 }
 
 /**
- * Node ベースのテストでも実行できるよう、./main のクラスから分離した
- * LiveState Durable Object のロジック本体。
+ * ライブ配信、配信者トークン、およびユーザーを保持し、再接続猶予期間の経過後に
+ * 配信を終了させる Durable Object。
  *
  * すべてのメソッドは最初に再接続猶予期間を過ぎた配信を終了させるため、アラームの発火が
  * 遅れていても呼び出し側が期限切れの配信を目にすることはない。Worker が行った Calls
@@ -117,29 +99,19 @@ export function isTransientLiveStateError(error: unknown): boolean {
  * reject するメソッドは何も保存していない（ストレージ障害であっても値の拒否であっても、
  * トランザクションはロールバックされる）。
  */
-export class LiveStateCore {
-  readonly #dispatchNotificationDeletes: (
-    jobs: NotificationDeleteJob[],
-  ) => Promise<void>;
-  readonly #env: LiveStateEnv;
-  readonly #storage: LiveStateStorage;
+export class LiveState extends DurableObject<Bindings> {
+  static {
+    // 接続が切れた際、ランタイムはその呼び出しが実行済みかどうかを判別できないため、
+    // ここにマークされたメソッドのみを再実行する。開始通知の保存は 2 回実行されても安全であり、
+    // ここで失敗させると配信の開始通知が失われてしまう。
+    // oxlint-disable-next-line typescript/unbound-method -- retryable はプロトタイプ関数に印を付けるだけで呼び出さないため。
+    retryable(this.prototype.setLiveNotificationMessageId);
+  }
 
-  /**
-   * @param dispatchNotificationDeletes 通知削除タスクを Worker に引き渡す関数。
-   * Discord の応答を待たず、Worker が受け付けた時点ですぐに返却する必要がある。
-   */
-  constructor(
-    storage: LiveStateStorage,
-    env: LiveStateEnv,
-    dispatchNotificationDeletes: (
-      jobs: NotificationDeleteJob[],
-    ) => Promise<void>,
-  ) {
-    this.#storage = storage;
-    this.#env = env;
-    this.#dispatchNotificationDeletes = dispatchNotificationDeletes;
-    storage.transactionSync(() => {
-      db.migrateSchema(storage.sql);
+  constructor(ctx: DurableObjectState, env: Bindings) {
+    super(ctx, env);
+    ctx.storage.transactionSync(() => {
+      db.migrateSchema(ctx.storage.sql);
     });
   }
 
@@ -147,7 +119,7 @@ export class LiveStateCore {
    * 猶予期間の終了時、または通知削除の実行期限到来時に実行される。
    * 期限切れの配信を終了させ、期限に達したすべての削除タスクを Worker に引き渡す。
    */
-  async alarm(): Promise<void> {
+  override async alarm(): Promise<void> {
     const jobs = await this.#run((run) =>
       this.#leaseDueNotificationDeletes(run),
     );
@@ -156,10 +128,12 @@ export class LiveStateCore {
     }
 
     try {
-      await this.#dispatchNotificationDeletes(jobs);
+      // LiveEffects は即座に返却して waitUntil 内で削除するため、このオブジェクトは
+      // Discord の応答を待たない。
+      await this.ctx.exports.LiveEffects.deleteStartNotifications(jobs);
     } catch (error: unknown) {
       // 削除タスクのリース状態は維持されるため、後ほどアラームによって再び払い出される。
-      logWarn(this.#env, "live_notification.delete_dispatch_failed", {
+      logWarn(this.env, "live_notification.delete_dispatch_failed", {
         ...createErrorLogFields(error),
         messageIds: jobs.map((job) => job.messageId),
       });
@@ -167,11 +141,11 @@ export class LiveStateCore {
   }
 
   async getLive(userId: string): Promise<db.LiveRecord | null> {
-    return this.#run(() => db.getLive(this.#storage.sql, userId));
+    return this.#run(() => db.getLive(this.ctx.storage.sql, userId));
   }
 
   async getAllLives(): Promise<{ owner: db.User }[]> {
-    return this.#run(() => db.getAllLives(this.#storage.sql));
+    return this.#run(() => db.getAllLives(this.ctx.storage.sql));
   }
 
   /**
@@ -183,7 +157,7 @@ export class LiveStateCore {
     tracks: StoredTrack[],
   ): Promise<string | null> {
     return this.#run(() =>
-      db.insertLive(this.#storage.sql, userId, sessionId, tracks),
+      db.insertLive(this.ctx.storage.sql, userId, sessionId, tracks),
     );
   }
 
@@ -200,7 +174,7 @@ export class LiveStateCore {
   ): Promise<boolean> {
     return this.#run(() =>
       db.resumeLive(
-        this.#storage.sql,
+        this.ctx.storage.sql,
         userId,
         previousSessionId,
         sessionId,
@@ -224,7 +198,7 @@ export class LiveStateCore {
     return this.#run(({ now }) => {
       const graceExpiresAt = now + graceMs;
       return db.startLiveReconnectGrace(
-        this.#storage.sql,
+        this.ctx.storage.sql,
         userId,
         sessionId,
         graceExpiresAt,
@@ -241,7 +215,7 @@ export class LiveStateCore {
    */
   async endLive(userId: string, sessionId: string): Promise<boolean> {
     return this.#run((run) => {
-      const ended = db.endLive(this.#storage.sql, userId, sessionId);
+      const ended = db.endLive(this.ctx.storage.sql, userId, sessionId);
       if (ended === null) {
         return false;
       }
@@ -259,7 +233,7 @@ export class LiveStateCore {
   ): Promise<boolean> {
     return this.#run(({ now }) =>
       db.markLiveSessionSeenActive(
-        this.#storage.sql,
+        this.ctx.storage.sql,
         userId,
         sessionId,
         now,
@@ -286,7 +260,7 @@ export class LiveStateCore {
     return this.#run(({ now }) => {
       if (
         db.setLiveNotificationMessageId(
-          this.#storage.sql,
+          this.ctx.storage.sql,
           userId,
           broadcastId,
           messageId,
@@ -295,7 +269,12 @@ export class LiveStateCore {
         return true;
       }
 
-      db.enqueueNotificationDelete(this.#storage.sql, messageId, userId, now);
+      db.enqueueNotificationDelete(
+        this.ctx.storage.sql,
+        messageId,
+        userId,
+        now,
+      );
       return false;
     });
   }
@@ -307,7 +286,7 @@ export class LiveStateCore {
   async settleNotificationDeletes(messageIds: string[]): Promise<void> {
     await this.#run(() => {
       for (const messageId of messageIds) {
-        db.removeNotificationDelete(this.#storage.sql, messageId);
+        db.removeNotificationDelete(this.ctx.storage.sql, messageId);
       }
     });
   }
@@ -315,21 +294,21 @@ export class LiveStateCore {
   /** ユーザーの配信者トークンを置き換える。 */
   async setLiveToken(userId: string, tokenHash: string): Promise<void> {
     await this.#run(() => {
-      db.setLiveToken(this.#storage.sql, userId, tokenHash);
+      db.setLiveToken(this.ctx.storage.sql, userId, tokenHash);
     });
   }
 
   async getLiveTokenHash(userId: string): Promise<string | null> {
-    return this.#run(() => db.getLiveTokenHash(this.#storage.sql, userId));
+    return this.#run(() => db.getLiveTokenHash(this.ctx.storage.sql, userId));
   }
 
   async hasLiveToken(userId: string): Promise<boolean> {
-    return this.#run(() => db.hasLiveToken(this.#storage.sql, userId));
+    return this.#run(() => db.hasLiveToken(this.ctx.storage.sql, userId));
   }
 
   async setUser(user: db.User): Promise<void> {
     await this.#run(() => {
-      db.setUser(this.#storage.sql, user);
+      db.setUser(this.ctx.storage.sql, user);
     });
   }
 
@@ -338,10 +317,15 @@ export class LiveStateCore {
    * 実行する。同じトランザクション内で次に状態処理が必要となる時刻へアラームを移動するため、
    * 期限や通知削除タスクが対応するアラームなしに保存されることはない。クロージャーは
    * アラーム操作以外では一切 await しない。
+   *
+   * `transaction` クロージャーの実行中に行ったストレージ操作（アラーム操作を含む）はすべて
+   * そのトランザクションに属し、`rollback()` で破棄される。`transactionSync` は同期操作しか
+   * 対象にできず、アラーム呼び出しがその外に漏れてしまうため使用しない。
    */
   async #run<T>(command: (run: CommandRun) => T): Promise<T> {
+    const { storage } = this.ctx;
     const commitLogs: (() => void)[] = [];
-    const result = await this.#storage.transaction(async (txn) => {
+    const result = await storage.transaction(async (txn) => {
       try {
         const run: CommandRun = {
           logOnCommit(write) {
@@ -349,7 +333,7 @@ export class LiveStateCore {
           },
           now: Date.now(),
         };
-        for (const ended of db.endOverdueLives(this.#storage.sql, run.now)) {
+        for (const ended of db.endOverdueLives(storage.sql, run.now)) {
           this.#finishEndedLive(run, ended, "reconnect_grace_expired");
         }
         const commandResult = command(run);
@@ -375,7 +359,7 @@ export class LiveStateCore {
     reason: LiveEndReason,
   ): void {
     run.logOnCommit(() => {
-      logInfo(this.#env, "live.ended", {
+      logInfo(this.env, "live.ended", {
         reason,
         sessionId: ended.sessionId,
         userId: ended.userId,
@@ -384,7 +368,7 @@ export class LiveStateCore {
     if (ended.notificationMessageId !== null) {
       // 即座に実行期限を迎える: このコマンドが設定するアラームによって Worker に引き渡される。
       db.enqueueNotificationDelete(
-        this.#storage.sql,
+        this.ctx.storage.sql,
         ended.notificationMessageId,
         ended.userId,
         run.now,
@@ -393,15 +377,13 @@ export class LiveStateCore {
   }
 
   #leaseDueNotificationDeletes(run: CommandRun): NotificationDeleteJob[] {
+    const { sql } = this.ctx.storage;
     const jobs: NotificationDeleteJob[] = [];
-    for (const entry of db.getDueNotificationDeletes(
-      this.#storage.sql,
-      run.now,
-    )) {
+    for (const entry of db.getDueNotificationDeletes(sql, run.now)) {
       if (entry.attempts >= NOTIFICATION_DELETE_MAX_ATTEMPTS) {
-        db.removeNotificationDelete(this.#storage.sql, entry.messageId);
+        db.removeNotificationDelete(sql, entry.messageId);
         run.logOnCommit(() => {
-          logWarn(this.#env, "live_notification.delete_abandoned", {
+          logWarn(this.env, "live_notification.delete_abandoned", {
             attempts: entry.attempts,
             messageId: entry.messageId,
             userId: entry.userId,
@@ -409,7 +391,7 @@ export class LiveStateCore {
         });
       } else {
         db.leaseNotificationDelete(
-          this.#storage.sql,
+          sql,
           entry.messageId,
           run.now + getNotificationDeleteLeaseMs(entry.attempts),
         );
@@ -428,18 +410,19 @@ export class LiveStateCore {
    * アラームが設定されていない期限を取り残してしまう。
    */
   async #moveAlarm(): Promise<void> {
-    const wakeAt = db.getNextWakeAt(this.#storage.sql);
+    const { storage } = this.ctx;
+    const wakeAt = db.getNextWakeAt(storage.sql);
     // アラームハンドラーの実行中に新しいアラームを設定しない限り、この値は null になる
     // （発火中のアラームはすでに設定済みとはみなされない）。
-    const scheduledAt = await this.#storage.getAlarm();
+    const scheduledAt = await storage.getAlarm();
     if (wakeAt === scheduledAt) {
       return;
     }
 
     if (wakeAt === null) {
-      await this.#storage.deleteAlarm();
+      await storage.deleteAlarm();
     } else {
-      await this.#storage.setAlarm(wakeAt);
+      await storage.setAlarm(wakeAt);
     }
   }
 }

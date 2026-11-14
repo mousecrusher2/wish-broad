@@ -39,6 +39,7 @@ jobs:
             tsconfig.app.tsbuildinfo
             tsconfig.node.tsbuildinfo
             node_modules/.tmp/tsconfig.worker.tsbuildinfo
+            node_modules/.tmp/tsconfig.worker-test.tsbuildinfo
             node_modules/.vite
           key: ${{ runner.os }}-build-metadata-${{ hashFiles('pnpm-lock.yaml', 'tsconfig*.json') }}
           restore-keys: |

@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { runInDurableObject } from "cloudflare:test";
+import { env } from "cloudflare:workers";
+import { describe, expect, it } from "vitest";
 import {
   endLive,
   endOverdueLives,
@@ -18,10 +20,8 @@ import {
   setLiveNotificationMessageId,
   setLiveToken,
   setUser,
-  type Sql,
   startLiveReconnectGrace,
 } from "./database";
-import { createTestStorage } from "./test-doubles";
 
 const NOW = 1_700_000_000_000;
 
@@ -36,8 +36,20 @@ function createTracks(sessionId: string) {
   ];
 }
 
+// 新しい LiveState オブジェクトの SQLite ストレージ上でクエリを実行する。オブジェクトは
+// 起動時にスキーマを適用するため、各テストは空のテーブルから始まる。
+async function withSql(test: (sql: SqlStorage) => void): Promise<void> {
+  const stub = env.LIVE_STATE.get(env.LIVE_STATE.newUniqueId());
+  await runInDurableObject(stub, (_instance, state) => {
+    test(state.storage.sql);
+  });
+}
+
 // 型付きヘルパーでは決して書き込まない形式の行を保存する。
-function insertRawLive(sql: Sql, overrides: Record<string, string>): void {
+function insertRawLive(
+  sql: SqlStorage,
+  overrides: Record<string, string>,
+): void {
   const columns = {
     broadcast_id: "'broadcast-1'",
     grace_expires_at: "NULL",
@@ -54,334 +66,376 @@ function insertRawLive(sql: Sql, overrides: Record<string, string>): void {
 }
 
 describe("live state SQL", () => {
-  let sql: Sql;
+  it("creates the schema once and keeps stored rows when it runs again", async () => {
+    await withSql((sql) => {
+      setUser(sql, { userId: "user-1", displayName: "Streamer" });
 
-  beforeEach(() => {
-    ({ sql } = createTestStorage().storage);
-    migrateSchema(sql);
-  });
+      migrateSchema(sql);
 
-  it("creates the schema once and keeps stored rows when it runs again", () => {
-    setUser(sql, { userId: "user-1", displayName: "Streamer" });
-
-    migrateSchema(sql);
-
-    expect(sql.exec("SELECT version FROM schema_migrations").toArray()).toEqual(
-      [{ version: 1 }],
-    );
-    expect(sql.exec("SELECT display_name FROM users").toArray()).toEqual([
-      { display_name: "Streamer" },
-    ]);
-  });
-
-  it("returns null for a missing live row", () => {
-    expect(getLive(sql, "user-1")).toBeNull();
-  });
-
-  it("starts a broadcast with a fresh broadcast id", () => {
-    const tracks = createTracks("session-1");
-
-    const broadcastId = insertLive(sql, "user-1", "session-1", tracks);
-
-    expect(broadcastId).toMatch(/^[0-9a-f-]{36}$/u);
-    expect(getLive(sql, "user-1")).toEqual({
-      broadcastId,
-      graceExpiresAt: null,
-      sessionSeenActiveAt: null,
-      sessionId: "session-1",
-      tracks,
-      userId: "user-1",
+      expect(
+        sql.exec("SELECT version FROM schema_migrations").toArray(),
+      ).toEqual([{ version: 1 }]);
+      expect(sql.exec("SELECT display_name FROM users").toArray()).toEqual([
+        { display_name: "Streamer" },
+      ]);
     });
   });
 
-  it("does not replace the live row of an owner who already has one", () => {
-    const broadcastId = insertLive(
-      sql,
-      "user-1",
-      "session-1",
-      createTracks("session-1"),
-    );
-
-    expect(
-      insertLive(sql, "user-1", "session-2", createTracks("session-2")),
-    ).toBeNull();
-    expect(getLive(sql, "user-1")).toMatchObject({
-      broadcastId,
-      sessionId: "session-1",
+  it("returns null for a missing live row", async () => {
+    await withSql((sql) => {
+      expect(getLive(sql, "user-1")).toBeNull();
     });
   });
 
-  it("rejects malformed live rows, track JSON, and invalid track records", () => {
-    insertRawLive(sql, { grace_expires_at: "1.5" });
-    expect(() => getLive(sql, "user-1")).toThrow("Invalid lives row");
+  it("starts a broadcast with a fresh broadcast id", async () => {
+    await withSql((sql) => {
+      const tracks = createTracks("session-1");
 
-    insertRawLive(sql, { session_seen_active_at: "'recent'" });
-    expect(() => getLive(sql, "user-1")).toThrow("Invalid lives row");
+      const broadcastId = insertLive(sql, "user-1", "session-1", tracks);
 
-    insertRawLive(sql, { tracks_json: "'not-json'" });
-    expect(() => getLive(sql, "user-1")).toThrow(SyntaxError);
-
-    insertRawLive(sql, {
-      tracks_json: `'${JSON.stringify([
-        { ...createTracks("session-1")[0], location: "local" },
-      ])}'`,
-    });
-    expect(() => getLive(sql, "user-1")).toThrow("Invalid lives.tracks_json");
-  });
-
-  it("stores a notification only on the broadcast it was sent for", () => {
-    const broadcastId = insertLive(sql, "user-1", "session-1", []);
-    if (broadcastId === null) {
-      throw new Error("Expected a new broadcast");
-    }
-
-    expect(
-      setLiveNotificationMessageId(sql, "user-1", "other-broadcast", "45"),
-    ).toBe(false);
-    expect(setLiveNotificationMessageId(sql, "user-2", broadcastId, "45")).toBe(
-      false,
-    );
-    expect(setLiveNotificationMessageId(sql, "user-1", broadcastId, "45")).toBe(
-      true,
-    );
-    expect(endLive(sql, "user-1", "session-1")).toEqual({
-      notificationMessageId: "45",
-      sessionId: "session-1",
-      userId: "user-1",
+      expect(broadcastId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(getLive(sql, "user-1")).toEqual({
+        broadcastId,
+        graceExpiresAt: null,
+        sessionSeenActiveAt: null,
+        sessionId: "session-1",
+        tracks,
+        userId: "user-1",
+      });
     });
   });
 
-  it("rejects values that would make cleanup or alarm reads fail", () => {
-    const broadcastId = insertLive(sql, "user-1", "session-1", []);
-    if (broadcastId === null) {
-      throw new Error("Expected a new broadcast");
-    }
-
-    expect(() =>
-      setLiveNotificationMessageId(sql, "user-1", broadcastId, "bad-id"),
-    ).toThrow("Invalid lives.notification_message_id");
-    expect(() =>
-      startLiveReconnectGrace(sql, "user-1", "session-1", NOW + 0.5),
-    ).toThrow("Invalid lives.grace_expires_at");
-    expect(() =>
-      markLiveSessionSeenActive(sql, "user-1", "session-1", NaN, 10_000),
-    ).toThrow("Invalid lives.session_seen_active_at");
-    expect(() => {
-      enqueueNotificationDelete(sql, "bad-id", "user-1", NOW);
-    }).toThrow("Invalid notification_deletes.message_id");
-    expect(() => {
-      enqueueNotificationDelete(sql, "1", "user-1", NOW + 0.5);
-    }).toThrow("Invalid notification_deletes.next_attempt_at");
-
-    expect(getLive(sql, "user-1")).toMatchObject({
-      graceExpiresAt: null,
-      sessionSeenActiveAt: null,
-    });
-    expect(
-      endLive(sql, "user-1", "session-1")?.notificationMessageId,
-    ).toBeNull();
-    expect(getNextWakeAt(sql)).toBeNull();
-  });
-
-  it("starts a grace period only for the live session that is stored", () => {
-    insertLive(sql, "user-1", "session-1", []);
-
-    expect(
-      startLiveReconnectGrace(sql, "user-1", "other-session", NOW + 60_000),
-    ).toBe(false);
-    expect(
-      startLiveReconnectGrace(sql, "user-1", "session-1", NOW + 60_000),
-    ).toBe(true);
-    expect(getLive(sql, "user-1")?.graceExpiresAt).toBe(NOW + 60_000);
-    // 重複した DELETE で猶予期限が延長されてはならない。
-    expect(
-      startLiveReconnectGrace(sql, "user-1", "session-1", NOW + 90_000),
-    ).toBe(false);
-    expect(getLive(sql, "user-1")?.graceExpiresAt).toBe(NOW + 60_000);
-  });
-
-  it("resumes a broadcast with a new session and clears its grace state", () => {
-    const broadcastId = insertLive(sql, "user-1", "session-1", []);
-    markLiveSessionSeenActive(sql, "user-1", "session-1", NOW, 10_000);
-    startLiveReconnectGrace(sql, "user-1", "session-1", NOW + 60_000);
-    expect(getLive(sql, "user-1")).toMatchObject({
-      graceExpiresAt: NOW + 60_000,
-      sessionSeenActiveAt: NOW,
-    });
-    const tracks = createTracks("session-2");
-
-    expect(
-      resumeLive(sql, "user-1", "other-session", "session-2", tracks),
-    ).toBe(false);
-    expect(resumeLive(sql, "user-1", "session-1", "session-2", tracks)).toBe(
-      true,
-    );
-    expect(getLive(sql, "user-1")).toEqual({
-      broadcastId,
-      graceExpiresAt: null,
-      sessionSeenActiveAt: null,
-      sessionId: "session-2",
-      tracks,
-      userId: "user-1",
-    });
-  });
-
-  it("records session activity at most once per interval", () => {
-    insertLive(sql, "user-1", "session-1", []);
-
-    expect(
-      markLiveSessionSeenActive(sql, "user-1", "other-session", NOW, 10_000),
-    ).toBe(false);
-    expect(
-      markLiveSessionSeenActive(sql, "user-1", "session-1", NOW, 10_000),
-    ).toBe(true);
-    expect(
-      markLiveSessionSeenActive(sql, "user-1", "session-1", NOW + 9999, 10_000),
-    ).toBe(false);
-    expect(getLive(sql, "user-1")?.sessionSeenActiveAt).toBe(NOW);
-    expect(
-      markLiveSessionSeenActive(
+  it("does not replace the live row of an owner who already has one", async () => {
+    await withSql((sql) => {
+      const broadcastId = insertLive(
         sql,
         "user-1",
         "session-1",
-        NOW + 10_000,
-        10_000,
-      ),
-    ).toBe(true);
-    expect(getLive(sql, "user-1")?.sessionSeenActiveAt).toBe(NOW + 10_000);
-  });
+        createTracks("session-1"),
+      );
 
-  it("ends a live only while it holds the observed session outside a grace period", () => {
-    insertLive(sql, "user-1", "session-1", []);
-
-    expect(endLive(sql, "user-1", "other-session")).toBeNull();
-    expect(endLive(sql, "user-1", "session-1")).toEqual({
-      notificationMessageId: null,
-      sessionId: "session-1",
-      userId: "user-1",
+      expect(
+        insertLive(sql, "user-1", "session-2", createTracks("session-2")),
+      ).toBeNull();
+      expect(getLive(sql, "user-1")).toMatchObject({
+        broadcastId,
+        sessionId: "session-1",
+      });
     });
-    expect(getLive(sql, "user-1")).toBeNull();
-
-    insertLive(sql, "user-1", "session-2", []);
-    startLiveReconnectGrace(sql, "user-1", "session-2", NOW + 60_000);
-    expect(endLive(sql, "user-1", "session-2")).toBeNull();
-    expect(getLive(sql, "user-1")).not.toBeNull();
   });
 
-  it("rejects an ended live whose stored notification id is not decimal text", () => {
-    insertRawLive(sql, { notification_message_id: "'not-an-id'" });
+  it("rejects malformed live rows, track JSON, and invalid track records", async () => {
+    await withSql((sql) => {
+      insertRawLive(sql, { grace_expires_at: "1.5" });
+      expect(() => getLive(sql, "user-1")).toThrow("Invalid lives row");
 
-    expect(() => endLive(sql, "user-1", "session-1")).toThrow(
-      "Invalid ended lives row",
-    );
+      insertRawLive(sql, { session_seen_active_at: "'recent'" });
+      expect(() => getLive(sql, "user-1")).toThrow("Invalid lives row");
+
+      insertRawLive(sql, { tracks_json: "'not-json'" });
+      expect(() => getLive(sql, "user-1")).toThrow(SyntaxError);
+
+      insertRawLive(sql, {
+        tracks_json: `'${JSON.stringify([
+          { ...createTracks("session-1")[0], location: "local" },
+        ])}'`,
+      });
+      expect(() => getLive(sql, "user-1")).toThrow("Invalid lives.tracks_json");
+    });
   });
 
-  it("ends exactly the broadcasts whose grace period has passed", () => {
-    insertLive(sql, "live-user", "live-session", []);
-    insertLive(sql, "waiting-user", "waiting-session", []);
-    startLiveReconnectGrace(sql, "waiting-user", "waiting-session", NOW + 1);
-    const broadcastId = insertLive(sql, "overdue-user", "overdue-session", []);
-    setLiveNotificationMessageId(
-      sql,
-      "overdue-user",
-      String(broadcastId),
-      "1300000000000000123",
-    );
-    startLiveReconnectGrace(sql, "overdue-user", "overdue-session", NOW);
+  it("stores a notification only on the broadcast it was sent for", async () => {
+    await withSql((sql) => {
+      const broadcastId = insertLive(sql, "user-1", "session-1", []);
+      if (broadcastId === null) {
+        throw new Error("Expected a new broadcast");
+      }
 
-    expect(endOverdueLives(sql, NOW)).toEqual([
-      {
-        // 実際の Discord snowflake と同様、Number.MAX_SAFE_INTEGER より大きい値。
-        notificationMessageId: "1300000000000000123",
-        sessionId: "overdue-session",
-        userId: "overdue-user",
-      },
-    ]);
-    expect(getLive(sql, "overdue-user")).toBeNull();
-    expect(getLive(sql, "waiting-user")).not.toBeNull();
-    expect(getLive(sql, "live-user")).not.toBeNull();
-    expect(endOverdueLives(sql, NOW)).toEqual([]);
+      expect(
+        setLiveNotificationMessageId(sql, "user-1", "other-broadcast", "45"),
+      ).toBe(false);
+      expect(
+        setLiveNotificationMessageId(sql, "user-2", broadcastId, "45"),
+      ).toBe(false);
+      expect(
+        setLiveNotificationMessageId(sql, "user-1", broadcastId, "45"),
+      ).toBe(true);
+      expect(endLive(sql, "user-1", "session-1")).toEqual({
+        notificationMessageId: "45",
+        sessionId: "session-1",
+        userId: "user-1",
+      });
+    });
   });
 
-  it("hands out notification deletes once they are due, oldest first", () => {
-    enqueueNotificationDelete(sql, "2", "user-2", NOW + 5);
-    enqueueNotificationDelete(sql, "1", "user-1", NOW);
-    // 同じメッセージは 1 回だけキューに追加される。
-    enqueueNotificationDelete(sql, "1", "user-1", NOW + 99);
+  it("rejects values that would make cleanup or alarm reads fail", async () => {
+    await withSql((sql) => {
+      const broadcastId = insertLive(sql, "user-1", "session-1", []);
+      if (broadcastId === null) {
+        throw new Error("Expected a new broadcast");
+      }
 
-    expect(getDueNotificationDeletes(sql, NOW - 1)).toEqual([]);
-    expect(getDueNotificationDeletes(sql, NOW)).toEqual([
-      { attempts: 0, messageId: "1", userId: "user-1" },
-    ]);
-    expect(getDueNotificationDeletes(sql, NOW + 5)).toEqual([
-      { attempts: 0, messageId: "1", userId: "user-1" },
-      { attempts: 0, messageId: "2", userId: "user-2" },
-    ]);
+      expect(() =>
+        setLiveNotificationMessageId(sql, "user-1", broadcastId, "bad-id"),
+      ).toThrow("Invalid lives.notification_message_id");
+      expect(() =>
+        startLiveReconnectGrace(sql, "user-1", "session-1", NOW + 0.5),
+      ).toThrow("Invalid lives.grace_expires_at");
+      expect(() =>
+        markLiveSessionSeenActive(sql, "user-1", "session-1", NaN, 10_000),
+      ).toThrow("Invalid lives.session_seen_active_at");
+      expect(() => {
+        enqueueNotificationDelete(sql, "bad-id", "user-1", NOW);
+      }).toThrow("Invalid notification_deletes.message_id");
+      expect(() => {
+        enqueueNotificationDelete(sql, "1", "user-1", NOW + 0.5);
+      }).toThrow("Invalid notification_deletes.next_attempt_at");
+
+      expect(getLive(sql, "user-1")).toMatchObject({
+        graceExpiresAt: null,
+        sessionSeenActiveAt: null,
+      });
+      expect(
+        endLive(sql, "user-1", "session-1")?.notificationMessageId,
+      ).toBeNull();
+      expect(getNextWakeAt(sql)).toBeNull();
+    });
   });
 
-  it("hides a leased notification delete until its lease expires", () => {
-    enqueueNotificationDelete(sql, "1", "user-1", NOW);
+  it("starts a grace period only for the live session that is stored", async () => {
+    await withSql((sql) => {
+      insertLive(sql, "user-1", "session-1", []);
 
-    leaseNotificationDelete(sql, "1", NOW + 30_000);
-
-    expect(getDueNotificationDeletes(sql, NOW + 29_999)).toEqual([]);
-    expect(getDueNotificationDeletes(sql, NOW + 30_000)).toEqual([
-      { attempts: 1, messageId: "1", userId: "user-1" },
-    ]);
-
-    removeNotificationDelete(sql, "1");
-    expect(getDueNotificationDeletes(sql, NOW + 30_000)).toEqual([]);
+      expect(
+        startLiveReconnectGrace(sql, "user-1", "other-session", NOW + 60_000),
+      ).toBe(false);
+      expect(
+        startLiveReconnectGrace(sql, "user-1", "session-1", NOW + 60_000),
+      ).toBe(true);
+      expect(getLive(sql, "user-1")?.graceExpiresAt).toBe(NOW + 60_000);
+      // 重複した DELETE で猶予期限が延長されてはならない。
+      expect(
+        startLiveReconnectGrace(sql, "user-1", "session-1", NOW + 90_000),
+      ).toBe(false);
+      expect(getLive(sql, "user-1")?.graceExpiresAt).toBe(NOW + 60_000);
+    });
   });
 
-  it("reports the earliest grace deadline or due notification delete", () => {
-    insertLive(sql, "live-user", "live-session", []);
-    expect(getNextWakeAt(sql)).toBeNull();
+  it("resumes a broadcast with a new session and clears its grace state", async () => {
+    await withSql((sql) => {
+      const broadcastId = insertLive(sql, "user-1", "session-1", []);
+      markLiveSessionSeenActive(sql, "user-1", "session-1", NOW, 10_000);
+      startLiveReconnectGrace(sql, "user-1", "session-1", NOW + 60_000);
+      expect(getLive(sql, "user-1")).toMatchObject({
+        graceExpiresAt: NOW + 60_000,
+        sessionSeenActiveAt: NOW,
+      });
+      const tracks = createTracks("session-2");
 
-    insertLive(sql, "waiting-user", "waiting-session", []);
-    startLiveReconnectGrace(sql, "waiting-user", "waiting-session", NOW + 60);
-    expect(getNextWakeAt(sql)).toBe(NOW + 60);
-
-    enqueueNotificationDelete(sql, "1", "user-1", NOW + 30);
-    expect(getNextWakeAt(sql)).toBe(NOW + 30);
-
-    removeNotificationDelete(sql, "1");
-    expect(getNextWakeAt(sql)).toBe(NOW + 60);
+      expect(
+        resumeLive(sql, "user-1", "other-session", "session-2", tracks),
+      ).toBe(false);
+      expect(resumeLive(sql, "user-1", "session-1", "session-2", tracks)).toBe(
+        true,
+      );
+      expect(getLive(sql, "user-1")).toEqual({
+        broadcastId,
+        graceExpiresAt: null,
+        sessionSeenActiveAt: null,
+        sessionId: "session-2",
+        tracks,
+        userId: "user-1",
+      });
+    });
   });
 
-  it("keeps one current token hash per user", () => {
-    expect(getLiveTokenHash(sql, "user-1")).toBeNull();
-    expect(hasLiveToken(sql, "user-1")).toBe(false);
+  it("records session activity at most once per interval", async () => {
+    await withSql((sql) => {
+      insertLive(sql, "user-1", "session-1", []);
 
-    setLiveToken(sql, "user-1", "first-hash");
-    setLiveToken(sql, "user-1", "second-hash");
-
-    expect(getLiveTokenHash(sql, "user-1")).toBe("second-hash");
-    expect(hasLiveToken(sql, "user-1")).toBe(true);
-    expect(hasLiveToken(sql, "user-2")).toBe(false);
+      expect(
+        markLiveSessionSeenActive(sql, "user-1", "other-session", NOW, 10_000),
+      ).toBe(false);
+      expect(
+        markLiveSessionSeenActive(sql, "user-1", "session-1", NOW, 10_000),
+      ).toBe(true);
+      expect(
+        markLiveSessionSeenActive(
+          sql,
+          "user-1",
+          "session-1",
+          NOW + 9999,
+          10_000,
+        ),
+      ).toBe(false);
+      expect(getLive(sql, "user-1")?.sessionSeenActiveAt).toBe(NOW);
+      expect(
+        markLiveSessionSeenActive(
+          sql,
+          "user-1",
+          "session-1",
+          NOW + 10_000,
+          10_000,
+        ),
+      ).toBe(true);
+      expect(getLive(sql, "user-1")?.sessionSeenActiveAt).toBe(NOW + 10_000);
+    });
   });
 
-  it("rejects a stored token hash that is not text", () => {
-    sql.exec(
-      "INSERT INTO live_tokens (user_id, token_hash) VALUES ('user-1', x'00')",
-    );
+  it("ends a live only while it holds the observed session outside a grace period", async () => {
+    await withSql((sql) => {
+      insertLive(sql, "user-1", "session-1", []);
 
-    expect(() => getLiveTokenHash(sql, "user-1")).toThrow(
-      "Invalid live_tokens row",
-    );
+      expect(endLive(sql, "user-1", "other-session")).toBeNull();
+      expect(endLive(sql, "user-1", "session-1")).toEqual({
+        notificationMessageId: null,
+        sessionId: "session-1",
+        userId: "user-1",
+      });
+      expect(getLive(sql, "user-1")).toBeNull();
+
+      insertLive(sql, "user-1", "session-2", []);
+      startLiveReconnectGrace(sql, "user-1", "session-2", NOW + 60_000);
+      expect(endLive(sql, "user-1", "session-2")).toBeNull();
+      expect(getLive(sql, "user-1")).not.toBeNull();
+    });
   });
 
-  it("lists lives with their owners' names, including ones waiting for OBS", () => {
-    setUser(sql, { userId: "user-1", displayName: "Old name" });
-    setUser(sql, { userId: "user-1", displayName: "Streamer" });
-    setUser(sql, { userId: "user-2", displayName: "Reconnecting" });
-    setUser(sql, { userId: "user-3", displayName: "Offline" });
-    insertLive(sql, "user-1", "session-1", []);
-    insertLive(sql, "user-2", "session-2", []);
-    startLiveReconnectGrace(sql, "user-2", "session-2", NOW + 60_000);
+  it("rejects an ended live whose stored notification id is not decimal text", async () => {
+    await withSql((sql) => {
+      insertRawLive(sql, { notification_message_id: "'not-an-id'" });
 
-    expect(getAllLives(sql)).toEqual([
-      { owner: { userId: "user-1", displayName: "Streamer" } },
-      { owner: { userId: "user-2", displayName: "Reconnecting" } },
-    ]);
+      expect(() => endLive(sql, "user-1", "session-1")).toThrow(
+        "Invalid ended lives row",
+      );
+    });
+  });
+
+  it("ends exactly the broadcasts whose grace period has passed", async () => {
+    await withSql((sql) => {
+      insertLive(sql, "live-user", "live-session", []);
+      insertLive(sql, "waiting-user", "waiting-session", []);
+      startLiveReconnectGrace(sql, "waiting-user", "waiting-session", NOW + 1);
+      const broadcastId = insertLive(
+        sql,
+        "overdue-user",
+        "overdue-session",
+        [],
+      );
+      setLiveNotificationMessageId(
+        sql,
+        "overdue-user",
+        String(broadcastId),
+        "1300000000000000123",
+      );
+      startLiveReconnectGrace(sql, "overdue-user", "overdue-session", NOW);
+
+      expect(endOverdueLives(sql, NOW)).toEqual([
+        {
+          // 実際の Discord snowflake と同様、Number.MAX_SAFE_INTEGER より大きい値。
+          notificationMessageId: "1300000000000000123",
+          sessionId: "overdue-session",
+          userId: "overdue-user",
+        },
+      ]);
+      expect(getLive(sql, "overdue-user")).toBeNull();
+      expect(getLive(sql, "waiting-user")).not.toBeNull();
+      expect(getLive(sql, "live-user")).not.toBeNull();
+      expect(endOverdueLives(sql, NOW)).toEqual([]);
+    });
+  });
+
+  it("hands out notification deletes once they are due, oldest first", async () => {
+    await withSql((sql) => {
+      enqueueNotificationDelete(sql, "2", "user-2", NOW + 5);
+      enqueueNotificationDelete(sql, "1", "user-1", NOW);
+      // 同じメッセージは 1 回だけキューに追加される。
+      enqueueNotificationDelete(sql, "1", "user-1", NOW + 99);
+
+      expect(getDueNotificationDeletes(sql, NOW - 1)).toEqual([]);
+      expect(getDueNotificationDeletes(sql, NOW)).toEqual([
+        { attempts: 0, messageId: "1", userId: "user-1" },
+      ]);
+      expect(getDueNotificationDeletes(sql, NOW + 5)).toEqual([
+        { attempts: 0, messageId: "1", userId: "user-1" },
+        { attempts: 0, messageId: "2", userId: "user-2" },
+      ]);
+    });
+  });
+
+  it("hides a leased notification delete until its lease expires", async () => {
+    await withSql((sql) => {
+      enqueueNotificationDelete(sql, "1", "user-1", NOW);
+
+      leaseNotificationDelete(sql, "1", NOW + 30_000);
+
+      expect(getDueNotificationDeletes(sql, NOW + 29_999)).toEqual([]);
+      expect(getDueNotificationDeletes(sql, NOW + 30_000)).toEqual([
+        { attempts: 1, messageId: "1", userId: "user-1" },
+      ]);
+
+      removeNotificationDelete(sql, "1");
+      expect(getDueNotificationDeletes(sql, NOW + 30_000)).toEqual([]);
+    });
+  });
+
+  it("reports the earliest grace deadline or due notification delete", async () => {
+    await withSql((sql) => {
+      insertLive(sql, "live-user", "live-session", []);
+      expect(getNextWakeAt(sql)).toBeNull();
+
+      insertLive(sql, "waiting-user", "waiting-session", []);
+      startLiveReconnectGrace(sql, "waiting-user", "waiting-session", NOW + 60);
+      expect(getNextWakeAt(sql)).toBe(NOW + 60);
+
+      enqueueNotificationDelete(sql, "1", "user-1", NOW + 30);
+      expect(getNextWakeAt(sql)).toBe(NOW + 30);
+
+      removeNotificationDelete(sql, "1");
+      expect(getNextWakeAt(sql)).toBe(NOW + 60);
+    });
+  });
+
+  it("keeps one current token hash per user", async () => {
+    await withSql((sql) => {
+      expect(getLiveTokenHash(sql, "user-1")).toBeNull();
+      expect(hasLiveToken(sql, "user-1")).toBe(false);
+
+      setLiveToken(sql, "user-1", "first-hash");
+      setLiveToken(sql, "user-1", "second-hash");
+
+      expect(getLiveTokenHash(sql, "user-1")).toBe("second-hash");
+      expect(hasLiveToken(sql, "user-1")).toBe(true);
+      expect(hasLiveToken(sql, "user-2")).toBe(false);
+    });
+  });
+
+  it("rejects a stored token hash that is not text", async () => {
+    await withSql((sql) => {
+      sql.exec(
+        "INSERT INTO live_tokens (user_id, token_hash) VALUES ('user-1', x'00')",
+      );
+
+      expect(() => getLiveTokenHash(sql, "user-1")).toThrow(
+        "Invalid live_tokens row",
+      );
+    });
+  });
+
+  it("lists lives with their owners' names, including ones waiting for OBS", async () => {
+    await withSql((sql) => {
+      setUser(sql, { userId: "user-1", displayName: "Old name" });
+      setUser(sql, { userId: "user-1", displayName: "Streamer" });
+      setUser(sql, { userId: "user-2", displayName: "Reconnecting" });
+      setUser(sql, { userId: "user-3", displayName: "Offline" });
+      insertLive(sql, "user-1", "session-1", []);
+      insertLive(sql, "user-2", "session-2", []);
+      startLiveReconnectGrace(sql, "user-2", "session-2", NOW + 60_000);
+
+      expect(getAllLives(sql)).toEqual([
+        { owner: { userId: "user-1", displayName: "Streamer" } },
+        { owner: { userId: "user-2", displayName: "Reconnecting" } },
+      ]);
+    });
   });
 });

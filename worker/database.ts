@@ -3,19 +3,6 @@
 import type { StoredTrack } from "./sfu";
 import * as v from "valibot";
 
-type SqlValue = string | number | null;
-
-/**
- * これらのクエリが利用する Durable Object の SQL API の一部。
- * テストも同じインターフェースを通じて Node の SQLite 上で同じクエリを実行する。
- */
-export type Sql = {
-  exec(
-    query: string,
-    ...bindings: SqlValue[]
-  ): { toArray(): Record<string, unknown>[] };
-};
-
 export type User = {
   userId: string;
   displayName: string;
@@ -306,7 +293,7 @@ function parseEndedLiveRow(row: unknown): EndedLive {
  *
  * @throws {Error} 記録済みのスキーマバージョンを読み取れなかった場合。
  */
-export function migrateSchema(sql: Sql): void {
+export function migrateSchema(sql: SqlStorage): void {
   sql.exec(
     "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)",
   );
@@ -338,7 +325,7 @@ export function migrateSchema(sql: Sql): void {
  * 再開したなどの理由で配信者（owner）がすでに live 行を持っている場合は null を返す。
  */
 export function insertLive(
-  sql: Sql,
+  sql: SqlStorage,
   userId: string,
   sessionId: string,
   tracks: StoredTrack[],
@@ -363,7 +350,7 @@ export function insertLive(
 /**
  * @throws {Error} 保存されている行またはトラックの形式が本モジュールの書き込む形式と一致しない場合。
  */
-export function getLive(sql: Sql, userId: string): LiveRecord | null {
+export function getLive(sql: SqlStorage, userId: string): LiveRecord | null {
   const [result] = sql
     .exec(
       "SELECT user_id, broadcast_id, session_id, tracks_json, grace_expires_at, session_seen_active_at FROM lives WHERE user_id = ?",
@@ -405,7 +392,7 @@ export function getLive(sql: Sql, userId: string): LiveRecord | null {
  * この場合、何も保存されない。
  */
 export function setLiveNotificationMessageId(
-  sql: Sql,
+  sql: SqlStorage,
   userId: string,
   broadcastId: string,
   notificationMessageId: string,
@@ -434,7 +421,7 @@ export function setLiveNotificationMessageId(
  * @throws {Error} `now` が整数でない場合。この場合、何も保存されない。
  */
 export function markLiveSessionSeenActive(
-  sql: Sql,
+  sql: SqlStorage,
   userId: string,
   sessionId: string,
   now: number,
@@ -460,7 +447,7 @@ export function markLiveSessionSeenActive(
  * @throws {Error} `graceExpiresAt` が整数でない場合。この場合、何も保存されない。
  */
 export function startLiveReconnectGrace(
-  sql: Sql,
+  sql: SqlStorage,
   userId: string,
   sessionId: string,
   graceExpiresAt: number,
@@ -484,7 +471,7 @@ export function startLiveReconnectGrace(
  * Compare-And-Set となり、すでに配信終了したか別のインジェストが再開した後では失敗する。
  */
 export function resumeLive(
-  sql: Sql,
+  sql: SqlStorage,
   userId: string,
   previousSessionId: string,
   sessionId: string,
@@ -512,7 +499,7 @@ export function resumeLive(
  * この時点ですでに行は削除されているため、呼び出し側でロールバックする必要がある。
  */
 export function endLive(
-  sql: Sql,
+  sql: SqlStorage,
   userId: string,
   sessionId: string,
 ): EndedLive | null {
@@ -533,7 +520,7 @@ export function endLive(
  * @throws {Error} 削除された行の形式が本モジュールの書き込む形式と一致しない場合。
  * この時点ですでに行は削除されているため、呼び出し側でロールバックする必要がある。
  */
-export function endOverdueLives(sql: Sql, now: number): EndedLive[] {
+export function endOverdueLives(sql: SqlStorage, now: number): EndedLive[] {
   return sql
     .exec(
       "DELETE FROM lives WHERE grace_expires_at <= ? RETURNING user_id, session_id, notification_message_id",
@@ -551,7 +538,7 @@ export function endOverdueLives(sql: Sql, now: number): EndedLive[] {
  * `nextAttemptAt` が整数でない場合。この場合、何も保存されない。
  */
 export function enqueueNotificationDelete(
-  sql: Sql,
+  sql: SqlStorage,
   messageId: string,
   userId: string,
   nextAttemptAt: number,
@@ -572,7 +559,7 @@ export function enqueueNotificationDelete(
  * @throws {Error} 保存されている行の形式が本モジュールの書き込む形式と一致しない場合。
  */
 export function getDueNotificationDeletes(
-  sql: Sql,
+  sql: SqlStorage,
   now: number,
 ): NotificationDelete[] {
   return sql
@@ -601,7 +588,7 @@ export function getDueNotificationDeletes(
  * @throws {Error} `nextAttemptAt` が整数でない場合。この場合、何も保存されない。
  */
 export function leaseNotificationDelete(
-  sql: Sql,
+  sql: SqlStorage,
   messageId: string,
   nextAttemptAt: number,
 ): void {
@@ -613,7 +600,10 @@ export function leaseNotificationDelete(
   );
 }
 
-export function removeNotificationDelete(sql: Sql, messageId: string): void {
+export function removeNotificationDelete(
+  sql: SqlStorage,
+  messageId: string,
+): void {
   sql.exec("DELETE FROM notification_deletes WHERE message_id = ?", messageId);
 }
 
@@ -623,7 +613,7 @@ export function removeNotificationDelete(sql: Sql, messageId: string): void {
  *
  * @throws {Error} 保存されている時刻値が整数にならない場合。
  */
-export function getNextWakeAt(sql: Sql): number | null {
+export function getNextWakeAt(sql: SqlStorage): number | null {
   const rowResult = v.safeParse(
     getNextWakeRowSchema(),
     sql
@@ -640,7 +630,7 @@ export function getNextWakeAt(sql: Sql): number | null {
 }
 
 export function setLiveToken(
-  sql: Sql,
+  sql: SqlStorage,
   userId: string,
   tokenHash: string,
 ): void {
@@ -654,7 +644,10 @@ export function setLiveToken(
 /**
  * @throws {Error} 保存されている行の形式が本モジュールの書き込む形式と一致しない場合。
  */
-export function getLiveTokenHash(sql: Sql, userId: string): string | null {
+export function getLiveTokenHash(
+  sql: SqlStorage,
+  userId: string,
+): string | null {
   const [result] = sql
     .exec("SELECT token_hash FROM live_tokens WHERE user_id = ?", userId)
     .toArray();
@@ -670,7 +663,7 @@ export function getLiveTokenHash(sql: Sql, userId: string): string | null {
   return rowResult.output.token_hash;
 }
 
-export function hasLiveToken(sql: Sql, userId: string): boolean {
+export function hasLiveToken(sql: SqlStorage, userId: string): boolean {
   return (
     sql
       .exec(
@@ -681,7 +674,7 @@ export function hasLiveToken(sql: Sql, userId: string): boolean {
   );
 }
 
-export function setUser(sql: Sql, user: User): void {
+export function setUser(sql: SqlStorage, user: User): void {
   sql.exec(
     "INSERT OR REPLACE INTO users (user_id, display_name) VALUES (?, ?)",
     user.userId,
@@ -694,7 +687,7 @@ export function setUser(sql: Sql, user: User): void {
  *
  * @throws {Error} 保存されている行の形式が本モジュールの書き込む形式と一致しない場合。
  */
-export function getAllLives(sql: Sql): Live[] {
+export function getAllLives(sql: SqlStorage): Live[] {
   // ここでは意図的に全 Calls セッションの生存確認を行わない。一覧取得は軽量に保ち、
   // 古い行の整合はユーザー指定のインジェスト/再生リクエスト時に行う。
   // OBS の再接続待ち中の配信は、猶予期間が経過するまで一覧に残る。

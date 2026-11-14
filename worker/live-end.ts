@@ -1,3 +1,4 @@
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { getLiveState, type NotificationDeleteJob } from "./live-state";
 import { createErrorLogFields, logWarn } from "./logger";
 import {
@@ -72,5 +73,19 @@ export async function runNotificationDeletes(
       ...createErrorLogFields(error),
       messageIds: finishedMessageIds,
     });
+  }
+}
+
+/**
+ * LiveState オブジェクトが開始するが完了を待ってはならない処理群。オブジェクトは
+ * `ctx.exports` を通じてこのエントリーポイントを呼び出し、インターネットからは直接ルーティングされない。
+ */
+export class LiveEffects extends WorkerEntrypoint<Bindings> {
+  /**
+   * 即座に返却して waitUntil 内で通知を削除することで、呼び出し元オブジェクトが
+   * Discord の応答待ち時間に対して課金されないようにする。
+   */
+  deleteStartNotifications(jobs: NotificationDeleteJob[]): void {
+    this.ctx.waitUntil(runNotificationDeletes(this.env, jobs));
   }
 }
