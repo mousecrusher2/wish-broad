@@ -9,6 +9,9 @@ import type { Bindings } from "./types";
  * the SQL in ./database runs against a real engine. `getAlarm` reports the
  * alarm the code under test left behind.
  *
+ * The alarm does not fire by itself. A test that fires it clears it first, as
+ * the runtime does: the alarm that is running no longer counts as set.
+ *
  * `transaction` does what the Durable Objects storage documentation promises
  * and no more: every operation made while its closure runs, alarm calls
  * included, belongs to the transaction, and it is rolled back only when the
@@ -27,6 +30,9 @@ export function createTestStorage(): {
     storage: {
       async deleteAlarm() {
         alarmAt = null;
+      },
+      async getAlarm() {
+        return alarmAt;
       },
       async setAlarm(scheduledTime) {
         alarmAt = scheduledTime;

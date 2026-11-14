@@ -37,7 +37,7 @@ import {
 } from "./turn";
 import { createErrorLogFields, logError, logInfo, logWarn } from "./logger";
 import { LIVE_RECONNECT_GRACE_MS } from "./live-end";
-import { getLiveState } from "./live-state";
+import { getLiveState, isTransientLiveStateError } from "./live-state";
 
 type AppEnv = {
   Bindings: Bindings;
@@ -62,6 +62,16 @@ const LIVE_SESSION_RECENTLY_ACTIVE_MS = 60_000;
 // Calls already waited about 30 seconds before garbage-collecting the session,
 // so this keeps the broadcast about as long as the grace period after DELETE.
 const LIVE_LOST_SESSION_GRACE_MS = 30_000;
+
+// Storing a start notification is tried this often when it fails for a
+// transient reason. Keep the runtime's own retries short for each attempt,
+// leaving time in waitUntil to delete the message if persistence never works.
+const NOTIFICATION_PERSIST_MAX_ATTEMPTS = 2;
+const NOTIFICATION_PERSIST_RETRY_DELAY_MS = 500;
+const NOTIFICATION_PERSIST_RPC_RETRY = {
+  maxRetries: 1,
+  timeoutMs: 5_000,
+};
 
 const app = new HonoBase<AppEnv>({ router: new LinearRouter() });
 
@@ -157,6 +167,55 @@ function scheduleTrackClose(
   );
 }
 
+async function wait(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+// Reports the start notification to the live state, which stores it on the
+// broadcast or, if the broadcast already ended, queues the Discord message for
+// deletion itself. Returns false, after logging why, when the live state could
+// not be told.
+async function persistLiveStartNotification(
+  c: Context<AppEnv>,
+  userId: string,
+  broadcastId: string,
+  sessionId: string,
+  messageId: string,
+): Promise<boolean> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      // A failed call can leave its stub broken, so each attempt gets its own.
+      // Repeating the call is safe: it stores the same id again.
+      // oxlint-disable-next-line no-await-in-loop -- An attempt follows the failure of the previous one.
+      await getLiveState(
+        c.env,
+        NOTIFICATION_PERSIST_RPC_RETRY,
+      ).setLiveNotificationMessageId(userId, broadcastId, messageId);
+      return true;
+    } catch (error: unknown) {
+      const willRetry =
+        attempt < NOTIFICATION_PERSIST_MAX_ATTEMPTS &&
+        isTransientLiveStateError(error);
+      logWarn(c.env, "live_notification.persist_failed", {
+        ...createErrorLogFields(error),
+        attempt,
+        messageId,
+        sessionId,
+        userId,
+        willRetry,
+      });
+      if (!willRetry) {
+        return false;
+      }
+    }
+
+    // oxlint-disable-next-line no-await-in-loop -- The next attempt waits for the failure to pass.
+    await wait(NOTIFICATION_PERSIST_RETRY_DELAY_MS);
+  }
+}
+
 // Runs in waitUntil after the ingest response, so every failure is logged here
 // instead of being thrown.
 async function sendLiveStartNotification(
@@ -178,23 +237,17 @@ async function sendLiveStartNotification(
     return;
   }
 
-  // Notifications are tied to the broadcast, which survives OBS reconnects. If
-  // it has already ended, the live state queues the Discord message for
-  // deletion itself instead of leaving an orphan.
-  try {
-    await getLiveState(c.env).setLiveNotificationMessageId(
+  // Notifications are tied to the broadcast, which survives OBS reconnects.
+  if (
+    await persistLiveStartNotification(
+      c,
       userId,
       broadcastId,
-      messageId.toString(),
-    );
-    return;
-  } catch (error: unknown) {
-    logWarn(c.env, "live_notification.persist_failed", {
-      ...createErrorLogFields(error),
-      messageId: messageId.toString(),
       sessionId,
-      userId,
-    });
+      messageId.toString(),
+    )
+  ) {
+    return;
   }
 
   // Whether the id was stored is unknown, so nothing may ever delete the

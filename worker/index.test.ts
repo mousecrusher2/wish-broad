@@ -123,7 +123,10 @@ const discordMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./live-state", () => ({ getLiveState: () => liveStateMocks }));
+vi.mock("./live-state", async () => ({
+  ...(await vi.importActual<typeof import("./live-state")>("./live-state")),
+  getLiveState: () => liveStateMocks,
+}));
 vi.mock("./sfu", async () => {
   const actual = await vi.importActual<typeof import("./sfu")>("./sfu");
   return {
@@ -1516,6 +1519,48 @@ describe("worker app", () => {
     expect(
       notificationsMocks.deleteLiveStartedNotification,
     ).toHaveBeenCalledWith(env, 1n);
+  });
+
+  it("retries a transient live state failure before deleting the start notification", async () => {
+    const env = createBindings();
+    const execution = createObservedExecutionContext();
+    const consoleWarnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => {});
+    liveStateMocks.setLiveNotificationMessageId
+      .mockRejectedValueOnce(
+        Object.assign(new Error("object restarting"), { retryable: true }),
+      )
+      .mockResolvedValueOnce(true);
+
+    const response = await app.fetch(
+      new Request("http://localhost/ingest/user-1", {
+        body: "offer-sdp",
+        headers: {
+          Authorization: "Bearer live-token",
+          "Content-Type": "application/sdp",
+        },
+        method: "POST",
+      }),
+      env,
+      execution.context,
+    );
+    expect(response.status).toBe(201);
+    await Promise.all(execution.waitUntilPromises);
+
+    expect(liveStateMocks.setLiveNotificationMessageId).toHaveBeenCalledTimes(
+      2,
+    );
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempt: 1,
+        event: "live_notification.persist_failed",
+        willRetry: true,
+      }),
+    );
+    expect(
+      notificationsMocks.deleteLiveStartedNotification,
+    ).not.toHaveBeenCalled();
   });
 
   it("returns 204 for GET on the WHIP endpoint", async () => {

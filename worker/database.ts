@@ -108,8 +108,48 @@ const SCHEMA_MIGRATIONS: readonly (readonly string[])[] = [
   ],
 ];
 
+// Every method of the object ends the overdue broadcasts and computes the next
+// alarm, and both read these two kinds of value. One that could not be read
+// back would fail every later call, so writes are checked against the schemas
+// the reads use and refuse such a value before it is stored.
+
+// A Discord snowflake as decimal text.
 function createNotificationMessageIdSchema() {
-  return v.nullable(v.pipe(v.string(), v.regex(/^[0-9]+$/u)));
+  return v.pipe(v.string(), v.regex(/^[0-9]+$/u));
+}
+
+let notificationMessageIdSchema:
+  ReturnType<typeof createNotificationMessageIdSchema> | undefined;
+
+function getNotificationMessageIdSchema() {
+  notificationMessageIdSchema ??= createNotificationMessageIdSchema();
+
+  return notificationMessageIdSchema;
+}
+
+// Unix epoch milliseconds.
+function createTimestampSchema() {
+  return v.pipe(v.number(), v.integer());
+}
+
+let timestampSchema: ReturnType<typeof createTimestampSchema> | undefined;
+
+function getTimestampSchema() {
+  timestampSchema ??= createTimestampSchema();
+
+  return timestampSchema;
+}
+
+function assertNotificationMessageId(value: string, column: string): void {
+  if (!v.is(getNotificationMessageIdSchema(), value)) {
+    throw new Error(`Invalid ${column}`);
+  }
+}
+
+function assertTimestamp(value: number, column: string): void {
+  if (!v.is(getTimestampSchema(), value)) {
+    throw new Error(`Invalid ${column}`);
+  }
 }
 
 function createSchemaVersionRowSchema() {
@@ -130,8 +170,8 @@ function getSchemaVersionRowSchema() {
 function createLiveRowSchema() {
   return v.object({
     broadcast_id: v.string(),
-    grace_expires_at: v.nullable(v.pipe(v.number(), v.integer())),
-    session_seen_active_at: v.nullable(v.pipe(v.number(), v.integer())),
+    grace_expires_at: v.nullable(getTimestampSchema()),
+    session_seen_active_at: v.nullable(getTimestampSchema()),
     user_id: v.string(),
     session_id: v.string(),
     tracks_json: v.string(),
@@ -206,7 +246,7 @@ function getLiveListRowSchema() {
 
 function createEndedLiveRowSchema() {
   return v.object({
-    notification_message_id: createNotificationMessageIdSchema(),
+    notification_message_id: v.nullable(getNotificationMessageIdSchema()),
     session_id: v.string(),
     user_id: v.string(),
   });
@@ -239,7 +279,7 @@ function getNotificationDeleteRowSchema() {
 
 function createNextWakeRowSchema() {
   return v.object({
-    wake_at: v.nullable(v.pipe(v.number(), v.integer())),
+    wake_at: v.nullable(getTimestampSchema()),
   });
 }
 
@@ -264,7 +304,11 @@ function parseEndedLiveRow(row: unknown): EndedLive {
   };
 }
 
-/** Creates the tables of every schema version this storage does not have yet. */
+/**
+ * Creates the tables of every schema version this storage does not have yet.
+ *
+ * @throws {Error} When the recorded schema version cannot be read.
+ */
 export function migrateSchema(sql: Sql): void {
   sql.exec(
     "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)",
@@ -321,6 +365,10 @@ export function insertLive(
   return inserted.length > 0 ? broadcastId : null;
 }
 
+/**
+ * @throws {Error} When the stored row or its tracks are not in the form this
+ * module writes.
+ */
 export function getLive(sql: Sql, userId: string): LiveRecord | null {
   const [result] = sql
     .exec(
@@ -358,6 +406,9 @@ export function getLive(sql: Sql, userId: string): LiveRecord | null {
  * Stores the start notification on the broadcast, not the ingest session, so
  * it survives a reconnect that happens while the notification is being sent.
  * Returns false when that broadcast no longer exists.
+ *
+ * @throws {Error} When `notificationMessageId` is not a Discord snowflake as
+ * decimal text. Nothing is stored then.
  */
 export function setLiveNotificationMessageId(
   sql: Sql,
@@ -365,6 +416,10 @@ export function setLiveNotificationMessageId(
   broadcastId: string,
   notificationMessageId: string,
 ): boolean {
+  assertNotificationMessageId(
+    notificationMessageId,
+    "lives.notification_message_id",
+  );
   const updated = sql
     .exec(
       "UPDATE lives SET notification_message_id = ? WHERE user_id = ? AND broadcast_id = ? RETURNING user_id",
@@ -381,6 +436,8 @@ export function setLiveNotificationMessageId(
  * Records that a request found the live ingest session still active in Calls,
  * at most once per `minIntervalMs`, so concurrent viewers of a healthy stream
  * do not each write a row.
+ *
+ * @throws {Error} When `now` is not an integer. Nothing is stored then.
  */
 export function markLiveSessionSeenActive(
   sql: Sql,
@@ -389,6 +446,7 @@ export function markLiveSessionSeenActive(
   now: number,
   minIntervalMs: number,
 ): boolean {
+  assertTimestamp(now, "lives.session_seen_active_at");
   const updated = sql
     .exec(
       "UPDATE lives SET session_seen_active_at = ? WHERE user_id = ? AND session_id = ? AND (session_seen_active_at IS NULL OR session_seen_active_at <= ?) RETURNING user_id",
@@ -402,13 +460,19 @@ export function markLiveSessionSeenActive(
   return updated.length > 0;
 }
 
-/** Moves a live ingest session into its reconnect grace period. */
+/**
+ * Moves a live ingest session into its reconnect grace period.
+ *
+ * @throws {Error} When `graceExpiresAt` is not an integer. Nothing is stored
+ * then.
+ */
 export function startLiveReconnectGrace(
   sql: Sql,
   userId: string,
   sessionId: string,
   graceExpiresAt: number,
 ): boolean {
+  assertTimestamp(graceExpiresAt, "lives.grace_expires_at");
   const updated = sql
     .exec(
       "UPDATE lives SET grace_expires_at = ? WHERE user_id = ? AND session_id = ? AND grace_expires_at IS NULL RETURNING user_id",
@@ -452,6 +516,9 @@ export function resumeLive(
  * row still holds that session outside a grace period, so a concurrent
  * reconnect or grace start is never overwritten. Returns null when nothing was
  * deleted.
+ *
+ * @throws {Error} When the deleted row is not in the form this module writes.
+ * The row is deleted by then, so the caller has to roll back.
  */
 export function endLive(
   sql: Sql,
@@ -469,7 +536,12 @@ export function endLive(
   return deleted === undefined ? null : parseEndedLiveRow(deleted);
 }
 
-/** Ends every broadcast whose reconnect grace period has passed. */
+/**
+ * Ends every broadcast whose reconnect grace period has passed.
+ *
+ * @throws {Error} When a deleted row is not in the form this module writes.
+ * The rows are deleted by then, so the caller has to roll back.
+ */
 export function endOverdueLives(sql: Sql, now: number): EndedLive[] {
   return sql
     .exec(
@@ -480,13 +552,21 @@ export function endOverdueLives(sql: Sql, now: number): EndedLive[] {
     .map((row) => parseEndedLiveRow(row));
 }
 
-/** Queues a start notification for deletion from `nextAttemptAt` on. */
+/**
+ * Queues a start notification for deletion from `nextAttemptAt` on. A
+ * notification that is already queued keeps its attempts and its time.
+ *
+ * @throws {Error} When `messageId` is not a Discord snowflake as decimal text
+ * or `nextAttemptAt` is not an integer. Nothing is stored then.
+ */
 export function enqueueNotificationDelete(
   sql: Sql,
   messageId: string,
   userId: string,
   nextAttemptAt: number,
 ): void {
+  assertNotificationMessageId(messageId, "notification_deletes.message_id");
+  assertTimestamp(nextAttemptAt, "notification_deletes.next_attempt_at");
   sql.exec(
     "INSERT INTO notification_deletes (message_id, user_id, attempts, next_attempt_at) VALUES (?, ?, 0, ?) ON CONFLICT (message_id) DO NOTHING",
     messageId,
@@ -495,6 +575,11 @@ export function enqueueNotificationDelete(
   );
 }
 
+/**
+ * The notification deletes that may be handed out at `now`, oldest first.
+ *
+ * @throws {Error} When a stored row is not in the form this module writes.
+ */
 export function getDueNotificationDeletes(
   sql: Sql,
   now: number,
@@ -519,12 +604,18 @@ export function getDueNotificationDeletes(
     });
 }
 
-/** Counts one more attempt and hides the delete until `nextAttemptAt`. */
+/**
+ * Counts one more attempt and hides the delete until `nextAttemptAt`.
+ *
+ * @throws {Error} When `nextAttemptAt` is not an integer. Nothing is stored
+ * then.
+ */
 export function leaseNotificationDelete(
   sql: Sql,
   messageId: string,
   nextAttemptAt: number,
 ): void {
+  assertTimestamp(nextAttemptAt, "notification_deletes.next_attempt_at");
   sql.exec(
     "UPDATE notification_deletes SET attempts = attempts + 1, next_attempt_at = ? WHERE message_id = ?",
     nextAttemptAt,
@@ -539,6 +630,8 @@ export function removeNotificationDelete(sql: Sql, messageId: string): void {
 /**
  * The earliest time at which stored state needs attention: a grace period
  * ending or a notification delete becoming due. Null when nothing is pending.
+ *
+ * @throws {Error} When the stored times do not give an integer.
  */
 export function getNextWakeAt(sql: Sql): number | null {
   const rowResult = v.safeParse(
@@ -568,6 +661,9 @@ export function setLiveToken(
   );
 }
 
+/**
+ * @throws {Error} When the stored row is not in the form this module writes.
+ */
 export function getLiveTokenHash(sql: Sql, userId: string): string | null {
   const [result] = sql
     .exec("SELECT token_hash FROM live_tokens WHERE user_id = ?", userId)
@@ -603,6 +699,11 @@ export function setUser(sql: Sql, user: User): void {
   );
 }
 
+/**
+ * The owners of all broadcasts, including those waiting for OBS to reconnect.
+ *
+ * @throws {Error} When a stored row is not in the form this module writes.
+ */
 export function getAllLives(sql: Sql): Live[] {
   // This intentionally does not verify every Calls session. Listing must stay
   // cheap; stale rows are reconciled on user-specific ingest/play requests.

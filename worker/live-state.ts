@@ -49,6 +49,17 @@ type LiveEndReason = "reconnect_grace_expired" | "session_inactive";
 
 type LiveStateEnv = Pick<Bindings, "ENVIRONMENT" | "LOG_LEVEL">;
 
+/** What a command gets from the transaction it runs in. */
+type CommandRun = {
+  /**
+   * Queues a log entry that is written once the transaction committed. A
+   * command that is rolled back reports nothing, so no entry tells of a
+   * change that was not stored.
+   */
+  logOnCommit(write: () => void): void;
+  now: number;
+};
+
 /**
  * The part of a Durable Object's storage that LiveStateCore uses.
  *
@@ -60,6 +71,7 @@ type LiveStateEnv = Pick<Bindings, "ENVIRONMENT" | "LOG_LEVEL">;
  */
 export type LiveStateStorage = {
   deleteAlarm(): Promise<void>;
+  getAlarm(): Promise<number | null>;
   setAlarm(scheduledTime: number): Promise<void>;
   sql: db.Sql;
   transaction<T>(
@@ -72,8 +84,32 @@ export type LiveStateStorage = {
  * The Durable Object that holds all live state. Its methods are short: none
  * of them waits for an external service.
  */
-export function getLiveState(env: Pick<Bindings, "LIVE_STATE">) {
-  return env.LIVE_STATE.getByName(LIVE_STATE_NAME);
+export function getLiveState(
+  env: Pick<Bindings, "LIVE_STATE">,
+  retry?: { maxRetries: number; timeoutMs: number },
+) {
+  return env.LIVE_STATE.getByName(
+    LIVE_STATE_NAME,
+    retry === undefined ? undefined : { retry },
+  );
+}
+
+/**
+ * Whether a call to the object failed for a reason that may be gone a moment
+ * later, so that repeating a call that is safe to repeat can succeed.
+ *
+ * Per the Durable Objects error handling documentation, such an error has
+ * `retryable` set. One that also has `overloaded` set must not be retried:
+ * another call adds load to an object that cannot keep up. Repeat the call on
+ * a new `getLiveState()` stub, because an exception can leave a stub broken.
+ */
+export function isTransientLiveStateError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "retryable" in error &&
+    error.retryable === true &&
+    !("overloaded" in error && error.overloaded === true)
+  );
 }
 
 /**
@@ -85,11 +121,11 @@ export function getLiveState(env: Pick<Bindings, "LIVE_STATE">) {
  * depend on a Calls request made by the Worker are compare-and-set on the
  * session the Worker observed: the object serializes its own methods, but not
  * the Worker's requests between two of them.
+ *
+ * A method that rejects has stored nothing: its transaction is rolled back,
+ * whether storage failed or a value was refused.
  */
 export class LiveStateCore {
-  // When the alarm is set to fire, null when none is set, or undefined when
-  // this instance has not set or cleared it since it started.
-  #alarmAt: number | null | undefined;
   readonly #dispatchNotificationDeletes: (
     jobs: NotificationDeleteJob[],
   ) => Promise<void>;
@@ -121,10 +157,8 @@ export class LiveStateCore {
    * overdue broadcasts and hands every due delete to the Worker.
    */
   async alarm(): Promise<void> {
-    // The alarm that is firing is no longer scheduled.
-    this.#alarmAt = null;
-    const jobs = await this.#run((now) =>
-      this.#leaseDueNotificationDeletes(now),
+    const jobs = await this.#run((run) =>
+      this.#leaseDueNotificationDeletes(run),
     );
     if (jobs.length === 0) {
       return;
@@ -189,13 +223,15 @@ export class LiveStateCore {
    * Gives the publisher `graceMs` to reconnect before the broadcast ends, and
    * sets the alarm that ends it in the same transaction. Returns the deadline,
    * or null when the row no longer holds `sessionId` outside a grace period.
+   *
+   * @throws {Error} When `graceMs` is not an integer.
    */
   async startLiveReconnectGrace(
     userId: string,
     sessionId: string,
     graceMs: number,
   ): Promise<number | null> {
-    return this.#run((now) => {
+    return this.#run(({ now }) => {
       const graceExpiresAt = now + graceMs;
       return db.startLiveReconnectGrace(
         this.#storage.sql,
@@ -214,13 +250,13 @@ export class LiveStateCore {
    * longer holds `sessionId` outside a grace period.
    */
   async endLive(userId: string, sessionId: string): Promise<boolean> {
-    return this.#run((now) => {
+    return this.#run((run) => {
       const ended = db.endLive(this.#storage.sql, userId, sessionId);
       if (ended === null) {
         return false;
       }
 
-      this.#finishEndedLive(ended, "session_inactive", now);
+      this.#finishEndedLive(run, ended, "session_inactive");
       return true;
     });
   }
@@ -231,7 +267,7 @@ export class LiveStateCore {
     sessionId: string,
     minIntervalMs: number,
   ): Promise<boolean> {
-    return this.#run((now) =>
+    return this.#run(({ now }) =>
       db.markLiveSessionSeenActive(
         this.#storage.sql,
         userId,
@@ -246,13 +282,20 @@ export class LiveStateCore {
    * Stores the start notification the Worker sent for a broadcast. If that
    * broadcast already ended, queues the notification for deletion instead and
    * returns false.
+   *
+   * Calling it again with the same arguments is safe: it stores the same id
+   * or finds the delete already queued. The Worker and the runtime rely on
+   * that to repeat a call whose outcome they do not know.
+   *
+   * @throws {Error} When `messageId` is not a Discord snowflake as decimal
+   * text.
    */
   async setLiveNotificationMessageId(
     userId: string,
     broadcastId: string,
     messageId: string,
   ): Promise<boolean> {
-    return this.#run((now) => {
+    return this.#run(({ now }) => {
       if (
         db.setLiveNotificationMessageId(
           this.#storage.sql,
@@ -307,43 +350,49 @@ export class LiveStateCore {
    * whose grace period passed. The same transaction moves the alarm to the
    * next time state needs attention, so a deadline or a notification delete is
    * never stored without the alarm that acts on it. The closure awaits nothing
-   * but the alarm call.
+   * but the alarm calls.
    */
-  async #run<T>(command: (now: number) => T): Promise<T> {
-    try {
-      return await this.#storage.transaction(async (txn) => {
-        try {
-          const now = Date.now();
-          for (const ended of db.endOverdueLives(this.#storage.sql, now)) {
-            this.#finishEndedLive(ended, "reconnect_grace_expired", now);
-          }
-          const result = command(now);
-          await this.#moveAlarm();
-          return result;
-        } catch (error: unknown) {
-          // A failed command or alarm call must not leave part of its work.
-          txn.rollback();
-          throw error;
+  async #run<T>(command: (run: CommandRun) => T): Promise<T> {
+    const commitLogs: (() => void)[] = [];
+    const result = await this.#storage.transaction(async (txn) => {
+      try {
+        const run: CommandRun = {
+          logOnCommit(write) {
+            commitLogs.push(write);
+          },
+          now: Date.now(),
+        };
+        for (const ended of db.endOverdueLives(this.#storage.sql, run.now)) {
+          this.#finishEndedLive(run, ended, "reconnect_grace_expired");
         }
-      });
-    } catch (error: unknown) {
-      // Nothing was committed, so the alarm this instance remembers may not
-      // be the stored one. Forgetting it makes the next command write the
-      // alarm again.
-      this.#alarmAt = undefined;
-      throw error;
+        const commandResult = command(run);
+        await this.#moveAlarm();
+        return commandResult;
+      } catch (error: unknown) {
+        // A failed command or alarm call must not leave part of its work.
+        txn.rollback();
+        throw error;
+      }
+    });
+
+    // The transaction committed, so what the command changed is stored.
+    for (const write of commitLogs) {
+      write();
     }
+    return result;
   }
 
   #finishEndedLive(
+    run: CommandRun,
     ended: db.EndedLive,
     reason: LiveEndReason,
-    now: number,
   ): void {
-    logInfo(this.#env, "live.ended", {
-      reason,
-      sessionId: ended.sessionId,
-      userId: ended.userId,
+    run.logOnCommit(() => {
+      logInfo(this.#env, "live.ended", {
+        reason,
+        sessionId: ended.sessionId,
+        userId: ended.userId,
+      });
     });
     if (ended.notificationMessageId !== null) {
       // Due at once: the alarm this command sets hands it to the Worker.
@@ -351,26 +400,31 @@ export class LiveStateCore {
         this.#storage.sql,
         ended.notificationMessageId,
         ended.userId,
-        now,
+        run.now,
       );
     }
   }
 
-  #leaseDueNotificationDeletes(now: number): NotificationDeleteJob[] {
+  #leaseDueNotificationDeletes(run: CommandRun): NotificationDeleteJob[] {
     const jobs: NotificationDeleteJob[] = [];
-    for (const entry of db.getDueNotificationDeletes(this.#storage.sql, now)) {
+    for (const entry of db.getDueNotificationDeletes(
+      this.#storage.sql,
+      run.now,
+    )) {
       if (entry.attempts >= NOTIFICATION_DELETE_MAX_ATTEMPTS) {
         db.removeNotificationDelete(this.#storage.sql, entry.messageId);
-        logWarn(this.#env, "live_notification.delete_abandoned", {
-          attempts: entry.attempts,
-          messageId: entry.messageId,
-          userId: entry.userId,
+        run.logOnCommit(() => {
+          logWarn(this.#env, "live_notification.delete_abandoned", {
+            attempts: entry.attempts,
+            messageId: entry.messageId,
+            userId: entry.userId,
+          });
         });
       } else {
         db.leaseNotificationDelete(
           this.#storage.sql,
           entry.messageId,
-          now + getNotificationDeleteLeaseMs(entry.attempts),
+          run.now + getNotificationDeleteLeaseMs(entry.attempts),
         );
         jobs.push({ messageId: entry.messageId, userId: entry.userId });
       }
@@ -381,24 +435,24 @@ export class LiveStateCore {
   /**
    * Moves the alarm to the next time state needs attention. Call it inside
    * the transaction that changed the state.
+   *
+   * The alarm that is set is read from storage each time. A copy kept in this
+   * instance would have to be corrected after every rollback, restart, and
+   * alarm run, and one missed case would leave a deadline without its alarm.
    */
   async #moveAlarm(): Promise<void> {
     const wakeAt = db.getNextWakeAt(this.#storage.sql);
-    const scheduledAt = this.#alarmAt;
+    // While the alarm handler runs this is null, unless the handler set a new
+    // alarm: the alarm that is firing no longer counts as set.
+    const scheduledAt = await this.#storage.getAlarm();
     if (wakeAt === scheduledAt) {
       return;
     }
 
-    if (wakeAt !== null) {
-      await this.#storage.setAlarm(wakeAt);
-    } else if (scheduledAt !== undefined) {
-      // Only an alarm this instance knows of is cleared. A restarted instance
-      // may leave one set, which is harmless: it fires, finds nothing to do,
-      // and is not set again. That costs less than clearing on every first
-      // call.
+    if (wakeAt === null) {
       await this.#storage.deleteAlarm();
+    } else {
+      await this.#storage.setAlarm(wakeAt);
     }
-    // Remembered only once the storage call succeeded.
-    this.#alarmAt = wakeAt;
   }
 }

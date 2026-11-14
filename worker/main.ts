@@ -1,7 +1,8 @@
 // Worker entrypoint. Routes live in ./index; this module also exports the
-// classes Wrangler binds, which need the `cloudflare:workers` runtime module
-// and therefore stay out of the Node-based tests. Their behavior lives in
+// classes Wrangler binds, which need the `cloudflare:` runtime modules and
+// therefore stay out of the Node-based tests. Their behavior lives in
 // ./live-state and ./live-end.
+import { retryable } from "cloudflare:durable-objects";
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type { LiveRecord, User } from "./database";
 import app from "./index";
@@ -29,6 +30,15 @@ export class LiveEffects extends WorkerEntrypoint<Bindings> {
  * once its reconnect grace period passes. See LiveStateCore.
  */
 export class LiveState extends DurableObject<Bindings> {
+  static {
+    // When a connection drops, the runtime cannot tell whether the call it
+    // carried ran, and repeats it only for a method marked here. Storing a
+    // notification is safe to run twice, and failing it instead costs the
+    // broadcast its start notification.
+    // oxlint-disable-next-line typescript/unbound-method -- retryable marks the prototype function; it does not call it.
+    retryable(this.prototype.setLiveNotificationMessageId);
+  }
+
   readonly #core: LiveStateCore;
 
   constructor(ctx: DurableObjectState, env: Bindings) {

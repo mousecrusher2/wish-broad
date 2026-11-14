@@ -50,6 +50,12 @@ fails calls `rollback()`, the documented way to discard what it wrote.
 are part of it, and the alarm calls return promises. It is used only for the
 schema migration in the constructor, which is SQL alone.
 
+The object checks notification ids and timestamps before writing them, using
+the same rules as its cleanup and alarm reads. It reads the scheduled alarm from
+storage when moving it, so a failed transaction or a restarted instance cannot
+leave an outdated in-memory alarm time. A live-end event is logged only after
+the transaction commits.
+
 ## Logging
 
 Cloudflare Workers invocation logs already provide request-level metadata such
@@ -371,8 +377,10 @@ A broadcast that ends because a request found its session inactive queues its
 delete the same way, due at once, so the alarm set by that same call hands it
 out right away. If the notification id arrives after its broadcast ended, the
 live state queues it for deletion instead of storing it. If the call that
-stores the id fails, the Worker cannot know whether the id was stored, so it
-deletes the message itself.
+stores the id fails with a transient Durable Object error, the Worker retries
+once on a new stub. The method is safe to repeat with the same id. If storing
+still fails, the Worker cannot know whether the id was stored, so it deletes
+the message itself.
 
 Notification send/delete failures are logged but do not block ingest or
 playback cleanup.

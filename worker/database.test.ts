@@ -151,6 +151,38 @@ describe("live state SQL", () => {
     });
   });
 
+  it("rejects values that would make cleanup or alarm reads fail", () => {
+    const broadcastId = insertLive(sql, "user-1", "session-1", []);
+    if (broadcastId === null) {
+      throw new Error("Expected a new broadcast");
+    }
+
+    expect(() =>
+      setLiveNotificationMessageId(sql, "user-1", broadcastId, "bad-id"),
+    ).toThrow("Invalid lives.notification_message_id");
+    expect(() =>
+      startLiveReconnectGrace(sql, "user-1", "session-1", NOW + 0.5),
+    ).toThrow("Invalid lives.grace_expires_at");
+    expect(() =>
+      markLiveSessionSeenActive(sql, "user-1", "session-1", NaN, 10_000),
+    ).toThrow("Invalid lives.session_seen_active_at");
+    expect(() => {
+      enqueueNotificationDelete(sql, "bad-id", "user-1", NOW);
+    }).toThrow("Invalid notification_deletes.message_id");
+    expect(() => {
+      enqueueNotificationDelete(sql, "1", "user-1", NOW + 0.5);
+    }).toThrow("Invalid notification_deletes.next_attempt_at");
+
+    expect(getLive(sql, "user-1")).toMatchObject({
+      graceExpiresAt: null,
+      sessionSeenActiveAt: null,
+    });
+    expect(
+      endLive(sql, "user-1", "session-1")?.notificationMessageId,
+    ).toBeNull();
+    expect(getNextWakeAt(sql)).toBeNull();
+  });
+
   it("starts a grace period only for the live session that is stored", () => {
     insertLive(sql, "user-1", "session-1", []);
 

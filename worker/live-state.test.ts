@@ -334,6 +334,46 @@ describe("live state", () => {
     expect(testStorage.getAlarm()).toBe(NOW + GRACE_MS);
   });
 
+  it("does not report a live end if its alarm update rolls back", async () => {
+    const { core, testStorage } = createCore();
+    await startNotifiedLive(core);
+    vi.mocked(console.info).mockClear();
+    vi.spyOn(testStorage.storage, "setAlarm").mockRejectedValueOnce(
+      new Error("storage unavailable"),
+    );
+
+    await expect(core.endLive("user-1", "session-1")).rejects.toThrow(
+      "storage unavailable",
+    );
+
+    expect(console.info).not.toHaveBeenCalled();
+    await expect(core.getLive("user-1")).resolves.not.toBeNull();
+    expect(testStorage.getAlarm()).toBeNull();
+
+    await expect(core.endLive("user-1", "session-1")).resolves.toBe(true);
+    expect(console.info).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ event: "live.ended", userId: "user-1" }),
+    );
+  });
+
+  it("rejects an invalid notification id without poisoning later calls", async () => {
+    const { core, testStorage } = createCore();
+    const broadcastId = await core.insertLive("user-1", "session-1", []);
+    if (broadcastId === null) {
+      throw new Error("Expected a new broadcast");
+    }
+
+    await expect(
+      core.setLiveNotificationMessageId("user-1", broadcastId, "bad-id"),
+    ).rejects.toThrow("Invalid lives.notification_message_id");
+
+    await expect(core.getLive("user-1")).resolves.not.toBeNull();
+    await expect(
+      core.setLiveToken("user-1", "token-hash"),
+    ).resolves.toBeUndefined();
+    expect(testStorage.getAlarm()).toBeNull();
+  });
+
   it("leaves nothing behind when a command fails halfway", async () => {
     const { core, testStorage } = createCore();
     await startNotifiedLive(core);
@@ -352,7 +392,7 @@ describe("live state", () => {
     expect(testStorage.getAlarm()).toBeNull();
   });
 
-  it("sets the alarm again after a restart only when work is pending", async () => {
+  it("uses the stored alarm after a restart", async () => {
     const testStorage = createTestStorage();
     const first = createCore(testStorage);
     await first.core.setUser({ userId: "user-1", displayName: "Streamer" });
@@ -371,11 +411,21 @@ describe("live state", () => {
 
     const waiting = createCore(testStorage);
     await waiting.core.getLive("user-1");
-    expect(setAlarm).toHaveBeenCalledTimes(2);
-    expect(setAlarm).toHaveBeenLastCalledWith(NOW + GRACE_MS);
+    expect(setAlarm).toHaveBeenCalledTimes(1);
     // Unchanged state does not touch the alarm again.
     await waiting.core.getLive("user-1");
-    expect(setAlarm).toHaveBeenCalledTimes(2);
+    expect(setAlarm).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores a missing alarm while its deadline is still pending", async () => {
+    const { core, testStorage } = createCore();
+    await core.insertLive("user-1", "session-1", []);
+    await core.startLiveReconnectGrace("user-1", "session-1", GRACE_MS);
+    await testStorage.storage.deleteAlarm();
+
+    await core.getLive("user-1");
+
+    expect(testStorage.getAlarm()).toBe(NOW + GRACE_MS);
   });
 
   it("records session activity with its own clock, at most once per interval", async () => {
