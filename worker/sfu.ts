@@ -392,8 +392,8 @@ async function requestSfuJson<TOutput>(
 /**
  * Create a Cloudflare Calls session.
  *
- * Ingest sessions are later persisted in D1. Playback sessions are per viewer
- * attempt and live only in the returned WHEP session URL.
+ * Ingest sessions are later stored in the live state. Playback sessions are
+ * per viewer attempt and live only in the returned WHEP session URL.
  *
  * @throws {SfuApiError} When Calls cannot create the session.
  */
@@ -575,7 +575,7 @@ export async function closeTracks(
 }
 
 /**
- * Probe one Calls session for targeted D1 reconciliation.
+ * Probe one Calls session for targeted reconciliation of its live row.
  *
  * Only 404/410 mean "inactive"; transient SFU failures should not be treated as
  * proof that a live row is stale.

@@ -36,20 +36,21 @@
     "ENVIRONMENT": "production",
     "LOG_LEVEL": "info",
   },
-  "d1_databases": [
+  // Live broadcasts, publisher tokens, users, and the alarm that ends a
+  // broadcast once its OBS reconnect grace period passes. See
+  // worker/live-state.ts.
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "LIVE_STATE",
+        "class_name": "LiveState",
+      },
+    ],
+  },
+  "migrations": [
     {
-      "binding": "LIVE_DB",
-      "database_name": "broad-db",
-      "database_id": "2d57ee62-6f7c-490a-974f-5df3b194a860",
-    },
-  ],
-  // Ends a broadcast once its OBS reconnect grace period passes. See
-  // worker/live-end.ts.
-  "workflows": [
-    {
-      "name": "whip-worker-live-end",
-      "binding": "LIVE_END_WORKFLOW",
-      "class_name": "LiveEndWorkflow",
+      "tag": "v1",
+      "new_sqlite_classes": ["LiveState"],
     },
   ],
   "assets": {
