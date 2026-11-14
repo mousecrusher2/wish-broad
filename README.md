@@ -1,20 +1,20 @@
 # wish-broad
 
-Discord OAuthで視聴者を制限する、Cloudflare Workers + Cloudflare Realtime SFU向けの配信アプリです。
+Discord OAuth で視聴者を制限する、Cloudflare Workers + Cloudflare Realtime SFU 向けのライブ配信アプリです。
 
-OBSはWHIPで配信し、認証済みユーザーはブラウザからアプリ専用の視聴フローで再生します。視聴側のSDP交換やセッション管理はWHEPを参考にしていますが、公開WHEPエンドポイント互換を目的にした実装ではありません。
+OBS から WHIP で配信し、認証済みユーザーはアプリ独自の再生フローを使ってブラウザ上で視聴します。視聴側の SDP 交換やセッション管理は WHEP を参考にしていますが、公開用の汎用 WHEP エンドポイントとの互換性を目的とした実装ではありません。
 
 ## 機能
 
-- Discord サーバー（ギルド）メンバーシップに基づくログイン認証
-- ユーザーごとの OBS インジェスト URL と Bearer ライブトークン
-- OBS 向け WHIP インジェストエンドポイント
-- WHEP に着想を得た認証付き再生フロー
-- Cloudflare Realtime SFU セッション管理
-- Durable Object をバックエンドとした配信状態・トークン状態の管理
-- 認証付き TURN 認証情報エンドポイント
-- ベストエフォートの Discord 配信開始通知（インジェスト URL に `?notify=false` を付けることで配信ごとにスキップ可能）
-- OBS が再接続しても 60 秒間は配信が維持されて再通知せず、視聴者は配信の復帰を待機し続けます
+- 指定した Discord サーバー（ギルド）への参加状況に基づくログイン認証
+- ユーザーごとの OBS 用インジェスト URL と Bearer 形式のライブトークン
+- OBS 向けの WHIP インジェストエンドポイント
+- WHEP を参考にした認証付きの再生フロー
+- Cloudflare Realtime SFU によるメディアセッション管理
+- Durable Object を用いた配信状態とライブトークンの管理
+- ログインユーザー向けの TURN 認証情報エンドポイント
+- Discord への配信開始通知（ベストエフォートで送信。インジェスト URL に `?notify=false` を付けると配信ごとにスキップ可能）
+- OBS の再接続を 60 秒間猶予する仕組み（猶予期間内の再接続では再通知せず、視聴者は配信の復帰をそのまま待機）
 
 ## 技術スタック
 
@@ -23,7 +23,7 @@ OBSはWHIPで配信し、認証済みユーザーはブラウザからアプリ�
 - Tailwind CSS v4
 - Hono
 - Cloudflare Workers
-- Cloudflare Durable Objects（SQLite ストレージおよびアラーム）
+- Cloudflare Durable Objects（SQLite ストレージとアラーム機能）
 - Cloudflare Realtime SFU / TURN（旧称 Calls）
 - SWR
 - Valibot
@@ -35,18 +35,18 @@ OBSはWHIPで配信し、認証済みユーザーはブラウザからアプリ�
 - Node.js および pnpm
 - Workers、Durable Objects、Realtime SFU、Realtime TURN が利用可能な Cloudflare アカウント
 - OAuth 用の Discord アプリケーション
-- 視聴者許可リストとして使用する Discord サーバー（ギルド）
+- 視聴を許可するメンバーの判定に使う Discord サーバー（ギルド）
 - 配信通知用の Discord Webhook
 
 ## セットアップ
 
-依存関係をインストールします:
+依存関係をインストールします。
 
 ```sh
 pnpm install
 ```
 
-ローカル開発用の Worker 変数を `.dev.vars` に作成します（このファイルはコミットしないでください）。
+ローカル開発用の Worker シークレットを `.dev.vars` に設定します（このファイルは Git にコミットしないでください）。
 
 必要なシークレット:
 
@@ -63,29 +63,29 @@ TURN_KEY_API_TOKEN
 TURN_KEY_ID
 ```
 
-非シークレットのランタイム変数は `wrangler.jsonc` で設定します。`wrangler.jsonc` と `.dev.vars` のバインディング名を一致させ、バインディングを変更した後は `pnpm cf-typegen` を実行して `worker-configuration.d.ts` を再生成してください。
+シークレット以外のランタイム変数は `wrangler.jsonc` で設定します。`wrangler.jsonc` と `.dev.vars` のバインディング名は一致させてください。バインディングを変更した後は、`pnpm cf-typegen` を実行して `worker-configuration.d.ts` を再生成する必要があります。
 
 ## 開発
 
-開発サーバーを起動します:
+開発サーバーを起動します。
 
 ```sh
 pnpm dev
 ```
 
-Cloudflare Vite プラグインによりクライアントの隣でローカルの `workerd` ランタイム上で Worker が実行されるため、開発中も API、インジェスト、再生の各ルートが同一オリジンから配信されます。
+Cloudflare Vite プラグインにより、クライアントと並行してローカルの `workerd` ランタイム上で Worker が起動するため、開発中も API・インジェスト・再生の各ルートが同一オリジンで動作します。
 
-本番バンドルをローカルでビルドして提供します:
+ローカル環境で本番バンドルをビルドして起動します。
 
 ```sh
 pnpm preview
 ```
 
-本番バンドルに依存する動作を検証する場合は `pnpm preview` を使用してください。
+本番ビルド特有の挙動を確認したい場合は `pnpm preview` を使用してください。
 
 ## 検証
 
-標準のチェックを実行します:
+以下のコマンドで標準の検証を実行します。
 
 ```sh
 pnpm check
@@ -96,27 +96,29 @@ pnpm build
 
 ## デプロイ
 
-Wrangler でビルドおよびデプロイします:
+Wrangler でビルドおよびデプロイを行います。
 
 ```sh
 pnpm deploy
 ```
 
-デプロイ前に Cloudflare 側へ本番シークレットを設定しておく必要があります。`LIVE_STATE` Durable Object バインディングとそのストレージは `wrangler.jsonc` に基づいて `wrangler deploy` が作成し、オブジェクトは起動時に自身のテーブルを作成するため、手動でデータベースを作成・マイグレーションする必要はありません。
+デプロイ前に、あらかじめ Cloudflare 側へ本番用のシークレットを登録しておく必要があります。`LIVE_STATE` Durable Object のバインディングとストレージは `wrangler.jsonc` の設定に従って `wrangler deploy` が作成し、テーブルの作成とマイグレーションも起動時に `LiveState` 自身が自動で行うため、手動でデータベースを作成したりマイグレーションを実行したりする必要はありません。
 
-まだ D1 に状態を保持しているバージョンからこのバージョンへ上書きデプロイすると、その状態は破棄されます。Durable Object は空の状態で開始され、D1 の行はインポートされません。実行する前に [D1からの切り替え](docs/architecture.md#d1からの切り替え) を確認してください。切り替え後、配信者は新しいライブトークンを再発行する必要があります。
+なお、まだ D1 に状態を保存している旧バージョンから本バージョンへ上書きデプロイすると、既存のデータは破棄されます（Durable Object は空の状態から開始し、D1 のデータは移行されません）。実行前に [D1からの切り替え](docs/architecture.md#d1からの切り替え) を確認してください。切り替え後、配信者は新しいライブトークンを再発行する必要があります。
 
 ## アーキテクチャメモ
 
-Worker は意図的にステートレスに設計されています。永続化が必要な状態は単一の Durable Object（`LiveState`）の SQLite ストレージに保存され、メディアセッションの状態は Cloudflare Realtime SFU が管理します。Durable Object は待機時間に対しても課金されるため、自身のストレージに対する短いトランザクションのみを実行し、Realtime SFU や Discord その他の外部 API は一切呼び出しません。また、すべてのライブセッションをポーリングしたり、長寿命のインメモリ状態を保持したりする設計も避けています。唯一の定期実行タスクはオブジェクトのアラームであり、60 秒間の OBS 再接続猶予期間が経過した配信を終了し、Discord 通知の削除処理を Worker へ引き渡します。アラームは OBS の再接続待ち中または削除待ちの通知がある間のみ設定されます。
+Worker 自体は意図的にステートレスな設計にしています。永続化が必要な状態は単一の Durable Object（`LiveState`）の SQLite ストレージに集約し、実際のメディアセッションは Cloudflare Realtime SFU が管理します。Durable Object は外部処理の応答を待っている時間に対しても課金されるため、`LiveState` 内では自身のストレージに対する短いトランザクションのみを実行し、Realtime SFU や Discord などの外部 API は一切呼び出しません。また、アクティブな全セッションの定期ポーリングや、長寿命のインメモリ状態の保持も行いません。
 
-視聴機能は意図的に認証付きかつアプリ固有の仕様としています。TURN サーバーの探索は汎用的な WHEP の `OPTIONS`/`Link` ではなく `/api/turn-credentials` を通じて提供されます。現在の SFU 経路は実質的にノン・トリクル（non-trickle）であるため、再生クライアントは POST/PATCH を送信する前にローカルの ICE 収集完了を待機します。
+スケジュール実行されるのは `LiveState` のアラームだけで、60 秒間の OBS 再接続猶予期間が切れた配信の終了処理や、Discord 通知の削除ジョブの Worker への引き渡しを行います。このアラームは、OBS の再接続待ちまたは削除待ちの通知が存在する間だけ設定されます。
 
-詳細は [docs/architecture.md](docs/architecture.md) に記載しています。
+視聴機能はあえて認証必須・アプリ固有の仕様としています。TURN サーバーの情報は汎用 WHEP の `OPTIONS`/`Link` ではなく `/api/turn-credentials` から取得します。また、現在の SFU 経路は実質的にノン・トリクル（non-trickle）であるため、再生クライアントは `POST`/`PATCH` を送信する前にローカルの ICE 収集が完了するまで待機します。
+
+詳細は [docs/architecture.md](docs/architecture.md) を参照してください。
 
 ## セキュリティ上の注意
 
-- 生の OBS Bearer トークン、JWT、Cookie、Discord OAuth コード、Cloudflare シークレットをログに出力しないでください。
+- 生の OBS Bearer トークン、JWT、Cookie、Discord OAuth 認可コード、Cloudflare シークレットをログに出力しないでください。
 - ライブトークンは発行時にのみ画面に表示され、`LIVE_TOKEN_PEPPER` を用いた HMAC ハッシュとして保存されます。
-- 視聴者認証では、Discord サーバー（ギルド）への所属確認後にアプリが発行する JWT Cookie を使用します。
-- 本アプリは限定された視聴用途向けに設計されており、公開 WHEP 互換エンドポイントとして公開することを目的としていません。
+- 視聴者認証には、Discord サーバー（ギルド）への所属確認後にアプリが発行する JWT Cookie を使用します。
+- 本アプリは限定されたメンバー間での視聴を想定しており、公開 WHEP 互換エンドポイントとして提供することを目的としていません。
