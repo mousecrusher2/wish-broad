@@ -56,9 +56,9 @@ export function WHEPPlayer({
     const disposeToken = disposeTokenRef.current;
 
     return () => {
-      // React Strict Mode can run an effect cleanup and setup back-to-back in
-      // development. Defer disposal so the replacement setup can claim the
-      // controller before the previous cleanup tears down the session.
+      // 開発環境では React Strict Mode によりエフェクトのクリーンアップと再セットアップが
+      // 連続して実行される場合がある。前のクリーンアップがセッションを破棄する前に
+      // 後続のセットアップがコントローラーを引き継げるよう、破棄処理を遅延させる。
       queueMicrotask(() => {
         if (disposeTokenRef.current === disposeToken) {
           controller.dispose();
@@ -87,7 +87,6 @@ export function WHEPPlayer({
 
   return (
     <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black/80 shadow-xl shadow-black/25">
-      {/* Live streams have no separate captions track. Unmuted autoplay is intentional; WHEPClient handles rejection. */}
       {/* oxlint-disable jsx-a11y/media-has-caption */}
       <video
         ref={videoRef}

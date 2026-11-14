@@ -1,14 +1,13 @@
-// SQL for the LiveState Durable Object's storage. Every function here runs
-// synchronously inside that object; routes reach this data through its RPC
-// methods in ./live-state.
+// LiveState Durable Object のストレージ用 SQL。ここにある関数はすべて
+// オブジェクト内で同期的に実行され、ルートからは ./live-state の RPC メソッド経由で参照する。
 import type { StoredTrack } from "./sfu";
 import * as v from "valibot";
 
 type SqlValue = string | number | null;
 
 /**
- * The part of a Durable Object's SQL API these queries use. Tests run the same
- * queries against Node's SQLite through this shape.
+ * これらのクエリが利用する Durable Object の SQL API の一部。
+ * テストも同じインターフェースを通じて Node の SQLite 上で同じクエリを実行する。
  */
 export type Sql = {
   exec(
@@ -28,58 +27,56 @@ type Live = {
 
 export type LiveRecord = {
   broadcastId: string;
-  // null while the ingest session is live; otherwise the end of the reconnect
-  // grace period in Unix epoch milliseconds.
+  // インジェストセッションが配信中の場合は null、それ以外は再接続猶予期間の
+  // 終了時刻（Unix エポックミリ秒）。
   graceExpiresAt: number | null;
-  // When a request last found the ingest session active in Calls, in Unix
-  // epoch milliseconds, or null if none has since the session was stored.
+  // リクエストが Calls 上でインジェストセッションの生存を最後に確認した時刻
+  // （Unix エポックミリ秒）。セッション保存後に確認がまだない場合は null。
   sessionSeenActiveAt: number | null;
   userId: string;
   sessionId: string;
   tracks: StoredTrack[];
 };
 
-/** A broadcast whose row was just removed. */
+/** 行が削除された直後の配信。 */
 export type EndedLive = {
-  // The Discord snowflake of its start notification as decimal text.
+  // 開始通知メッセージの Discord snowflake（10 進数文字列）。
   notificationMessageId: string | null;
   sessionId: string;
   userId: string;
 };
 
-/** A start notification that still has to be deleted from Discord. */
+/** まだ Discord から削除されていない開始通知。 */
 export type NotificationDelete = {
-  // How many times the delete has been handed out so far.
+  // これまでに削除タスクが払い出された回数。
   attempts: number;
   messageId: string;
   userId: string;
 };
 
-// Each entry is one schema version. An object applies the versions it has not
-// recorded yet when it starts, so append a new entry instead of editing one
-// that has been deployed.
+// 各エントリは 1 つのスキーマバージョンを表す。オブジェクトは起動時に未適用バージョンを
+// 順次適用するため、デプロイ済みエントリは編集せず新しいエントリを末尾に追記すること。
 //
-// One live row exists per owner and represents one broadcast; user_id is also
-// the live id. broadcast_id stays the same while OBS reconnects, whereas
-// session_id and tracks_json (the StoredTrack array) point at the current
-// Cloudflare Calls ingest session and are replaced on every reconnect.
-// grace_expires_at is NULL while that ingest session is live. After OBS sends
-// DELETE it holds the Unix epoch milliseconds until which a new ingest resumes
-// the same broadcast; once it passes, the broadcast has ended.
-// notification_message_id is a Discord snowflake stored as decimal text because
-// it does not fit in a JavaScript number.
-// session_seen_active_at is the Unix epoch milliseconds when a request last
-// found the ingest session active in Calls (written at most every 10 seconds),
-// or NULL. It tells whether a session that Calls garbage-collected without OBS
-// sending DELETE was lost just now, so OBS can still resume the broadcast.
+// 配信者（owner）ごとに 1 行の live 行が存在して 1 つの配信を表し、user_id がそのまま
+// live id になる。OBS の再接続中も broadcast_id は変わらない一方、session_id と
+// tracks_json（StoredTrack の配列）は現在の Cloudflare Calls インジェストセッションを
+// 指しており、再接続のたびに置き換わる。
+// grace_expires_at はインジェストセッションの配信中は NULL となり、OBS が DELETE を
+// 送信した後は、新しいインジェストが同じ配信を再開できる期限（Unix エポックミリ秒）を保持する。
+// その期限を過ぎると配信は終了する。
+// notification_message_id は JavaScript の数値型に収まらない Discord snowflake を
+// 10 進数文字列として保存したもの。
+// session_seen_active_at はリクエストが Calls 上でインジェストセッションの生存を
+// 最後に確認した時刻（Unix エポックミリ秒、最大 10 秒ごとに記録）、または NULL。
+// OBS が DELETE を送らずに Calls によってガベージコレクションされたセッションが直前に
+// 失われたものかを判別し、OBS が配信を再開できるようにするために用いる。
 //
-// Publisher tokens are stored as HMAC hashes, not raw bearer tokens. Each user
-// has one current token.
+// 配信者トークンは生の Bearer トークンではなく HMAC ハッシュとして保存する。各ユーザーは
+// 最新のトークンを 1 つ持つ。
 //
-// notification_deletes is the outbox of start notifications to delete from
-// Discord. attempts counts how often a delete was handed to the Worker, and
-// next_attempt_at is the Unix epoch milliseconds from which it may be handed
-// out (again).
+// notification_deletes は Discord から削除すべき開始通知のアウトボックスである。
+// attempts は削除タスクを Worker に払い出した回数、next_attempt_at は次に払い出し
+// （再払い出し）が可能になる時刻（Unix エポックミリ秒）を表す。
 const SCHEMA_MIGRATIONS: readonly (readonly string[])[] = [
   [
     `CREATE TABLE lives (
@@ -108,12 +105,12 @@ const SCHEMA_MIGRATIONS: readonly (readonly string[])[] = [
   ],
 ];
 
-// Every method of the object ends the overdue broadcasts and computes the next
-// alarm, and both read these two kinds of value. One that could not be read
-// back would fail every later call, so writes are checked against the schemas
-// the reads use and refuse such a value before it is stored.
+// オブジェクトの全メソッドは期限切れの配信を終了させて次のアラームを計算し、
+// いずれの処理も以下の 2 種類の値を読み取る。読み戻せない値が保存されると後続の
+// すべての呼び出しが失敗するため、書き込み時に読み取り用スキーマで検証し、不正な値を
+// 保存前に拒否する。
 
-// A Discord snowflake as decimal text.
+// 10 進数文字列として表現された Discord snowflake。
 function createNotificationMessageIdSchema() {
   return v.pipe(v.string(), v.regex(/^[0-9]+$/u));
 }
@@ -127,7 +124,7 @@ function getNotificationMessageIdSchema() {
   return notificationMessageIdSchema;
 }
 
-// Unix epoch milliseconds.
+// Unix エポックミリ秒。
 function createTimestampSchema() {
   return v.pipe(v.number(), v.integer());
 }
@@ -305,9 +302,9 @@ function parseEndedLiveRow(row: unknown): EndedLive {
 }
 
 /**
- * Creates the tables of every schema version this storage does not have yet.
+ * このストレージにまだ適用されていないすべてのスキーマバージョンのテーブルを作成する。
  *
- * @throws {Error} When the recorded schema version cannot be read.
+ * @throws {Error} 記録済みのスキーマバージョンを読み取れなかった場合。
  */
 export function migrateSchema(sql: Sql): void {
   sql.exec(
@@ -337,9 +334,8 @@ export function migrateSchema(sql: Sql): void {
 }
 
 /**
- * Starts a new broadcast and returns its id, or null when the owner already
- * has a live row, for example because a concurrent ingest created or resumed
- * it first.
+ * 新しい配信を開始してその ID を返す。競合する別のインジェストが先に作成または
+ * 再開したなどの理由で配信者（owner）がすでに live 行を持っている場合は null を返す。
  */
 export function insertLive(
   sql: Sql,
@@ -348,10 +344,9 @@ export function insertLive(
   tracks: StoredTrack[],
 ): string | null {
   const broadcastId = crypto.randomUUID();
-  // Do not upsert here. A concurrent second ingest must fail closed instead of
-  // replacing the existing live row with a later session and notifying again.
-  // Reconnects resume the row through resumeLive, and stale rows are ended
-  // before inserting.
+  // ここでは upsert を行わない。競合する 2 つ目のインジェストは既存の live 行を
+  // 後続セッションで上書きして再通知するのではなく、フェイルクローズで拒否すべきである。
+  // 再接続時は resumeLive で行を再開し、古い行は挿入前に終了される。
   const inserted = sql
     .exec(
       "INSERT INTO lives (user_id, broadcast_id, session_id, tracks_json) VALUES (?, ?, ?, ?) ON CONFLICT (user_id) DO NOTHING RETURNING user_id",
@@ -366,8 +361,7 @@ export function insertLive(
 }
 
 /**
- * @throws {Error} When the stored row or its tracks are not in the form this
- * module writes.
+ * @throws {Error} 保存されている行またはトラックの形式が本モジュールの書き込む形式と一致しない場合。
  */
 export function getLive(sql: Sql, userId: string): LiveRecord | null {
   const [result] = sql
@@ -403,12 +397,12 @@ export function getLive(sql: Sql, userId: string): LiveRecord | null {
 }
 
 /**
- * Stores the start notification on the broadcast, not the ingest session, so
- * it survives a reconnect that happens while the notification is being sent.
- * Returns false when that broadcast no longer exists.
+ * 開始通知をインジェストセッションではなく配信本体に保存することで、通知送信中に
+ * 再接続が発生しても情報が引き継がれるようにする。該当する配信がすでに存在しない場合は
+ * false を返す。
  *
- * @throws {Error} When `notificationMessageId` is not a Discord snowflake as
- * decimal text. Nothing is stored then.
+ * @throws {Error} `notificationMessageId` が 10 進数文字列の Discord snowflake でない場合。
+ * この場合、何も保存されない。
  */
 export function setLiveNotificationMessageId(
   sql: Sql,
@@ -433,11 +427,11 @@ export function setLiveNotificationMessageId(
 }
 
 /**
- * Records that a request found the live ingest session still active in Calls,
- * at most once per `minIntervalMs`, so concurrent viewers of a healthy stream
- * do not each write a row.
+ * リクエストが Calls 上で配信中インジェストセッションの生存を確認したことを記録する。
+ * 健全な配信の同時視聴者全員が毎回行を書き込まないよう、`minIntervalMs` ごとに
+ * 最大 1 回のみ記録する。
  *
- * @throws {Error} When `now` is not an integer. Nothing is stored then.
+ * @throws {Error} `now` が整数でない場合。この場合、何も保存されない。
  */
 export function markLiveSessionSeenActive(
   sql: Sql,
@@ -461,10 +455,9 @@ export function markLiveSessionSeenActive(
 }
 
 /**
- * Moves a live ingest session into its reconnect grace period.
+ * 配信中のインジェストセッションを再接続猶予期間へ移行する。
  *
- * @throws {Error} When `graceExpiresAt` is not an integer. Nothing is stored
- * then.
+ * @throws {Error} `graceExpiresAt` が整数でない場合。この場合、何も保存されない。
  */
 export function startLiveReconnectGrace(
   sql: Sql,
@@ -486,10 +479,9 @@ export function startLiveReconnectGrace(
 }
 
 /**
- * Continues a broadcast with a new ingest session, either during its grace
- * period or right after its previous session was lost without DELETE. Matching
- * the previous session_id makes this a compare-and-swap: it fails once the
- * broadcast ended or another ingest resumed it.
+ * 猶予期間中、または前回のセッションが DELETE なしで失われた直後に、新しい
+ * インジェストセッションで配信を継続する。直前の session_id の一致を条件とするため
+ * Compare-And-Set となり、すでに配信終了したか別のインジェストが再開した後では失敗する。
  */
 export function resumeLive(
   sql: Sql,
@@ -512,13 +504,12 @@ export function resumeLive(
 }
 
 /**
- * Ends a broadcast whose ingest session was found inactive, but only while its
- * row still holds that session outside a grace period, so a concurrent
- * reconnect or grace start is never overwritten. Returns null when nothing was
- * deleted.
+ * インジェストセッションが非アクティブと判明した配信を終了させる。ただし、行がその
+ * セッションを猶予期間外で保持し続けている場合に限るため、競合する再接続や猶予開始が
+ * 上書きされることはない。何も削除されなかった場合は null を返す。
  *
- * @throws {Error} When the deleted row is not in the form this module writes.
- * The row is deleted by then, so the caller has to roll back.
+ * @throws {Error} 削除された行の形式が本モジュールの書き込む形式と一致しない場合。
+ * この時点ですでに行は削除されているため、呼び出し側でロールバックする必要がある。
  */
 export function endLive(
   sql: Sql,
@@ -537,10 +528,10 @@ export function endLive(
 }
 
 /**
- * Ends every broadcast whose reconnect grace period has passed.
+ * 再接続猶予期間を過ぎたすべての配信を終了させる。
  *
- * @throws {Error} When a deleted row is not in the form this module writes.
- * The rows are deleted by then, so the caller has to roll back.
+ * @throws {Error} 削除された行の形式が本モジュールの書き込む形式と一致しない場合。
+ * この時点ですでに行は削除されているため、呼び出し側でロールバックする必要がある。
  */
 export function endOverdueLives(sql: Sql, now: number): EndedLive[] {
   return sql
@@ -553,11 +544,11 @@ export function endOverdueLives(sql: Sql, now: number): EndedLive[] {
 }
 
 /**
- * Queues a start notification for deletion from `nextAttemptAt` on. A
- * notification that is already queued keeps its attempts and its time.
+ * `nextAttemptAt` 以降に削除を実行するよう開始通知をキューに追加する。
+ * すでにキューに入っている通知については試行回数と次回予定時刻を維持する。
  *
- * @throws {Error} When `messageId` is not a Discord snowflake as decimal text
- * or `nextAttemptAt` is not an integer. Nothing is stored then.
+ * @throws {Error} `messageId` が 10 進数文字列の Discord snowflake でない場合、または
+ * `nextAttemptAt` が整数でない場合。この場合、何も保存されない。
  */
 export function enqueueNotificationDelete(
   sql: Sql,
@@ -576,9 +567,9 @@ export function enqueueNotificationDelete(
 }
 
 /**
- * The notification deletes that may be handed out at `now`, oldest first.
+ * 時刻 `now` 時点で払い出し可能な通知削除タスクを古い順に返す。
  *
- * @throws {Error} When a stored row is not in the form this module writes.
+ * @throws {Error} 保存されている行の形式が本モジュールの書き込む形式と一致しない場合。
  */
 export function getDueNotificationDeletes(
   sql: Sql,
@@ -605,10 +596,9 @@ export function getDueNotificationDeletes(
 }
 
 /**
- * Counts one more attempt and hides the delete until `nextAttemptAt`.
+ * 試行回数を 1 増やし、`nextAttemptAt` までその削除タスクを非表示にする。
  *
- * @throws {Error} When `nextAttemptAt` is not an integer. Nothing is stored
- * then.
+ * @throws {Error} `nextAttemptAt` が整数でない場合。この場合、何も保存されない。
  */
 export function leaseNotificationDelete(
   sql: Sql,
@@ -628,10 +618,10 @@ export function removeNotificationDelete(sql: Sql, messageId: string): void {
 }
 
 /**
- * The earliest time at which stored state needs attention: a grace period
- * ending or a notification delete becoming due. Null when nothing is pending.
+ * 保存済みの状態に対して処理が必要になる最も早い時刻（猶予期間の終了または
+ * 通知削除の実行期限到来）を返す。保留中の処理がなければ null を返す。
  *
- * @throws {Error} When the stored times do not give an integer.
+ * @throws {Error} 保存されている時刻値が整数にならない場合。
  */
 export function getNextWakeAt(sql: Sql): number | null {
   const rowResult = v.safeParse(
@@ -662,7 +652,7 @@ export function setLiveToken(
 }
 
 /**
- * @throws {Error} When the stored row is not in the form this module writes.
+ * @throws {Error} 保存されている行の形式が本モジュールの書き込む形式と一致しない場合。
  */
 export function getLiveTokenHash(sql: Sql, userId: string): string | null {
   const [result] = sql
@@ -700,15 +690,14 @@ export function setUser(sql: Sql, user: User): void {
 }
 
 /**
- * The owners of all broadcasts, including those waiting for OBS to reconnect.
+ * OBS の再接続待ち中のものも含め、すべての配信の配信者一覧を返す。
  *
- * @throws {Error} When a stored row is not in the form this module writes.
+ * @throws {Error} 保存されている行の形式が本モジュールの書き込む形式と一致しない場合。
  */
 export function getAllLives(sql: Sql): Live[] {
-  // This intentionally does not verify every Calls session. Listing must stay
-  // cheap; stale rows are reconciled on user-specific ingest/play requests.
-  // Broadcasts waiting for OBS to reconnect stay listed until their grace
-  // period passes.
+  // ここでは意図的に全 Calls セッションの生存確認を行わない。一覧取得は軽量に保ち、
+  // 古い行の整合はユーザー指定のインジェスト/再生リクエスト時に行う。
+  // OBS の再接続待ち中の配信は、猶予期間が経過するまで一覧に残る。
   return sql
     .exec(
       "SELECT users.user_id, display_name FROM lives JOIN users ON lives.user_id = users.user_id ORDER BY users.user_id",

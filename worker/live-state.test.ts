@@ -19,13 +19,13 @@ function createCore(testStorage = createTestStorage()) {
 
 type TestCore = ReturnType<typeof createCore>;
 
-// Fires the alarm as the runtime does: it is no longer set while it runs.
+// ランタイムと同じ挙動でアラームを発火させる（実行中は設定解除された状態になる）。
 async function fireAlarm({ core, testStorage }: TestCore): Promise<void> {
   await testStorage.storage.deleteAlarm();
   await core.alarm();
 }
 
-// Starts a broadcast for user-1 on session-1 that has a start notification.
+// 開始通知付きの配信を user-1 / session-1 で開始する。
 async function startNotifiedLive(core: LiveStateCore): Promise<void> {
   const broadcastId = await core.insertLive("user-1", "session-1", []);
   if (broadcastId === null) {
@@ -72,7 +72,7 @@ describe("live state", () => {
 
     await core.startLiveReconnectGrace("user-1", "session-1", GRACE_MS);
     vi.setSystemTime(NOW + 1000);
-    // A repeated DELETE keeps the first deadline.
+    // 重複した DELETE でも最初の猶予期限が維持される。
     await expect(
       core.startLiveReconnectGrace("user-1", "session-1", GRACE_MS),
     ).resolves.toBeNull();
@@ -95,7 +95,7 @@ describe("live state", () => {
       sessionId: "session-2",
     });
 
-    // An alarm that was already on its way finds nothing to end.
+    // すでに発火途中だったアラームが実行されても、終了対象の配信は見つからない。
     vi.setSystemTime(NOW + GRACE_MS);
     await fireAlarm(live);
     await expect(core.getLive("user-1")).resolves.not.toBeNull();
@@ -123,7 +123,7 @@ describe("live state", () => {
         userId: "user-1",
       }),
     );
-    // The delete is handed out again if the Worker does not settle it.
+    // Worker が完了報告をしなかった場合、削除タスクは再度払い出される。
     expect(testStorage.getAlarm()).toBe(NOW + GRACE_MS + 30_000);
   });
 
@@ -156,7 +156,7 @@ describe("live state", () => {
     vi.setSystemTime(NOW + GRACE_MS + 5000);
     await expect(core.getAllLives()).resolves.toEqual([]);
     await expect(core.getLive("user-1")).resolves.toBeNull();
-    // A new ingest starts a new broadcast instead of resuming the ended one.
+    // 新しいインジェストは、終了済みの配信を再開するのではなく新しい配信を開始する。
     await expect(
       core.resumeLive("user-1", "session-1", "session-2", []),
     ).resolves.toBe(false);
@@ -164,7 +164,7 @@ describe("live state", () => {
       core.insertLive("user-1", "session-2", []),
     ).resolves.not.toBeNull();
 
-    // The notification of the ended broadcast is due at once.
+    // 終了した配信の通知削除は即座に実行期限を迎える。
     expect(testStorage.getAlarm()).toBe(NOW + GRACE_MS + 5000);
     await fireAlarm(live);
     expect(dispatch).toHaveBeenCalledExactlyOnceWith([
@@ -226,12 +226,11 @@ describe("live state", () => {
     await core.endLive("user-1", "session-1");
 
     let now = NOW;
-    // The last attempt only waits for its result, so the delete is abandoned
-    // 16 minutes after the broadcast ended.
+    // 最終試行は結果の待機のみを行うため、配信終了から 16 分後に削除タスクは破棄される。
     for (const leaseMs of [30_000, 60_000, 120_000, 240_000, 480_000, 30_000]) {
       expect(testStorage.getAlarm()).toBe(now);
       vi.setSystemTime(now);
-      // oxlint-disable-next-line no-await-in-loop -- Each attempt follows the previous lease.
+      // oxlint-disable-next-line no-await-in-loop -- 各試行は直前のリース期限切れ後に順番に行われるため。
       await fireAlarm(live);
       now += leaseMs;
     }
@@ -320,14 +319,14 @@ describe("live state", () => {
       core.startLiveReconnectGrace("user-1", "session-1", GRACE_MS),
     ).rejects.toThrow("storage unavailable");
 
-    // The alarm is set in the transaction that stores the deadline, so
-    // neither exists without the other.
+    // アラームは期限を保存する同じトランザクション内で設定されるため、
+    // 片方だけが存在する状態にはならない。
     await expect(core.getLive("user-1")).resolves.toMatchObject({
       graceExpiresAt: null,
     });
     expect(testStorage.getAlarm()).toBeNull();
 
-    // The failed call is not remembered as done.
+    // 失敗した呼び出しは完了済みとして記録されない。
     await expect(
       core.startLiveReconnectGrace("user-1", "session-1", GRACE_MS),
     ).resolves.toBe(NOW + GRACE_MS);
@@ -377,7 +376,7 @@ describe("live state", () => {
   it("leaves nothing behind when a command fails halfway", async () => {
     const { core, testStorage } = createCore();
     await startNotifiedLive(core);
-    // Ending this broadcast deletes its row and then rejects the stored id.
+    // この配信を終了させると行が削除され、その後に保存されていた ID が拒否される。
     testStorage.storage.sql.exec(
       "UPDATE lives SET notification_message_id = 'not-an-id'",
     );
@@ -398,7 +397,7 @@ describe("live state", () => {
     await first.core.setUser({ userId: "user-1", displayName: "Streamer" });
     await first.core.insertLive("user-1", "session-1", []);
 
-    // A restarted object keeps its storage but not what it knew of the alarm.
+    // 再起動されたオブジェクトはストレージを保持するが、以前把握していたアラーム情報は保持しない。
     const idle = createCore(testStorage);
     const setAlarm = vi.spyOn(testStorage.storage, "setAlarm");
     const deleteAlarm = vi.spyOn(testStorage.storage, "deleteAlarm");
@@ -412,7 +411,7 @@ describe("live state", () => {
     const waiting = createCore(testStorage);
     await waiting.core.getLive("user-1");
     expect(setAlarm).toHaveBeenCalledTimes(1);
-    // Unchanged state does not touch the alarm again.
+    // 状態が変化していなければアラームを再設定しない。
     await waiting.core.getLive("user-1");
     expect(setAlarm).toHaveBeenCalledTimes(1);
   });

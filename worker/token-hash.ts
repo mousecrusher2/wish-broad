@@ -48,8 +48,8 @@ export async function verifyTokenHash(
   token: string,
   expectedTokenHash: string,
 ): Promise<boolean> {
-  // Live tokens are stored as HMAC(token, LIVE_TOKEN_PEPPER), never as raw
-  // bearer tokens. WebCrypto verify avoids reimplementing byte comparison.
+  // 配信トークンは生の Bearer トークンではなく HMAC(token, LIVE_TOKEN_PEPPER) として
+  // 保存する。WebCrypto の verify を使うことでバイト比較の再実装を避けている。
   const pepperKey = await importPepperKey(pepper);
   const expectedHashBytes = hexToBytes(expectedTokenHash.toLowerCase());
 

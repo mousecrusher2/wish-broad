@@ -98,7 +98,7 @@ function WHEPPlayerPageContent() {
     const trimmedResource = resource.trim();
     setPlayerSelection((currentSelection) => ({
       resourceUserId: trimmedResource,
-      // Loading the same stream again creates a fresh controller and session.
+      // 同じ配信を再度読み込む場合は、新しいコントローラーとセッションを作成する。
       loadSequence: currentSelection ? currentSelection.loadSequence + 1 : 1,
     }));
   };
@@ -110,8 +110,8 @@ function WHEPPlayerPageContent() {
       playerSnapshot.playbackState.phase !== "ended" &&
       nextSnapshot.playbackState.phase === "ended"
     ) {
-      // The player is one of the targeted reconciliation points. Refresh the
-      // cheap list after playback proves the selected live ended.
+      // プレーヤーは個別整合ポイントの 1 つ。
+      // 再生処理によって選択中の配信終了が確認された後、軽量な一覧を再取得する。
       void revalidateLiveStreams();
     }
 

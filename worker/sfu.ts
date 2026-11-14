@@ -316,8 +316,7 @@ function getErrorMessage(error: unknown): string {
 }
 
 /**
- * @throws {SfuApiError} When the request fails or times out before Calls
- * answers.
+ * @throws {SfuApiError} Calls の応答前にリクエストが失敗またはタイムアウトした場合。
  */
 async function fetchSfu(
   endpoint: string,
@@ -346,10 +345,10 @@ function normalizeTrackLocator(track: TrackLocator): TrackLocatorRequest {
 }
 
 /**
- * Send one Calls API request and validate its JSON response body.
+ * Calls API リクエストを 1 回送信し、JSON レスポンスボディを検証する。
  *
- * @throws {SfuApiError} When the request fails, Calls answers with an HTTP
- * error, or the body is not JSON matching `schema`.
+ * @throws {SfuApiError} リクエストに失敗したか、Calls が HTTP エラーを返したか、
+ * レスポンスボディが `schema` に一致する JSON でない場合。
  */
 async function requestSfuJson<TOutput>(
   endpoint: string,
@@ -390,12 +389,12 @@ async function requestSfuJson<TOutput>(
 }
 
 /**
- * Create a Cloudflare Calls session.
+ * Cloudflare Calls セッションを作成する。
  *
- * Ingest sessions are later stored in the live state. Playback sessions are
- * per viewer attempt and live only in the returned WHEP session URL.
+ * インジェストセッションは後で LiveState に保存される。再生セッションは
+ * 視聴者の接続試行ごとに作成され、返される WHEP セッション URL の中でのみ保持される。
  *
- * @throws {SfuApiError} When Calls cannot create the session.
+ * @throws {SfuApiError} Calls がセッションを作成できなかった場合。
  */
 async function createSession(env: SfuEnv): Promise<NewSessionResponse> {
   const endpoint = `https://rtc.live.cloudflare.com/v1/apps/${env.CALLS_APP_ID}/sessions/new`;
@@ -410,12 +409,12 @@ async function createSession(env: SfuEnv): Promise<NewSessionResponse> {
 }
 
 /**
- * Create ingest tracks from a WHIP offer.
+ * WHIP オファーからインジェストトラックを作成する。
  *
- * `autoDiscover` lets OBS offer its audio/video tracks without the Worker
- * predeclaring individual track names.
+ * `autoDiscover` を使うことで、Worker 側で個別のトラック名を事前宣言しなくても
+ * OBS が音声/映像トラックをオファーできるようになる。
  *
- * @throws {SfuApiError} When Calls cannot create the tracks.
+ * @throws {SfuApiError} Calls がトラックを作成できなかった場合。
  */
 async function createIngestTracks(
   env: SfuEnv,
@@ -446,13 +445,14 @@ async function createIngestTracks(
 }
 
 /**
- * Attach a playback session to stored ingest track locators.
+ * 保存されたインジェストトラックロケーターに再生セッションをアタッチする。
  *
- * Passing an SDP offer lets Calls answer directly. Calls may also return a
- * counter-offer, which the WHEP route answers through `renegotiateSession`.
+ * SDP オファーを渡すと Calls が直接アンサーを返す場合があるほか、Calls が
+ * カウンターオファーを返す場合もあり、その際は WHEP ルートが `renegotiateSession`
+ * を通じてアンサーを送信する。
  *
- * @throws {SfuApiError} When Calls cannot attach the tracks, including when it
- * reports track negotiation errors.
+ * @throws {SfuApiError} トラックネゴシエーションエラーの報告を含め、Calls が
+ * トラックをアタッチできなかった場合。
  */
 async function connectToTracks(
   env: SfuEnv,
@@ -502,12 +502,12 @@ async function connectToTracks(
 }
 
 /**
- * Submit the answer to a Calls counter-offer.
+ * Calls のカウンターオファーに対するアンサーを送信する。
  *
- * This is not used for trickle ICE candidate PATCHes; the frontend gathers
- * complete SDP before POST/PATCH.
+ * トリクル ICE 候補の PATCH には使用しない（フロントエンドは POST/PATCH 前に
+ * 完全な SDP を収集する）。
  *
- * @throws {SfuApiError} When the request fails or Calls rejects the answer.
+ * @throws {SfuApiError} リクエストに失敗したか、Calls がアンサーを拒否した場合。
  */
 export async function renegotiateSession(
   env: SfuEnv,
@@ -536,16 +536,16 @@ export async function renegotiateSession(
 }
 
 /**
- * Close tracks by mids that belong to one Calls session.
+ * 1 つの Calls セッションに属するトラックを mid 指定でクローズする。
  *
- * Track mids are not stable across OBS reconnects or viewer sessions, so callers
- * must pass the mids from the exact session they are closing.
+ * トラックの mid は OBS の再接続や視聴者セッションをまたいで不変ではないため、
+ * 呼び出し側はクローズ対象セッションそのものの mid を渡す必要がある。
  *
- * Calls can still report per-track errors in a successful response; the caller
- * decides whether those matter.
+ * 成功レスポンス内でも Calls がトラックごとのエラーを返す場合があり、それを問題視するかは
+ * 呼び出し側が判断する。
  *
- * @throws {SfuApiError} When the request fails or Calls rejects it, including
- * `session_not_found` and `session_gone` for a session that already ended.
+ * @throws {SfuApiError} リクエストに失敗したか Calls に拒否された場合（すでに終了した
+ * セッションに対する `session_not_found` や `session_gone` を含む）。
  */
 export async function closeTracks(
   env: SfuEnv,
@@ -575,14 +575,13 @@ export async function closeTracks(
 }
 
 /**
- * Probe one Calls session for targeted reconciliation of its live row.
+ * 配信行の個別整合のため、1 つの Calls セッションをプローブする。
  *
- * Only 404/410 mean "inactive"; transient SFU failures should not be treated as
- * proof that a live row is stale.
+ * 404/410 のみを「非アクティブ」とみなし、一時的な SFU 障害を配信行が古いことの
+ * 証拠としては扱わない。
  *
- * @returns `false` only when Calls reports the session as not found or gone.
- * @throws {SfuApiError} When the request fails or Calls answers with any other
- * HTTP error.
+ * @returns Calls がそのセッションを not found または gone と報告した場合にのみ `false`。
+ * @throws {SfuApiError} リクエストに失敗したか、Calls がそれ以外の HTTP エラーを返した場合。
  */
 export async function isSessionActive(
   env: SfuEnv,
@@ -605,10 +604,10 @@ export async function isSessionActive(
 }
 
 /**
- * Start one ingest session and return the SDP answer plus durable track locators.
+ * インジェストセッションを 1 つ開始し、SDP アンサーおよび永続化用トラックロケーターを返す。
  *
- * @throws {SfuApiError} When Calls fails to negotiate the session or returns an
- * unusable ingest response.
+ * @throws {SfuApiError} Calls がセッションのネゴシエーションに失敗したか、
+ * 使用できないインジェストレスポンスを返した場合。
  */
 export async function startIngest(
   env: SfuEnv,
@@ -629,7 +628,7 @@ export async function startIngest(
     });
   }
   if (responseTracks.length > WHIP_MAX_TRACK_COUNT) {
-    // The supported OBS ingest shape is one audio track plus one video track.
+    // サポートしている OBS インジェスト構成は音声 1 トラック + 映像 1 トラックである。
     throw new SfuApiError("WHIP does not allow more than two ingest tracks", {
       endpoint: ingestEndpoint,
       kind: "invalid_sfu_response",
@@ -665,11 +664,11 @@ export async function startIngest(
 }
 
 /**
- * Start one viewer playback session for the stored ingest tracks.
+ * 保存済みのインジェストトラックに対して視聴者用再生セッションを 1 つ開始する。
  *
- * @throws {LiveNotFoundError} When the live has no stored tracks.
- * @throws {SfuApiError} When Calls fails to negotiate the session or returns an
- * unusable playback response.
+ * @throws {LiveNotFoundError} 配信に保存されたトラックが存在しない場合。
+ * @throws {SfuApiError} Calls がセッションのネゴシエーションに失敗したか、
+ * 使用できない再生レスポンスを返した場合。
  */
 export async function startPlay(
   env: SfuEnv,

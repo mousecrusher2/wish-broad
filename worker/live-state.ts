@@ -1,46 +1,40 @@
-// State and timers of the LiveState Durable Object: live broadcasts, publisher
-// tokens, users, and the alarm that ends a broadcast once its reconnect grace
-// period passes.
+// LiveState Durable Object の状態とタイマー管理: ライブ配信、配信者トークン、ユーザー、
+// および再接続猶予期間の経過後に配信を終了させるアラームを扱う。
 //
-// The object is billed for the wall-clock time it spends running or awaiting,
-// so it only works on its own storage and never calls Calls, Discord, or any
-// other external API. The Worker makes those calls and reports what happened.
-// The one thing the object starts by itself, deleting the start notification
-// of a broadcast that ended, is handed to the Worker through `dispatch` and
-// finishes there.
+// このオブジェクトは実行または待機に費やした実時間（wall-clock time）に対して課金されるため、
+// 自身のストレージ操作のみを行い、Calls・Discord・その他の外部 API は一切呼び出さない。
+// それらの呼び出しと結果の報告は Worker 側が行う。オブジェクトが自律的に開始する唯一の外部処理
+// である「終了した配信の開始通知の削除」も、`dispatch` を通じて Worker に委譲してそちらで完了させる。
 import * as db from "./database";
 import { createErrorLogFields, logInfo, logWarn } from "./logger";
 import type { StoredTrack } from "./sfu";
 import type { Bindings } from "./types";
 
-// One object holds every broadcast, because listing lives needs all of them
-// together with their owners' names. Its load is a handful of short calls per
-// viewer or publisher action.
+// 配信一覧の取得ではすべての配信とその配信者名がまとめて必要になるため、1 つの
+// オブジェクトで全配信を保持する。負荷は視聴者または配信者の操作ごとに数回の短い呼び出しが
+// 発生する程度である。
 const LIVE_STATE_NAME = "global";
 
-// A notification delete handed to the Worker is hidden for this long, doubled
-// on every attempt, before it is handed out again. The first lease covers the
-// 30 seconds a Worker's waitUntil may run, so an attempt is over before the
-// next one starts.
+// Worker に払い出された通知削除タスクは、再度払い出されるまでこの期間だけ非表示になり、
+// 試行のたびに倍増する。最初のリース時間は Worker の waitUntil が実行されうる最大 30 秒を
+// カバーしており、次の試行が始まる前に前回の試行が確実に終わるようにしている。
 const NOTIFICATION_DELETE_LEASE_MS = 30_000;
-// Leases of 30 seconds to 8 minutes put the attempts within about 15 minutes.
-// A delete that the last attempt did not finish is abandoned, and its
-// notification stays in Discord.
+// 30 秒〜8 分のリース時間により、試行全体が約 15 分以内に収まる。
+// 最後の試行でも完了しなかった削除タスクは破棄され、その通知は Discord 上に残る。
 const NOTIFICATION_DELETE_MAX_ATTEMPTS = 6;
 
-// How long a delete stays hidden once it is handed out, given how often it was
-// handed out before.
+// これまでの払い出し回数に応じて、削除タスクが払い出された後どれだけの時間非表示になるか。
 function getNotificationDeleteLeaseMs(attempts: number): number {
-  // No attempt follows the last one, so it only gets the time to report its
-  // result before the delete is abandoned.
+  // 最終試行の後には次の試行がないため、削除タスクが破棄される前に結果を報告するだけの
+  // 猶予時間を確保している。
   return attempts + 1 >= NOTIFICATION_DELETE_MAX_ATTEMPTS
     ? NOTIFICATION_DELETE_LEASE_MS
     : NOTIFICATION_DELETE_LEASE_MS * 2 ** attempts;
 }
 
-/** A start notification the Worker should delete from Discord. */
+/** Worker が Discord から削除すべき開始通知。 */
 export type NotificationDeleteJob = {
-  // The Discord snowflake as decimal text.
+  // Discord snowflake（10 進数文字列）。
   messageId: string;
   userId: string;
 };
@@ -49,25 +43,23 @@ type LiveEndReason = "reconnect_grace_expired" | "session_inactive";
 
 type LiveStateEnv = Pick<Bindings, "ENVIRONMENT" | "LOG_LEVEL">;
 
-/** What a command gets from the transaction it runs in. */
+/** コマンドが実行中のトランザクションから受け取るコンテキスト。 */
 type CommandRun = {
   /**
-   * Queues a log entry that is written once the transaction committed. A
-   * command that is rolled back reports nothing, so no entry tells of a
-   * change that was not stored.
+   * トランザクションのコミット後に書き出すログエントリをキューに追加する。
+   * ロールバックされたコマンドは何も報告しないため、保存されなかった変更についてのログは出力されない。
    */
   logOnCommit(write: () => void): void;
   now: number;
 };
 
 /**
- * The part of a Durable Object's storage that LiveStateCore uses.
+ * LiveStateCore が使用する Durable Object ストレージのインターフェース。
  *
- * Per the Durable Objects storage documentation, every storage operation made
- * on the storage while a `transaction` closure runs is part of that
- * transaction, and `rollback()` discards them. Alarm calls are storage
- * operations too. `transactionSync` only covers synchronous operations, which
- * leaves the alarm calls out.
+ * Durable Objects storage のドキュメントにあるとおり、`transaction` クロージャーの
+ * 実行中にストレージに対して行われたすべての操作はそのトランザクションの一部となり、
+ * `rollback()` で破棄される。アラーム操作もストレージ操作の一種である。`transactionSync` は
+ * 同期操作しか対象にできないため、アラーム呼び出しがその外に漏れてしまう。
  */
 export type LiveStateStorage = {
   deleteAlarm(): Promise<void>;
@@ -81,8 +73,8 @@ export type LiveStateStorage = {
 };
 
 /**
- * The Durable Object that holds all live state. Its methods are short: none
- * of them waits for an external service.
+ * すべてのライブ状態を保持する Durable Object。各メソッドは短時間で完了し、
+ * 外部サービスを待機することは一切ない。
  */
 export function getLiveState(
   env: Pick<Bindings, "LIVE_STATE">,
@@ -95,13 +87,13 @@ export function getLiveState(
 }
 
 /**
- * Whether a call to the object failed for a reason that may be gone a moment
- * later, so that repeating a call that is safe to repeat can succeed.
+ * オブジェクトへの呼び出しがすぐ後に解消しうる理由で失敗したか（そのため再実行可能な
+ * 呼び出しを繰り返せば成功しうるか）を判定する。
  *
- * Per the Durable Objects error handling documentation, such an error has
- * `retryable` set. One that also has `overloaded` set must not be retried:
- * another call adds load to an object that cannot keep up. Repeat the call on
- * a new `getLiveState()` stub, because an exception can leave a stub broken.
+ * Durable Objects のエラーハンドリングドキュメントにあるとおり、そのようなエラーには
+ * `retryable` が設定される。ただし `overloaded` も同時に設定されている場合はリトライして
+ * はならない（追加入力で負荷が増え、処理が追いつかないオブジェクトをさらに圧迫するため）。
+ * 例外発生後はスタブが壊れている可能性があるため、新しい `getLiveState()` スタブで再実行する。
  */
 export function isTransientLiveStateError(error: unknown): boolean {
   return (
@@ -113,17 +105,17 @@ export function isTransientLiveStateError(error: unknown): boolean {
 }
 
 /**
- * Behavior of the LiveState Durable Object, kept apart from the class in
- * ./main so that it runs in the Node-based tests.
+ * Node ベースのテストでも実行できるよう、./main のクラスから分離した
+ * LiveState Durable Object のロジック本体。
  *
- * Every method first ends the broadcasts whose reconnect grace period passed,
- * so callers never see one even when the alarm is late. Transitions that
- * depend on a Calls request made by the Worker are compare-and-set on the
- * session the Worker observed: the object serializes its own methods, but not
- * the Worker's requests between two of them.
+ * すべてのメソッドは最初に再接続猶予期間を過ぎた配信を終了させるため、アラームの発火が
+ * 遅れていても呼び出し側が期限切れの配信を目にすることはない。Worker が行った Calls
+ * リクエストに依存する状態遷移は、Worker が観測したセッションに対する Compare-And-Set で
+ * 行う（オブジェクトは自身のメソッド呼び出しは直列化するが、2 つのメソッド間で Worker が
+ * 行う外部リクエストまでは直列化しないため）。
  *
- * A method that rejects has stored nothing: its transaction is rolled back,
- * whether storage failed or a value was refused.
+ * reject するメソッドは何も保存していない（ストレージ障害であっても値の拒否であっても、
+ * トランザクションはロールバックされる）。
  */
 export class LiveStateCore {
   readonly #dispatchNotificationDeletes: (
@@ -133,9 +125,8 @@ export class LiveStateCore {
   readonly #storage: LiveStateStorage;
 
   /**
-   * @param dispatchNotificationDeletes Hands notification deletes to the
-   * Worker. It must return as soon as the Worker accepted them, without
-   * waiting for Discord.
+   * @param dispatchNotificationDeletes 通知削除タスクを Worker に引き渡す関数。
+   * Discord の応答を待たず、Worker が受け付けた時点ですぐに返却する必要がある。
    */
   constructor(
     storage: LiveStateStorage,
@@ -153,8 +144,8 @@ export class LiveStateCore {
   }
 
   /**
-   * Runs when a grace period ends or a notification delete is due. Ends the
-   * overdue broadcasts and hands every due delete to the Worker.
+   * 猶予期間の終了時、または通知削除の実行期限到来時に実行される。
+   * 期限切れの配信を終了させ、期限に達したすべての削除タスクを Worker に引き渡す。
    */
   async alarm(): Promise<void> {
     const jobs = await this.#run((run) =>
@@ -167,7 +158,7 @@ export class LiveStateCore {
     try {
       await this.#dispatchNotificationDeletes(jobs);
     } catch (error: unknown) {
-      // The deletes stay leased, so the alarm hands them out again later.
+      // 削除タスクのリース状態は維持されるため、後ほどアラームによって再び払い出される。
       logWarn(this.#env, "live_notification.delete_dispatch_failed", {
         ...createErrorLogFields(error),
         messageIds: jobs.map((job) => job.messageId),
@@ -184,8 +175,7 @@ export class LiveStateCore {
   }
 
   /**
-   * Starts a new broadcast and returns its id, or null when the owner already
-   * has one.
+   * 新しい配信を開始してその ID を返す。配信者がすでに配信を持っている場合は null を返す。
    */
   async insertLive(
     userId: string,
@@ -198,9 +188,9 @@ export class LiveStateCore {
   }
 
   /**
-   * Continues the broadcast that holds `previousSessionId` with a new ingest
-   * session and ends its grace period. Returns false when the broadcast ended
-   * or another ingest resumed it first.
+   * `previousSessionId` を保持している配信を新しいインジェストセッションで継続し、
+   * 猶予期間を終了させる。配信がすでに終了したか別のインジェストが先に再開していた場合は
+   * false を返す。
    */
   async resumeLive(
     userId: string,
@@ -220,11 +210,11 @@ export class LiveStateCore {
   }
 
   /**
-   * Gives the publisher `graceMs` to reconnect before the broadcast ends, and
-   * sets the alarm that ends it in the same transaction. Returns the deadline,
-   * or null when the row no longer holds `sessionId` outside a grace period.
+   * 配信終了前に配信者へ `graceMs` ミリ秒の再接続猶予を与え、同じトランザクション内で
+   * 終了用アラームを設定する。行がすでに猶予期間外で `sessionId` を保持していない場合は
+   * null を返し、設定できた場合は期限時刻を返す。
    *
-   * @throws {Error} When `graceMs` is not an integer.
+   * @throws {Error} `graceMs` が整数でない場合。
    */
   async startLiveReconnectGrace(
     userId: string,
@@ -245,9 +235,9 @@ export class LiveStateCore {
   }
 
   /**
-   * Ends the broadcast whose ingest session the Worker found inactive and
-   * queues its start notification for deletion. Returns false when the row no
-   * longer holds `sessionId` outside a grace period.
+   * Worker が非アクティブと確認したインジェストセッションの配信を終了させ、
+   * 開始通知を削除キューに追加する。行がすでに猶予期間外で `sessionId` を保持していない
+   * 場合は false を返す。
    */
   async endLive(userId: string, sessionId: string): Promise<boolean> {
     return this.#run((run) => {
@@ -261,7 +251,7 @@ export class LiveStateCore {
     });
   }
 
-  /** Records that the Worker found the live ingest session active in Calls. */
+  /** Worker が Calls 上で配信中インジェストセッションの生存を確認したことを記録する。 */
   async markLiveSessionSeenActive(
     userId: string,
     sessionId: string,
@@ -279,16 +269,14 @@ export class LiveStateCore {
   }
 
   /**
-   * Stores the start notification the Worker sent for a broadcast. If that
-   * broadcast already ended, queues the notification for deletion instead and
-   * returns false.
+   * Worker が配信のために送信した開始通知を保存する。その配信がすでに終了している場合は、
+   * 代わりにその通知を削除キューに追加して false を返す。
    *
-   * Calling it again with the same arguments is safe: it stores the same id
-   * or finds the delete already queued. The Worker and the runtime rely on
-   * that to repeat a call whose outcome they do not know.
+   * 同じ引数で再度呼び出しても安全（同じ ID を保存するか、すでに削除キューに積まれている
+   * ことを検出する）。Worker とランタイムは結果不明な呼び出しを再試行するためにこの性質に
+   * 依存している。
    *
-   * @throws {Error} When `messageId` is not a Discord snowflake as decimal
-   * text.
+   * @throws {Error} `messageId` が 10 進数文字列の Discord snowflake でない場合。
    */
   async setLiveNotificationMessageId(
     userId: string,
@@ -313,8 +301,8 @@ export class LiveStateCore {
   }
 
   /**
-   * Drops notification deletes the Worker finished, either because Discord
-   * deleted the message or because trying again cannot succeed.
+   * Discord がメッセージを削除したか再試行しても成功し得ないために Worker が完了と
+   * 判定した通知削除タスクを削除する。
    */
   async settleNotificationDeletes(messageIds: string[]): Promise<void> {
     await this.#run(() => {
@@ -324,7 +312,7 @@ export class LiveStateCore {
     });
   }
 
-  /** Replaces the user's publisher token. */
+  /** ユーザーの配信者トークンを置き換える。 */
   async setLiveToken(userId: string, tokenHash: string): Promise<void> {
     await this.#run(() => {
       db.setLiveToken(this.#storage.sql, userId, tokenHash);
@@ -346,11 +334,10 @@ export class LiveStateCore {
   }
 
   /**
-   * Runs one command in a storage transaction, after ending the broadcasts
-   * whose grace period passed. The same transaction moves the alarm to the
-   * next time state needs attention, so a deadline or a notification delete is
-   * never stored without the alarm that acts on it. The closure awaits nothing
-   * but the alarm calls.
+   * 猶予期間を過ぎた配信を終了させたうえで、1 つのコマンドをストレージトランザクション内で
+   * 実行する。同じトランザクション内で次に状態処理が必要となる時刻へアラームを移動するため、
+   * 期限や通知削除タスクが対応するアラームなしに保存されることはない。クロージャーは
+   * アラーム操作以外では一切 await しない。
    */
   async #run<T>(command: (run: CommandRun) => T): Promise<T> {
     const commitLogs: (() => void)[] = [];
@@ -369,13 +356,13 @@ export class LiveStateCore {
         await this.#moveAlarm();
         return commandResult;
       } catch (error: unknown) {
-        // A failed command or alarm call must not leave part of its work.
+        // コマンドやアラーム呼び出しが失敗したときに変更の一部だけが永続化されてはならない。
         txn.rollback();
         throw error;
       }
     });
 
-    // The transaction committed, so what the command changed is stored.
+    // トランザクションがコミットされたため、コマンドの変更内容は確実に保存されている。
     for (const write of commitLogs) {
       write();
     }
@@ -395,7 +382,7 @@ export class LiveStateCore {
       });
     });
     if (ended.notificationMessageId !== null) {
-      // Due at once: the alarm this command sets hands it to the Worker.
+      // 即座に実行期限を迎える: このコマンドが設定するアラームによって Worker に引き渡される。
       db.enqueueNotificationDelete(
         this.#storage.sql,
         ended.notificationMessageId,
@@ -433,17 +420,17 @@ export class LiveStateCore {
   }
 
   /**
-   * Moves the alarm to the next time state needs attention. Call it inside
-   * the transaction that changed the state.
+   * 次に状態処理が必要となる時刻へアラームを移動する。状態を変更した同じ
+   * トランザクション内で呼び出すこと。
    *
-   * The alarm that is set is read from storage each time. A copy kept in this
-   * instance would have to be corrected after every rollback, restart, and
-   * alarm run, and one missed case would leave a deadline without its alarm.
+   * 現在設定されているアラームは毎回ストレージから読み取る。インスタンス内にキャッシュを持つと
+   * ロールバック・再起動・アラーム実行のたびに整合をとり直す必要が生じ、1 つでも見落とすと
+   * アラームが設定されていない期限を取り残してしまう。
    */
   async #moveAlarm(): Promise<void> {
     const wakeAt = db.getNextWakeAt(this.#storage.sql);
-    // While the alarm handler runs this is null, unless the handler set a new
-    // alarm: the alarm that is firing no longer counts as set.
+    // アラームハンドラーの実行中に新しいアラームを設定しない限り、この値は null になる
+    // （発火中のアラームはすでに設定済みとはみなされない）。
     const scheduledAt = await this.#storage.getAlarm();
     if (wakeAt === scheduledAt) {
       return;

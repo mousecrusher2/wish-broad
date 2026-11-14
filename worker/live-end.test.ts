@@ -55,7 +55,7 @@ describe("live end", () => {
     const env = createEnv();
 
     await runNotificationDeletes(env, [
-      // Larger than Number.MAX_SAFE_INTEGER, like real Discord snowflakes.
+      // 実際の Discord snowflake と同様、Number.MAX_SAFE_INTEGER より大きい値。
       { messageId: "1300000000000000123", userId: "user-1" },
       { messageId: "9", userId: "user-2" },
     ]);

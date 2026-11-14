@@ -36,7 +36,7 @@ function createTracks(sessionId: string) {
   ];
 }
 
-// Stores a row that the typed helpers would never write.
+// 型付きヘルパーでは決して書き込まない形式の行を保存する。
 function insertRawLive(sql: Sql, overrides: Record<string, string>): void {
   const columns = {
     broadcast_id: "'broadcast-1'",
@@ -193,7 +193,7 @@ describe("live state SQL", () => {
       startLiveReconnectGrace(sql, "user-1", "session-1", NOW + 60_000),
     ).toBe(true);
     expect(getLive(sql, "user-1")?.graceExpiresAt).toBe(NOW + 60_000);
-    // A repeated DELETE must not extend the deadline.
+    // 重複した DELETE で猶予期限が延長されてはならない。
     expect(
       startLiveReconnectGrace(sql, "user-1", "session-1", NOW + 90_000),
     ).toBe(false);
@@ -291,7 +291,7 @@ describe("live state SQL", () => {
 
     expect(endOverdueLives(sql, NOW)).toEqual([
       {
-        // Larger than Number.MAX_SAFE_INTEGER, like real Discord snowflakes.
+        // 実際の Discord snowflake と同様、Number.MAX_SAFE_INTEGER より大きい値。
         notificationMessageId: "1300000000000000123",
         sessionId: "overdue-session",
         userId: "overdue-user",
@@ -306,7 +306,7 @@ describe("live state SQL", () => {
   it("hands out notification deletes once they are due, oldest first", () => {
     enqueueNotificationDelete(sql, "2", "user-2", NOW + 5);
     enqueueNotificationDelete(sql, "1", "user-1", NOW);
-    // The same message is only queued once.
+    // 同じメッセージは 1 回だけキューに追加される。
     enqueueNotificationDelete(sql, "1", "user-1", NOW + 99);
 
     expect(getDueNotificationDeletes(sql, NOW - 1)).toEqual([]);

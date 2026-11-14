@@ -9,7 +9,7 @@ import { createUnusedLiveStateNamespace } from "./test-doubles";
 import { hashTokenWithPepper } from "./token-hash";
 import { TurnApiError } from "./turn";
 
-// Stands in for the LiveState Durable Object stub the routes call.
+// 各ルートが呼び出す LiveState Durable Object スタブのテスト用実装。
 const liveStateMocks = vi.hoisted(() => ({
   endLive: vi.fn<() => Promise<boolean>>(),
   getAllLives: vi.fn<() => Promise<unknown[]>>(),
@@ -1227,8 +1227,8 @@ describe("worker app", () => {
         },
       ],
     );
-    // Only the new start notification runs here. The live state deletes the
-    // ended broadcast's notification itself.
+    // ここでは新しい開始通知のみが実行される。終了した配信の通知削除は
+    // LiveState 自身が処理する。
     expect(execution.waitUntilPromises).toHaveLength(1);
 
     await Promise.all(execution.waitUntilPromises);
@@ -1272,8 +1272,8 @@ describe("worker app", () => {
     expect(response.status).toBe(201);
     expect(await response.text()).toBe("answer-sdp");
     expect(response.headers.get("location")).toBe("/ingest/user-1/new-session");
-    // The previous session's tracks were already closed by its DELETE, so the
-    // Calls session is not checked before resuming.
+    // 前回セッションのトラックはその DELETE 時にすでに閉じられているため、
+    // 再開前に Calls セッションの生存確認は行わない。
     expect(callsMocks.isSessionActive).not.toHaveBeenCalled();
     expect(liveStateMocks.resumeLive).toHaveBeenCalledWith(
       "user-1",
@@ -1337,8 +1337,8 @@ describe("worker app", () => {
     vi.useFakeTimers({ now: 1_700_000_000_000 });
     const env = createBindings();
     const execution = createObservedExecutionContext();
-    // The live state ends overdue broadcasts before answering, so a deadline
-    // it returns has not passed on its clock even if it has on this one.
+    // LiveState は応答前に期限切れの配信を終了させるため、返される期限時刻は
+    // こちらの時計上では過ぎていても LiveState の時計上ではまだ過ぎていない。
     liveStateMocks.getLive.mockResolvedValue(
       createLive({
         graceExpiresAt: 1_700_000_000_000,
@@ -1469,7 +1469,7 @@ describe("worker app", () => {
 
     await Promise.all(execution.waitUntilPromises);
 
-    // Reporting the message id queued it for deletion in the live state.
+    // メッセージ ID を報告したことで LiveState 側の削除キューに積まれた。
     expect(liveStateMocks.setLiveNotificationMessageId).toHaveBeenCalledWith(
       "user-1",
       "broadcast-1",
@@ -1843,8 +1843,8 @@ describe("worker app", () => {
     expect(
       notificationsMocks.sendLiveStartedNotification,
     ).not.toHaveBeenCalled();
-    // This may be OBS retrying after losing the session without DELETE, so
-    // the rejection remembers that Calls still had the session.
+    // DELETE なしでセッションを失った後の OBS による再試行かもしれないため、
+    // 拒否時に Calls 上でまだセッションが存在していたことを記録する。
     expect(execution.waitUntilPromises).toHaveLength(1);
     await Promise.all(execution.waitUntilPromises);
     expect(liveStateMocks.markLiveSessionSeenActive).toHaveBeenCalledWith(
@@ -1873,8 +1873,7 @@ describe("worker app", () => {
       );
 
       expect(response.status).toBe(400);
-      // A record younger than the write interval is fresh enough, so the
-      // live state is not called again for it.
+      // 書き込み間隔より新しい記録であれば十分新鮮なため、LiveState を再度呼び出さない。
       await Promise.all(execution.waitUntilPromises);
       expect(liveStateMocks.markLiveSessionSeenActive).toHaveBeenCalledTimes(
         expectedCalls,
@@ -1899,8 +1898,8 @@ describe("worker app", () => {
       const response = await requestIngestOffer(env, execution.context);
 
       expect(response.status).toBe(201);
-      // The session may have been lost days before an ingest meant as a new
-      // broadcast, so that one must not lose its notification.
+      // 新規配信として開始されるインジェストの数日前にセッションが失われていた可能性もあるため、
+      // その新規配信の開始通知が失われてはならない。
       expect(liveStateMocks.endLive).toHaveBeenCalledWith(
         "user-1",
         "lost-session",
@@ -1922,7 +1921,7 @@ describe("worker app", () => {
     liveStateMocks.getLive.mockResolvedValue(
       createLive({
         sessionId: "lost-session",
-        // Exactly one minute ago still counts as just now.
+        // ちょうど 1 分前までは直前（just now）とみなす。
         sessionSeenActiveAt: 1_699_999_940_000,
       }),
     );
@@ -1990,7 +1989,7 @@ describe("worker app", () => {
         .mockImplementation(() => {});
       liveStateMocks.getLive.mockResolvedValue(observedLive);
       callsMocks.isSessionActive.mockResolvedValue(false);
-      // A concurrent ingest resumed or created the row first.
+      // 競合する別のインジェストが先に行を再開または作成した。
       liveStateMocks.resumeLive.mockResolvedValue(false);
       liveStateMocks.insertLive.mockResolvedValue(null);
 
@@ -2052,7 +2051,7 @@ describe("worker app", () => {
         userId: "user-1",
       }),
     );
-    // The live state sets the deadline and the alarm that ends the broadcast.
+    // LiveState が猶予期限と配信を終了させるアラームの両方を設定する。
     expect(liveStateMocks.startLiveReconnectGrace).toHaveBeenCalledWith(
       "user-1",
       "session-1",
@@ -2068,7 +2067,7 @@ describe("worker app", () => {
       "session-1",
       live.tracks,
     );
-    // The start notification stays until the grace period ends the broadcast.
+    // 開始通知は猶予期間が経過して配信が終了するまで維持される。
     expect(
       notificationsMocks.deleteLiveStartedNotification,
     ).not.toHaveBeenCalled();
@@ -2242,7 +2241,7 @@ describe("worker app", () => {
       "streamer-1",
       "live-session",
     );
-    // Ending the broadcast queued its notification in the live state.
+    // 配信を終了したことで、その開始通知が LiveState の削除キューに追加された。
     expect(execution.waitUntilPromises).toHaveLength(0);
     expect(
       notificationsMocks.deleteLiveStartedNotification,
@@ -2272,8 +2271,8 @@ describe("worker app", () => {
 
   it.each([
     ["is still ahead", 1_700_000_000_001],
-    // The live state ends overdue broadcasts before answering, so a deadline
-    // it returns has not passed on its clock.
+    // LiveState は応答前に期限切れの配信を終了させるため、返される期限時刻は
+    // LiveState の時計上ではまだ過ぎていない。
     ["looks passed on the Worker's clock", 1_700_000_000_000],
   ])(
     "asks viewers to retry while the stored grace deadline %s",
@@ -2414,7 +2413,7 @@ describe("worker app", () => {
 
     const response = await requestPlayOffer(env, execution.context);
 
-    // The session was active a moment ago, so OBS was lost just now.
+    // セッションが直前まで生存していたため、OBS はたった今失われたと判定される。
     expect(response.status).toBe(503);
     expect(response.headers.get("retry-after")).toBe("2");
     expect(liveStateMocks.startLiveReconnectGrace).toHaveBeenCalledWith(
@@ -2446,7 +2445,7 @@ describe("worker app", () => {
 
     expect(response.status).toBe(503);
     expect(response.headers.get("retry-after")).toBe("2");
-    // The live state sets the deadline and the alarm that ends the broadcast.
+    // LiveState が猶予期限と配信を終了させるアラームの両方を設定する。
     expect(liveStateMocks.startLiveReconnectGrace).toHaveBeenCalledWith(
       "streamer-1",
       "live-session",
@@ -2479,7 +2478,7 @@ describe("worker app", () => {
       }),
     );
     callsMocks.isSessionActive.mockResolvedValue(false);
-    // OBS sent DELETE or resumed first.
+    // OBS が先に DELETE を送信したか再開した。
     liveStateMocks.startLiveReconnectGrace.mockResolvedValue(null);
 
     const response = await requestPlayOffer(env, execution.context);
@@ -2885,8 +2884,8 @@ describe("worker app", () => {
   it("rejects WHEP session requests whose session id is not URL-safe", async () => {
     const env = createBindings();
     const execution = createObservedExecutionContext();
-    // Hono decodes %2F and %3F in the parameter, so without the check this
-    // would rewrite the Calls API URL to another path.
+    // Hono はパラメーター内の %2F や %3F をデコードするため、検証がないと
+    // Calls API の URL が別のパスへ書き換えられてしまう。
     const sessionUrl = "http://localhost/play/streamer-1/..%2F..%2Fother%3F";
 
     const deleteResponse = await app.fetch(

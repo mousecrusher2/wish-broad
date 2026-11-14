@@ -4,53 +4,51 @@ Discord OAuthで視聴者を制限する、Cloudflare Workers + Cloudflare Realt
 
 OBSはWHIPで配信し、認証済みユーザーはブラウザからアプリ専用の視聴フローで再生します。視聴側のSDP交換やセッション管理はWHEPを参考にしていますが、公開WHEPエンドポイント互換を目的にした実装ではありません。
 
-## Features
+## 機能
 
-- Discord guild membership based login
-- Per-user OBS ingest URL and bearer live token
-- WHIP ingest endpoint for OBS
-- Authenticated playback flow inspired by WHEP
-- Cloudflare Realtime SFU session management
-- Durable Object-backed live stream and token state
-- Authenticated TURN credential endpoint
-- Best-effort Discord live-start notifications, skippable per stream with
-  `?notify=false` on the ingest URL
-- Broadcasts survive OBS reconnects for 60 seconds without re-notifying, and
-  viewers keep waiting for the stream to come back
+- Discord サーバー（ギルド）メンバーシップに基づくログイン認証
+- ユーザーごとの OBS インジェスト URL と Bearer ライブトークン
+- OBS 向け WHIP インジェストエンドポイント
+- WHEP に着想を得た認証付き再生フロー
+- Cloudflare Realtime SFU セッション管理
+- Durable Object をバックエンドとした配信状態・トークン状態の管理
+- 認証付き TURN 認証情報エンドポイント
+- ベストエフォートの Discord 配信開始通知（インジェスト URL に `?notify=false` を付けることで配信ごとにスキップ可能）
+- OBS が再接続しても 60 秒間は配信が維持されて再通知せず、視聴者は配信の復帰を待機し続けます
 
-## Stack
+## 技術スタック
 
-- React 19 with React Compiler
-- Vite with the Cloudflare Vite plugin
+- React 19（React Compiler 有効）
+- Vite（Cloudflare Vite プラグイン使用）
 - Tailwind CSS v4
 - Hono
 - Cloudflare Workers
-- Cloudflare Durable Objects (SQLite storage and alarms)
-- Cloudflare Realtime SFU and TURN (formerly Calls)
+- Cloudflare Durable Objects（SQLite ストレージおよびアラーム）
+- Cloudflare Realtime SFU / TURN（旧称 Calls）
 - SWR
 - Valibot
 - Vitest
-- oxlint, Knip, and Prettier
+- oxlint、Knip、Prettier
 
-## Requirements
+## 必要な環境
 
-- Node.js and pnpm
-- Cloudflare account with Workers, Durable Objects, Realtime SFU, and Realtime TURN access
-- Discord application for OAuth
-- Discord guild used as the viewer allowlist
-- Discord webhook for live notifications
+- Node.js および pnpm
+- Workers、Durable Objects、Realtime SFU、Realtime TURN が利用可能な Cloudflare アカウント
+- OAuth 用の Discord アプリケーション
+- 視聴者許可リストとして使用する Discord サーバー（ギルド）
+- 配信通知用の Discord Webhook
 
-## Setup
+## セットアップ
 
-Install dependencies:
+依存関係をインストールします:
 
 ```sh
 pnpm install
 ```
 
-Create local Worker variables in `.dev.vars`. Do not commit this file.
+ローカル開発用の Worker 変数を `.dev.vars` に作成します（このファイルはコミットしないでください）。
 
-Required secrets:
+必要なシークレット:
 
 ```text
 AUTHORIZED_GUILD_ID
@@ -65,29 +63,29 @@ TURN_KEY_API_TOKEN
 TURN_KEY_ID
 ```
 
-Non-secret runtime variables are configured in `wrangler.jsonc`. Keep binding names aligned between `wrangler.jsonc` and `.dev.vars`, and run `pnpm cf-typegen` after changing bindings to regenerate `worker-configuration.d.ts`.
+非シークレットのランタイム変数は `wrangler.jsonc` で設定します。`wrangler.jsonc` と `.dev.vars` のバインディング名を一致させ、バインディングを変更した後は `pnpm cf-typegen` を実行して `worker-configuration.d.ts` を再生成してください。
 
-## Development
+## 開発
 
-Start the dev server:
+開発サーバーを起動します:
 
 ```sh
 pnpm dev
 ```
 
-The Cloudflare Vite plugin runs the Worker in the local `workerd` runtime next to the client, so the API, ingest, and playback routes are served from the same origin during development.
+Cloudflare Vite プラグインによりクライアントの隣でローカルの `workerd` ランタイム上で Worker が実行されるため、開発中も API、インジェスト、再生の各ルートが同一オリジンから配信されます。
 
-Build and serve the production bundle locally:
+本番バンドルをローカルでビルドして提供します:
 
 ```sh
 pnpm preview
 ```
 
-Use `pnpm preview` when validating behavior that depends on the production bundle.
+本番バンドルに依存する動作を検証する場合は `pnpm preview` を使用してください。
 
-## Validation
+## 検証
 
-Run the standard checks:
+標準のチェックを実行します:
 
 ```sh
 pnpm check
@@ -96,29 +94,29 @@ pnpm run format:check
 pnpm build
 ```
 
-## Deployment
+## デプロイ
 
-Build and deploy with Wrangler:
+Wrangler でビルドおよびデプロイします:
 
 ```sh
 pnpm deploy
 ```
 
-Production secrets must be configured in Cloudflare before deployment. The `LIVE_STATE` Durable Object binding and its storage are created by `wrangler deploy` from `wrangler.jsonc`, and the object creates its own tables when it starts, so there is no database to create or migrate by hand.
+デプロイ前に Cloudflare 側へ本番シークレットを設定しておく必要があります。`LIVE_STATE` Durable Object バインディングとそのストレージは `wrangler.jsonc` に基づいて `wrangler deploy` が作成し、オブジェクトは起動時に自身のテーブルを作成するため、手動でデータベースを作成・マイグレーションする必要はありません。
 
-Deploying this version over one that still keeps its state in D1 drops that state: the Durable Object starts empty and the D1 rows are not imported. Read [Cutover from D1](docs/architecture.md#cutover-from-d1) before doing so; publishers have to create new live tokens afterwards.
+まだ D1 に状態を保持しているバージョンからこのバージョンへ上書きデプロイすると、その状態は破棄されます。Durable Object は空の状態で開始され、D1 の行はインポートされません。実行する前に [D1からの切り替え](docs/architecture.md#d1からの切り替え) を確認してください。切り替え後、配信者は新しいライブトークンを再発行する必要があります。
 
-## Architecture Notes
+## アーキテクチャメモ
 
-The Worker is intentionally stateless. Durable state lives in the SQLite storage of one Durable Object (`LiveState`), while media session state is owned by Cloudflare Realtime SFU. The object only runs short transactions on its own storage: it never calls Realtime SFU, Discord, or any other external API, because it is billed for the time it spends waiting. The app avoids designs that poll all live sessions or keep long-lived in-memory state. The one scheduled task is the object's alarm, which ends a broadcast once its 60-second OBS reconnect grace period passes and hands the Discord cleanup to the Worker; it is only set while a broadcast is waiting for OBS or a notification is waiting to be deleted.
+Worker は意図的にステートレスに設計されています。永続化が必要な状態は単一の Durable Object（`LiveState`）の SQLite ストレージに保存され、メディアセッションの状態は Cloudflare Realtime SFU が管理します。Durable Object は待機時間に対しても課金されるため、自身のストレージに対する短いトランザクションのみを実行し、Realtime SFU や Discord その他の外部 API は一切呼び出しません。また、すべてのライブセッションをポーリングしたり、長寿命のインメモリ状態を保持したりする設計も避けています。唯一の定期実行タスクはオブジェクトのアラームであり、60 秒間の OBS 再接続猶予期間が経過した配信を終了し、Discord 通知の削除処理を Worker へ引き渡します。アラームは OBS の再接続待ち中または削除待ちの通知がある間のみ設定されます。
 
-Viewing is intentionally authenticated and app-specific. TURN discovery is provided through `/api/turn-credentials`, not generic WHEP `OPTIONS`/`Link` discovery. The playback client waits for local ICE gathering before POST/PATCH because the current SFU path is effectively non-trickle.
+視聴機能は意図的に認証付きかつアプリ固有の仕様としています。TURN サーバーの探索は汎用的な WHEP の `OPTIONS`/`Link` ではなく `/api/turn-credentials` を通じて提供されます。現在の SFU 経路は実質的にノン・トリクル（non-trickle）であるため、再生クライアントは POST/PATCH を送信する前にローカルの ICE 収集完了を待機します。
 
-More details are documented in [docs/architecture.md](docs/architecture.md).
+詳細は [docs/architecture.md](docs/architecture.md) に記載しています。
 
-## Security Notes
+## セキュリティ上の注意
 
-- Do not log raw OBS bearer tokens, JWTs, cookies, Discord OAuth codes, or Cloudflare secrets.
-- Live tokens are displayed only when created and are stored as HMAC hashes using `LIVE_TOKEN_PEPPER`.
-- Viewer auth uses an app-issued JWT cookie after Discord guild membership is verified.
-- This app is designed for restricted viewing, not for exposing a public WHEP-compatible endpoint.
+- 生の OBS Bearer トークン、JWT、Cookie、Discord OAuth コード、Cloudflare シークレットをログに出力しないでください。
+- ライブトークンは発行時にのみ画面に表示され、`LIVE_TOKEN_PEPPER` を用いた HMAC ハッシュとして保存されます。
+- 視聴者認証では、Discord サーバー（ギルド）への所属確認後にアプリが発行する JWT Cookie を使用します。
+- 本アプリは限定された視聴用途向けに設計されており、公開 WHEP 互換エンドポイントとして公開することを目的としていません。

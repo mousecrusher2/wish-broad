@@ -159,7 +159,7 @@ function createController() {
     play: async () => undefined,
     srcObject: null,
   };
-  // oxlint-disable-next-line typescript/consistent-type-assertions, typescript/no-unsafe-type-assertion -- The controller only forwards srcObject/play to WHEPSession.
+  // oxlint-disable-next-line typescript/consistent-type-assertions, typescript/no-unsafe-type-assertion -- コントローラーは srcObject/play を WHEPSession に転送するだけ。
   void controller.attachVideoElement(videoElement as HTMLVideoElement);
   return { controller, snapshots };
 }
@@ -251,7 +251,7 @@ describe("WHEPPlaybackController", () => {
     await controller.load("alice");
     const first = lastPeer();
     first.updateStates(ICE_CONNECTED);
-    // The established session is replaced after its recovery grace period.
+    // 確立済みセッションは、リカバリー猶予期間の経過後に置き換えられる。
     first.updateStates(ICE_FAILED);
     await vi.advanceTimersByTimeAsync(3_000);
     await vi.waitFor(() => {
@@ -260,7 +260,7 @@ describe("WHEPPlaybackController", () => {
     });
 
     lastPeer().updateStates(ICE_FAILED);
-    // Covers the 2 s retry interval before the next offer.
+    // 次のオファー送信までの 2 秒間のリトライ間隔を検証する。
     await vi.advanceTimersByTimeAsync(2_000);
     await vi.waitFor(() => {
       expect(countPosts(requests)).toBe(3);
@@ -285,7 +285,7 @@ describe("WHEPPlaybackController", () => {
       isLoading: false,
       playbackState: { phase: "reconnecting", resourceUserId: "alice" },
     });
-    // Offers are retried at a fixed 2 s interval, without backing off.
+    // オファーはバックオフせず、固定の 2 秒間隔でリトライされる。
     await vi.advanceTimersByTimeAsync(1_999);
     expect(countPosts(requests)).toBe(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -336,7 +336,7 @@ describe("WHEPPlaybackController", () => {
     expect(snapshots.at(-1)?.playbackState.phase).toBe("reconnecting");
     const postsDuringGrace = countPosts(requests);
 
-    // Covers the 2 s retry interval once the publisher is back.
+    // 配信者が戻った後の 2 秒間のリトライ間隔を検証する。
     await vi.advanceTimersByTimeAsync(3_000);
     await vi.waitFor(() => {
       expect(countPosts(requests)).toBeGreaterThan(postsDuringGrace);

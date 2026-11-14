@@ -41,10 +41,10 @@ type CurrentUserState =
   | { status: "error"; error: string };
 
 /**
- * What SWR caches for a key. The cached fetchers resolve failures too: SWR
- * discards a resolved request that a newer request or a local `mutate` has
- * replaced, but it applies a rejected one regardless, which would let a stale
- * failure hide fresh data.
+ * SWR がキーに対してキャッシュするデータ形式。キャッシュ用フェッチャーは
+ * 失敗時も reject せず解決値を返す。SWR は新しいリクエストやローカルの `mutate` で
+ * 置き換えられた古い解決済みリクエストを破棄するが、reject されたリクエストは
+ * そのまま適用してしまうため、古い失敗が最新データを上書きするのを防ぐ。
  */
 type Settled<T> =
   { status: "ready"; data: T } | { status: "error"; error: Error };
@@ -76,10 +76,10 @@ function toError(error: unknown): Error {
 }
 
 /**
- * Fetch a same-origin API with the app cookie.
+ * アプリの Cookie を付与して同一オリジンの API にリクエストを送信する。
  *
- * @throws {UnauthorizedError} When the API answers 401.
- * @throws {TypeError} When the request fails before a response arrives.
+ * @throws {UnauthorizedError} API が 401 を返した場合。
+ * @throws {TypeError} レスポンス到着前にリクエストが失敗した場合。
  */
 async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(input, {
@@ -94,10 +94,10 @@ async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
 }
 
 /**
- * Read a JSON response body and validate it against `schema`.
+ * JSON レスポンスボディを読み取り、`schema` に対して検証する。
  *
- * @throws {SyntaxError} When the body is not JSON.
- * @throws {Error} With `invalidMessage` when the body does not match `schema`.
+ * @throws {SyntaxError} ボディが有効な JSON でない場合。
+ * @throws {Error} ボディが `schema` に一致しない場合（エラーメッセージは `invalidMessage`）。
  */
 async function readJson<TOutput>(
   response: Response,
@@ -113,8 +113,8 @@ async function readJson<TOutput>(
 }
 
 /**
- * @throws {UnauthorizedError} When the session cookie is missing or expired.
- * @throws {Error} When the request fails or the response is not a user.
+ * @throws {UnauthorizedError} セッション Cookie が未設定または期限切れの場合。
+ * @throws {Error} リクエストに失敗したか、レスポンスがユーザー情報でない場合。
  */
 export async function fetchCurrentUser(): Promise<User> {
   const response = await apiFetch("/api/me");
@@ -126,8 +126,8 @@ export async function fetchCurrentUser(): Promise<User> {
 }
 
 /**
- * @throws {UnauthorizedError} When the session cookie is missing or expired.
- * @throws {Error} When the request fails or the response is not a live list.
+ * @throws {UnauthorizedError} セッション Cookie が未設定または期限切れの場合。
+ * @throws {Error} リクエストに失敗したか、レスポンスが配信一覧でない場合。
  */
 export async function fetchLiveStreams(): Promise<Live[]> {
   const response = await apiFetch("/api/lives");
@@ -139,8 +139,8 @@ export async function fetchLiveStreams(): Promise<Live[]> {
 }
 
 /**
- * @throws {UnauthorizedError} When the session cookie is missing or expired.
- * @throws {Error} When the request fails or the response is not a token status.
+ * @throws {UnauthorizedError} セッション Cookie が未設定または期限切れの場合。
+ * @throws {Error} リクエストに失敗したか、レスポンスがトークンステータスでない場合。
  */
 async function fetchLiveTokenState(): Promise<StableLiveTokenState> {
   const response = await apiFetch("/api/me/livetoken", {
@@ -159,10 +159,10 @@ async function fetchLiveTokenState(): Promise<StableLiveTokenState> {
 }
 
 /**
- * Issue a new live token and return it.
+ * 新しい配信トークンを発行して返す。
  *
- * @throws {UnauthorizedError} When the session cookie is missing or expired.
- * @throws {Error} When the request fails or the response is not a new token.
+ * @throws {UnauthorizedError} セッション Cookie が未設定または期限切れの場合。
+ * @throws {Error} リクエストに失敗したか、レスポンスが新規トークンでない場合。
  */
 async function createLiveToken(): Promise<string> {
   const response = await apiFetch("/api/me/livetoken", {
@@ -180,7 +180,7 @@ async function createLiveToken(): Promise<string> {
   return token;
 }
 
-/** Wrap a fetcher for SWR so that its failure is logged and cached. */
+/** 失敗時にログ出力とキャッシュが行われるよう SWR 用フェッチャーをラップする。 */
 function settle<T>(
   key: string,
   fetcher: () => Promise<T>,
@@ -341,7 +341,7 @@ export function useLiveToken() {
       ? data.error.message
       : null;
 
-  /** Revalidate the token status. A failure is exposed through `error`. */
+  /** トークンステータスを再検証する。失敗時は `error` として公開される。 */
   const fetchTokenStatus = async (): Promise<void> => {
     setOverrideState({ status: "loading" });
     try {
@@ -352,9 +352,9 @@ export function useLiveToken() {
   };
 
   /**
-   * Issue a new live token. A failure is logged and exposed through `error`.
+   * 新しい配信トークンを発行する。失敗時はログ出力され、`error` として公開される。
    *
-   * @returns Whether a new token was issued.
+   * @returns 新しいトークンが発行されたかどうか。
    */
   const createToken = async (): Promise<boolean> => {
     setOverrideState({ status: "loading" });
@@ -367,8 +367,8 @@ export function useLiveToken() {
       return true;
     } catch (createError: unknown) {
       console.error("Failed to create token:", createError);
-      // Cache the failure like a fetch failure so that an expired session
-      // also reaches the auth bootstrap, which then shows the login prompt.
+      // 期限切れセッションの場合も認証ブートストラップ処理へ到達して
+      // ログインプロンプトが表示されるよう、フェッチ失敗と同様に失敗をキャッシュする。
       await mutate(
         { status: "error", error: toError(createError) },
         { revalidate: false },

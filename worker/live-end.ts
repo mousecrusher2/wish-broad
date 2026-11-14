@@ -6,9 +6,9 @@ import {
 } from "./notifications";
 import type { Bindings } from "./types";
 
-// OBS sends DELETE before every reconnect, so a broadcast outlives each ingest
-// session by this long. A new ingest within the period resumes the broadcast
-// without another start notification.
+// OBS は再接続のたびに DELETE を送信するため、配信本体は各インジェストセッションより
+// この時間だけ長く存続する。この期間内の新しいインジェストは、再度開始通知を送らずに
+// 配信を再開する。
 export const LIVE_RECONNECT_GRACE_MS = 60_000;
 
 type LiveEndEnv = Pick<
@@ -19,8 +19,8 @@ type LiveEndEnv = Pick<
   | "NOTIFICATIONS_DISCORD_WEBHOOK_URL"
 >;
 
-// Returns whether the delete is finished, which includes a failure that trying
-// again cannot fix, such as a message that was already deleted.
+// 削除が完了したかどうかを返す。すでに削除済みのメッセージなど、再試行しても
+// 回復しない失敗も完了扱いに含める。
 async function deleteNotification(
   env: LiveEndEnv,
   job: NotificationDeleteJob,
@@ -42,14 +42,12 @@ async function deleteNotification(
 }
 
 /**
- * Deletes the start notifications of ended broadcasts from Discord and tells
- * the LiveState object which deletes are finished. A delete that failed with a
- * network error, timeout, 429, or 5xx is left unreported, so the object hands
- * it out again once its lease expires.
+ * 終了した配信の開始通知を Discord から削除し、どの削除が完了したかを LiveState
+ * オブジェクトに報告する。ネットワークエラー、タイムアウト、429、または 5xx で
+ * 失敗した削除は未報告のまま残すため、リース期限が切れるとオブジェクトが再び払い出す。
  *
- * This runs in the Worker's waitUntil after the object's call has returned,
- * so the object is not kept running while Discord answers. Every failure is
- * logged here instead of being thrown.
+ * この処理はオブジェクト呼び出しの返却後に Worker の waitUntil 内で実行されるため、
+ * Discord の応答待ちの間もオブジェクトを実行し続けずに済む。すべての失敗はスローせずここでログ出力する。
  */
 export async function runNotificationDeletes(
   env: LiveEndEnv,
@@ -68,8 +66,8 @@ export async function runNotificationDeletes(
   try {
     await getLiveState(env).settleNotificationDeletes(finishedMessageIds);
   } catch (error: unknown) {
-    // The deletes are handed out again; Discord then reports the messages as
-    // gone, which finishes them.
+    // 削除タスクは再度払い出される。その際 Discord はメッセージがすでに存在しない旨を
+    // 返すため、それによって削除タスクは完了扱いとなる。
     logWarn(env, "live_notification.settle_failed", {
       ...createErrorLogFields(error),
       messageIds: finishedMessageIds,

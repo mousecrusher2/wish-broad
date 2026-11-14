@@ -1,22 +1,21 @@
-// Test doubles shared by the Worker tests. Nothing here is bundled into the
-// Worker.
+// Worker テスト間で共有されるテストダブル。このファイルのコードは Worker にはバンドルされない。
 import { DatabaseSync } from "node:sqlite";
 import type { LiveStateStorage } from "./live-state";
 import type { Bindings } from "./types";
 
 /**
- * A Durable Object's storage backed by an in-memory SQLite database, so that
- * the SQL in ./database runs against a real engine. `getAlarm` reports the
- * alarm the code under test left behind.
+ * インメモリ SQLite データベースをバックエンドとする Durable Object 用ストレージ。
+ * これにより ./database の SQL を実エンジン上で動作させる。`getAlarm` は
+ * テスト対象コードが設定したままにしたアラーム時刻を返す。
  *
- * The alarm does not fire by itself. A test that fires it clears it first, as
- * the runtime does: the alarm that is running no longer counts as set.
+ * アラームは自動的には発火しない。アラームを発火させるテストはランタイムと同様に
+ * まずアラームをクリアする（実行中のアラームはすでに設定済みとはみなされない）。
  *
- * `transaction` does what the Durable Objects storage documentation promises
- * and no more: every operation made while its closure runs, alarm calls
- * included, belongs to the transaction, and it is rolled back only when the
- * closure calls `rollback()`. A closure that merely throws keeps what it
- * wrote, so code that counts on an undocumented rollback fails its tests.
+ * `transaction` は Durable Objects storage のドキュメントで保証された通りの動作のみを行う。
+ * クロージャー実行中に行われたすべての操作（アラーム操作を含む）はそのトランザクションに属し、
+ * クロージャーが `rollback()` を呼んだ場合のみロールバックされる。クロージャーが単に例外を
+ * スローしただけでは書き込んだ内容は保持されるため、ドキュメント化されていない暗黙ロールバックに
+ * 依存するコードはテストで失敗する。
  */
 export function createTestStorage(): {
   getAlarm(): number | null;
@@ -83,8 +82,8 @@ function failUnusedLiveStateAccess(): never {
 }
 
 /**
- * The LIVE_STATE binding for tests that replace `getLiveState`, which is the
- * only code that may touch the binding.
+ * `getLiveState` を差し替えるテスト用の LIVE_STATE バインディング。
+ * このバインディングに直接触れてよいのは `getLiveState` のみ。
  */
 export function createUnusedLiveStateNamespace(): Bindings["LIVE_STATE"] {
   return {

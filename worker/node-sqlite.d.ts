@@ -1,6 +1,6 @@
-// Vitest runs the Worker tests in Node, whose built-in SQLite stands in for a
-// Durable Object's SQL storage (see ./test-doubles). The Worker project does
-// not load Node's type definitions, so this declares only what the tests use.
+// Vitest は Node 上で Worker のテストを実行し、Node 組み込みの SQLite が
+// Durable Object の SQL ストレージの代用となる（./test-doubles を参照）。
+// Worker プロジェクトでは Node の型定義を読み込まないため、テストで使う分だけをここで宣言する。
 declare module "node:sqlite" {
   class StatementSync {
     all(...parameters: (string | number | null)[]): Record<string, unknown>[];

@@ -310,15 +310,15 @@ export class WHEPPlaybackController {
     mode: AttemptMode,
     resourceUserId: string,
   ): void {
-    // The Worker answers 404 only once the broadcast has ended; while the
-    // publisher reconnects it answers 503 instead. So 404 needs no retries.
+    // Worker が 404 を返すのは配信が終了した場合のみであり、配信者の再接続待ちの間は
+    // 503 を返す。そのため 404 に対してはリトライしない。
     if (isNotFoundError(error)) {
       this.finalizePlayback("ended", resourceUserId);
       return;
     }
 
-    // Wait for the publisher to reconnect, even on the initial load of a
-    // broadcast that is already waiting for it.
+    // すでに配信者の再接続待ちとなっている配信を初回読み込みした場合でも、
+    // 配信者の再接続を待機する。
     if (isUnavailableError(error)) {
       this.queueReconnect(resourceUserId);
       return;
@@ -336,9 +336,9 @@ export class WHEPPlaybackController {
     mode: AttemptMode,
     resourceUserId: string,
   ): void {
-    // ICE "failed" is terminal without an ICE restart. A session that never
-    // connected has no recovery timer or playback monitor watching it, so
-    // replace it like any other failed attempt instead of leaving the UI stuck.
+    // ICE リスタートを行わない限り、ICE "failed" は終端状態となる。一度も接続できていない
+    // セッションにはリカバリータイマーも再生モニターも動いていないため、UI が停止したままに
+    // ならないよう他の失敗試行と同様にセッションを置き換える。
     this.disposeSession();
     this.handleAttemptFailure(
       new Error("WHEP ICE connection failed before playback connected"),
@@ -398,7 +398,7 @@ export class WHEPPlaybackController {
       resourceUserId,
     });
 
-    // The deadline check above keeps the remaining time positive.
+    // 上記の期限チェックにより、残り時間は常に正の値になる。
     const delayMs = options?.immediate
       ? 0
       : Math.min(WHEP_RECONNECT_DELAY_MS, this.reconnectDeadlineAt - now);
@@ -464,11 +464,10 @@ export class WHEPPlaybackController {
       cleanup: () => {},
     };
 
-    // This is the primary end-of-stream detection path. When an ingest ends,
-    // the SFU session/track metadata can still look valid long enough for the
-    // viewer to keep the PeerConnection open, but RTP bytes stop advancing.
-    // Watch per-receiver bytesReceived and reconnect this stream when expected
-    // media stops flowing.
+    // これがストリーム終了を検知する主要な経路。インジェストが終了しても、視聴者が
+    // PeerConnection を開いたままにできるほど長く SFU のセッション/トラックメタデータが
+    // 有効に見え続ける場合があるが、RTP バイト数の増加は止まる。レシーバーごとの
+    // bytesReceived を監視し、想定されたメディアの受信が止まったら再接続する。
     const stopInterval = () => {
       if (playbackMonitor.intervalId !== null) {
         window.clearInterval(playbackMonitor.intervalId);
@@ -508,10 +507,10 @@ export class WHEPPlaybackController {
         playbackMonitor.requiredReceiverIds === null &&
         playbackMonitor.discoveryTimeoutId === null
       ) {
-        // Receiver stats can lag behind SDP/track events. Until every expected
-        // inbound RTP receiver appears, bytesReceived monitoring cannot prove
-        // playback health. If the receivers never appear, the negotiated session
-        // is incomplete and must be replaced.
+        // レシーバーの統計情報は SDP/track イベントより遅れて現れることがある。
+        // 想定されるすべての受信側 RTP レシーバーが揃うまでは、bytesReceived の監視だけでは
+        // 再生の健全性を証明できない。レシーバーが最後まで揃わない場合は、ネゴシエート済み
+        // セッションが不完全であるため置き換える必要がある。
         playbackMonitor.discoveryTimeoutId = window.setTimeout(() => {
           playbackMonitor.discoveryTimeoutId = null;
 
@@ -620,8 +619,8 @@ export class WHEPPlaybackController {
           }
         })
         .catch((error: Error) => {
-          // Some browsers reject getStats() once dispose() has closed the
-          // PeerConnection mid-poll. Stall detection simply skips this tick.
+          // ポーリング途中で dispose() が PeerConnection を閉じた直後、ブラウザによっては
+          // getStats() が reject される場合がある。停止検知ではこのティックを単にスキップする。
           console.warn("Failed to read WHEP receiver stats:", error);
         })
         .finally(() => {
@@ -660,8 +659,8 @@ export class WHEPPlaybackController {
 
     const phase = mode === "retry" ? "reconnecting" : "connecting";
     let sessionWasConnected = false;
-    // Failures reported while start() is still running belong to start()'s own
-    // error result; only ICE failures after signaling succeeded are handled here.
+    // start() の実行中に報告された失敗は start() 自身のエラー結果に属する。
+    // ここではシグナリング成功後の ICE 失敗のみを扱う。
     let signalingCompleted = false;
 
     this.pendingAttempt = null;

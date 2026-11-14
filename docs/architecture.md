@@ -1,394 +1,135 @@
-# Architecture Notes
+# アーキテクチャノート
 
-This document records the operational decisions that are not obvious from the
-code alone. The application is optimized for authenticated live viewing at
-higher quality than Discord screen sharing, not for public WHEP
-interoperability.
+このドキュメントでは、コードだけでは自明でない運用上の設計判断を記録します。本アプリケーションは公開 WHEP との相互運用性ではなく、Discord の画面共有より高画質な認証付きライブ視聴に最適化されています。
 
-## Runtime Model
+## ランタイムモデル
 
-The Worker is treated as stateless request handling glue. Durable state that
-must survive requests lives in one Durable Object, `LiveState`, while Cloudflare
-Realtime SFU (formerly Cloudflare Calls, hence the `CALLS_*` secret names) owns
-the actual media sessions and track state. Avoid designs that poll all active
-sessions or keep long-lived in-memory state.
+Worker はステートレスなリクエスト処理の接着層として扱います。リクエストをまたいで保持すべき永続状態は単一の Durable Object である `LiveState` に置き、実際のメディアセッションとトラック状態は Cloudflare Realtime SFU（旧称 Cloudflare Calls、`CALLS_*` というシークレット名の由来）が管理します。すべてのアクティブセッションをポーリングしたり、長寿命のインメモリ状態を保持したりする設計は避けてください。
 
-`LiveState` holds the broadcasts, publisher tokens, and users in its SQLite
-storage. Routes reach it through the RPC methods of `getLiveState(env)` in
-`worker/live-state.ts`. One object holds everything because `/api/lives` needs
-every broadcast together with its owner's name, and the load is a handful of
-short calls per viewer or publisher action. The class in `worker/main.ts` only
-delegates to `LiveStateCore` in `worker/live-state.ts`, which the Node-based
-tests run against Node's SQLite.
+`LiveState` は配信情報、配信者トークン、ユーザー情報を自身の SQLite ストレージに保持します。ルートからは `worker/live-state.ts` の `getLiveState(env)` が返す RPC メソッド経由でアクセスします。`/api/lives` がすべての配信とその配信者名をまとめて必要とし、かつ視聴者や配信者のアクションごとの負荷も数回の短い呼び出しで済むため、1 つのオブジェクトですべてを保持しています。`worker/main.ts` のクラスは `worker/live-state.ts` の `LiveStateCore` へ処理を委譲するだけであり、Node ベースのテストはその `LiveStateCore` を Node の SQLite 上で実行します。
 
-A Durable Object is billed for the wall-clock time it spends running or
-awaiting, so `LiveState` must never call Realtime SFU, Discord, or any other
-external API, and must not await anything except its own storage and alarm
-calls. Each of its methods is one short storage transaction. The Worker
-makes the external calls between two of those methods and reports what it
-observed. When the object itself has to start external work, it calls the
-Worker's `LiveEffects` entrypoint through `ctx.exports`. That method returns at
-once and does the work in `waitUntil`, so the object is finished within
-milliseconds while the Worker waits for the external service.
+Durable Object は実行中および待機中の実時間（wall-clock time）に対して課金されるため、`LiveState` は Realtime SFU・Discord・その他の外部 API を決して呼び出してはならず、自身のストレージおよびアラーム呼び出し以外のものを await してはなりません。各メソッドは 1 回の短いストレージトランザクションで構成されます。Worker はそうした 2 つのメソッド呼び出しの間で外部呼び出しを行い、観測した結果を報告します。オブジェクト自身が外部処理を開始する必要がある場合は、`ctx.exports` を通じて Worker の `LiveEffects` エントリーポイントを呼び出します。そのメソッドは即座に返却し、実際の処理を `waitUntil` 内で実行するため、Worker が外部サービスの応答を待っている間もオブジェクト側は数ミリ秒で完了します。
 
-The one scheduled task is ending a broadcast once its OBS reconnect grace period
-passes (see Ingest Lifecycle). It is the object's alarm, which is set inside
-the transaction that makes the change it serves, so a deadline is never stored
-without its alarm. It is set only while a broadcast is waiting for OBS or a
-notification delete is pending, so nothing runs otherwise. The alarm is only a
-trigger: `lives.grace_expires_at` is authoritative, and every `LiveState`
-method first ends the broadcasts whose deadline passed, so a late alarm never
-lets a request see one.
+唯一のスケジュール済みタスクは、OBS の再接続猶予期間が経過した配信を終了することです（「インジェストのライフサイクル」を参照）。これはオブジェクトのアラームによって行われ、対象の状態変更を行うトランザクション内で設定されるため、アラームなしに期限だけが保存されることはありません。アラームは OBS の再接続待ち中の配信か削除待ちの通知が存在する間だけ設定され、それ以外のときは何も動作しません。アラームはあくまでトリガーにすぎず、真の期限は `lives.grace_expires_at` 側が持ちます。`LiveState` のすべてのメソッドは最初に期限切れの配信を終了させるため、アラームの起動が遅れても後続リクエストが期限切れの配信を目にすることはありません。
 
-That transaction is `ctx.storage.transaction()`, and the choice rests on what
-the Durable Objects storage documentation states rather than on observed
-runtime behavior. With SQLite storage, every storage operation made on
-`ctx.storage` while the closure runs is part of the transaction, and alarm
-operations follow the same rules as other storage operations. A command that
-fails calls `rollback()`, the documented way to discard what it wrote.
-`transactionSync()` cannot hold the alarm: only synchronous storage operations
-are part of it, and the alarm calls return promises. It is used only for the
-schema migration in the constructor, which is SQL alone.
+このトランザクションには `ctx.storage.transaction()` を使用しています。この選択は実行時挙動の観察ではなく、Durable Objects ストレージのドキュメントの仕様に基づいています。SQLite ストレージでは、クロージャの実行中に `ctx.storage` に対して行われたすべてのストレージ操作がそのトランザクションの一部となり、アラーム操作も他のストレージ操作と同じ規則に従います。コマンドが失敗した場合は、書き込んだ内容を破棄するためのドキュメント記載の方法である `rollback()` を呼び出します。`transactionSync()` は同期操作のみをカバーするため、内部で行ったアラーム呼び出しはトランザクションに含まれません。そのため `transactionSync()` は SQL のみを実行するコンストラクタ内のスキーママイグレーションにだけ使用しています。
 
-The object checks notification ids and timestamps before writing them, using
-the same rules as its cleanup and alarm reads. It reads the scheduled alarm from
-storage when moving it, so a failed transaction or a restarted instance cannot
-leave an outdated in-memory alarm time. A live-end event is logged only after
-the transaction commits.
+オブジェクトは通知 ID とタイムスタンプを書き込む前に、クリーンアップやアラーム読み取りと同じ規則で検証します。また、アラームを移動する際はストレージから現在スケジュールされているアラームを読み取るため、トランザクション失敗やインスタンス再起動によって古いインメモリのアラーム時刻が残ることはありません。配信終了イベントのログ出力はトランザクションがコミットされた後にのみ行います。
 
-## Logging
+## ロギング
 
-Cloudflare Workers invocation logs already provide request-level metadata such
-as method, URL, status, and duration. The application logger therefore emits
-structured event logs instead of duplicating access logs. Authenticated
-`/api/*`, `/play/*`, and `/ingest/*` requests log one `info` event with the
-available user/session identifiers; request correlation is left to Workers Logs.
+Cloudflare Workers の呼び出しログがメソッド・URL・ステータス・所要時間といったリクエスト単位のメタデータをすでに提供しているため、アプリケーションロガーではアクセスログを重複出力せず構造化イベントログのみを出力します。認証済みの `/api/*`、`/play/*`、`/ingest/*` リクエストは利用可能なユーザー／セッション識別子とともに 1 件の `info` イベントを出力し、リクエストの相関追跡は Workers Logs に委ねます。
 
-`LOG_LEVEL` controls application log verbosity (`debug`, `info`, `warn`,
-`error`, or `silent`). Production defaults to `info` when the variable is absent.
-Warnings and errors include normalized error metadata, but raw bearer tokens,
-JWTs, authorization codes, cookies, and secrets must never be logged.
+`LOG_LEVEL` でアプリケーションログの詳細度（`debug`、`info`、`warn`、`error`、`silent`）を制御します。本番環境で変数が未設定の場合のデフォルトは `info` です。警告やエラーには正規化されたエラーメタデータを含めますが、生の Bearer トークン、JWT、認可コード、Cookie、シークレットは絶対に出力してはなりません。
 
-## Storage Schema
+## ストレージスキーマ
 
-The tables live in the `LiveState` object's SQLite storage and are defined by
-`SCHEMA_MIGRATIONS` in `worker/database.ts`, which is the only description of
-their shape. Each entry is one schema version. The object applies the versions
-it has not recorded in `schema_migrations` when it starts, before it handles
-any call, so deploying the Worker is what migrates the storage. Append a new
-entry to change the schema; never edit one that has been deployed, because
-objects that already applied it would not run it again.
+テーブルは `LiveState` オブジェクトの SQLite ストレージ内に置かれ、`worker/database.ts` の `SCHEMA_MIGRATIONS` のみによって形状が定義されます。各エントリが 1 つのスキーマバージョンを表します。オブジェクトは起動時にまだ `schema_migrations` に記録されていないバージョンを、どの呼び出しも処理する前に適用するため、Worker をデプロイすることがそのままストレージのマイグレーションになります。スキーマを変更する際は必ず新しいエントリを末尾に追加し、デプロイ済みのエントリは絶対に編集しないでください（すでに適用済みのオブジェクトでは再実行されないためです）。
 
-The Vitest suite runs the same statements against Node's SQLite
-(`worker/test-doubles.ts`), so a schema or query mistake fails `pnpm test`
-instead of surfacing after a deploy. It cannot prove that a data-copying
-migration moves or transforms existing rows correctly.
+Vitest スイートは同じ SQL 文を Node の SQLite（`worker/test-doubles.ts`）に対して実行するため、スキーマやクエリの誤りはデプロイ後ではなく `pnpm test` の時点で検出できます。ただし、データ移行を伴うマイグレーションが既存行を正しく移動・変換するかまではテストで証明できません。
 
-## Cutover from D1
+## D1からの切り替え
 
-Live state used to be stored in a D1 database (`broad-db`), with a Workflow
-(`whip-worker-live-end`) ending broadcasts. `LiveState` replaced both and
-starts empty: the D1 rows are deliberately not imported. They were reviewed
-before the switch and judged safe to drop, because each table is rebuilt by
-normal use. The deploy that makes the switch has these effects:
+以前の配信状態は D1 データベース（`broad-db`）に保存され、Workflow（`whip-worker-live-end`）が配信終了を担っていました。`LiveState` はその両方を置き換えるもので、空の状態で開始します。D1 の行は意図的にインポートしていません。切り替え前に内容を確認し、すべてのテーブルが通常利用によって再構築されるため破棄して安全と判断したためです。切り替えを行うデプロイには以下の影響があります。
 
-- `live_tokens`: every publisher token stops working. OBS gets 401 from
-  `/ingest/:userId` until its publisher creates a new token on the site and
-  enters it in OBS.
-- `users`: a user is stored again at their next login. Someone still signed in
-  from before the switch can create a token and broadcast, but that broadcast
-  is not listed in `/api/lives` until they log in again. The auth cookie lasts
-  one day, so this ends by itself.
-- `lives`: a broadcast running during the deploy is no longer known. It
-  disappears from `/api/lives`, viewers get 404, and its start notification
-  stays in Discord because the message id is gone with the row. Deploy while
-  nobody is broadcasting. Otherwise the publisher has to start the stream
-  again, and the old notification has to be deleted by hand.
+- `live_tokens`: すべての配信者トークンが無効になります。配信者がサイト上で新しいトークンを発行して OBS に設定するまで、OBS からの `/ingest/:userId` リクエストは 401 になります。
+- `users`: 次回ログイン時にユーザー情報が再保存されます。切り替え前からログイン状態のままのユーザーはトークン作成や配信が可能ですが、再度ログインするまでその配信は `/api/lives` に表示されません。認証 Cookie の有効期限は 1 日であるため、この状態は自然に解消されます。
+- `lives`: デプロイ時点で実行中だった配信の情報は失われます。`/api/lives` から消え、視聴者には 404 が返り、メッセージ ID も行と一緒に消えるため開始通知は Discord 上に残ります。誰も配信していないタイミングでデプロイしてください。さもないと配信者は配信を再開する必要があり、古い通知は手動で削除しなければなりません。
 
-The deploy does not remove the old resources, and nothing reads them
-afterwards. Workflow instances that were sleeping through a grace period no
-longer have a class to run. Once the switch is confirmed, delete both with
-`wrangler workflows delete whip-worker-live-end` and
-`wrangler d1 delete broad-db`.
+このデプロイによって古いリソースが削除されることはなく、切り替え後にそれらを参照する処理もありません。猶予期間中にスリープしていた Workflow インスタンスには実行すべきクラスがなくなります。切り替えが完了して問題ないことを確認したら、`wrangler workflows delete whip-worker-live-end` および `wrangler d1 delete broad-db` で両方を削除してください。
 
-## Auth and Tokens
+## 認証とトークン
 
-Discord OAuth is an admission check, not the long-lived app session. The Worker
-uses the Discord access token only to verify membership in the configured guild,
-then revokes it and issues its own `authtoken` JWT cookie.
+Discord OAuth は長寿命のアプリセッションそのものではなく、入室許可の検証手段としてのみ使用します。Worker は Discord のアクセストークンを使って指定されたサーバー（ギルド）への所属だけを確認し、直ちにそのトークンを失効（revoke）させたうえで独自の `authtoken` JWT Cookie を発行します。
 
-The authorization request asks only for `guilds.members.read`. The membership
-check calls `GET /users/@me/guilds/{guild.id}/member`, whose guild member
-response already carries the user ID, username, global name, and nickname used
-for the app session, so `identify` (`/users/@me`) is not requested.
+認可リクエストでは `guilds.members.read` スコープのみを要求します。所属確認で呼び出す `GET /users/@me/guilds/{guild.id}/member` のレスポンスにはアプリセッションで使うユーザー ID、ユーザー名、グローバル名、ニックネームがすべて含まれているため、`identify`（`/users/@me`）は要求しません。
 
-The frontend does not gate initial rendering on a dedicated authentication
-check. The API module starts one-shot SWR preloads for the current user, live
-list, and live-token status, and the app bootstrap component subscribes to those
-same three SWR keys. Any successful data result moves the app out of the initial
-loading screen, while any 401 response is stored as an `UnauthorizedError`
-result on its data key and moves it to the login screen. Individual data panels
-read the same keys and keep their own loading/error states, so the normal app
-shell can appear before every preload has finished without issuing duplicate
-requests.
+フロントエンドは専用の認証チェック完了まで初期描画をブロックしません。API モジュールが現在のユーザー、配信一覧、ライブトークン状態の 1 回限りの SWR プリロードを開始し、アプリのブートストラップコンポーネントがそれら同じ 3 つの SWR キーを購読します。いずれかのデータが正常に取得できれば初期ローディング画面から遷移し、いずれかが 401 レスポンスを返した場合はそのデータキー上に `UnauthorizedError` 結果が保存されてログイン画面へ遷移します。個別のデータパネルも同じキーを参照しつつ独自のローディング／エラー状態を保持するため、重複リクエストを発行することなく全プリロードの完了を待たずに通常のアプリシェルを表示できます。
 
-Publish credentials are separate from viewer auth. OBS uses a bearer live token,
-while viewers use the JWT cookie. Live tokens are shown only when created; the
-live state stores an HMAC of the token with `LIVE_TOKEN_PEPPER`, not the raw
-bearer token.
+配信用クレデンシャルと視聴者認証は分離されています。OBS は Bearer ライブトークンを使用し、視聴者は JWT Cookie を使用します。ライブトークンは発行時にのみ表示され、生トークンではなく `LIVE_TOKEN_PEPPER` を使った HMAC ハッシュが配信状態に保存されます。
 
-## Live Row Semantics
+## 配信行（lives）のセマンティクス
 
-Each `lives` row represents one broadcast of its owner. `broadcast_id` stays the
-same for the whole broadcast, while `session_id` and the stored `trackName` and
-`mid` values point at the current SFU ingest session. Those are not
-stable across OBS reconnects, so a reconnect replaces them in place instead of
-reusing stale locators. `grace_expires_at` is `NULL` while that ingest session
-is live and holds the reconnect deadline (Unix epoch milliseconds) after OBS
-sent DELETE.
+`lives` テーブルの各行は配信者 1 人分の 1 つの配信を表します。`broadcast_id` は配信全体を通じて同じ値が保たれ、一方で `session_id` と保存された `trackName` / `mid` 値は現在の SFU インジェストセッションを指します。これらは OBS の再接続をまたいで維持されないため、再接続時は古いロケーターを再利用せずその場で置き換えます。`grace_expires_at` はインジェストセッションが配信中の間は `NULL` であり、OBS が DELETE を送信した後は再接続期限（Unix エポックミリ秒）を保持します。
 
-Each `LiveState` method runs alone and in one transaction, so transitions
-never interleave inside the object. The Worker's Calls requests still happen
-between two methods, though: it reads the row, asks Calls about the session,
-and then asks the object to act on the answer. Those transitions are therefore
-compare-and-set statements on the `session_id` and `grace_expires_at` the
-Worker observed, so a delayed request never ends a broadcast that has since
-resumed or entered a grace period. Resuming changes `session_id`, which is what
-turns a stale end into a no-op.
+`LiveState` の各メソッドは単独かつ 1 つのトランザクション内で実行されるため、オブジェクト内部で状態遷移が交錯することはありません。ただし Worker による Calls へのリクエストは 2 つのメソッド呼び出しの間に行われます（行を読み取り、Calls にセッション状態を問い合わせ、その結果に応じてオブジェクトへ操作を依頼する）。そのためこれらの状態遷移は、Worker が観測した `session_id` および `grace_expires_at` に対する compare-and-set 文になっており、遅延したリクエストがすでに再開または猶予期間入りした配信を誤って終了させることはありません。再開時に `session_id` が変わるため、古い終了処理は無効（no-op）になります。
 
-The Worker does not try to keep the live list perfectly synchronized with the
-SFU. Full synchronization would require polling every live session, which is too
-expensive for `/api/lives` and does not fit the stateless Worker model. Instead,
-the code performs targeted SFU checks when an operation already names a specific
-user/session, such as ingest start or playback start.
+Worker は配信一覧を SFU と完全に同期させようとはしません。完全同期にはすべてのアクティブセッションをポーリングする必要があり、`/api/lives` としては高コストすぎるうえステートレスな Worker モデルに合わないためです。代わりにインジェスト開始や再生開始など、特定のユーザー／セッションがすでに指定されている操作の際にピンポイントで SFU の確認を行います。
 
-## Ingest Lifecycle
+## インジェストのライフサイクル
 
-`POST /ingest/:userId` is the authoritative live-start path:
+`POST /ingest/:userId` が正規の配信開始パスです。
 
-- If the owner's broadcast is within its grace period, the new SFU session
-  resumes it. The row's session and tracks are replaced, and no new start
-  notification is sent.
-- If the stored session is no longer active in the SFU (OBS crashed or lost its
-  network without sending DELETE) but a request saw it active within the last
-  60 seconds, OBS is reconnecting, so the new session resumes the broadcast the
-  same way.
-- If the stored session is no longer active and was not seen active recently,
-  that broadcast is ended, with its row removed and its notification queued for
-  deletion, and a new broadcast starts.
-- If the grace period already passed, the live state ended the broadcast before
-  the ingest could see it, so a new broadcast starts.
-- If the stored session is still active, the second ingest is rejected. Only
-  that user's stored SFU session is checked.
-- If a concurrent ingest for the same owner created or resumed the row while
-  this one was negotiated, this one is rejected the same way instead of
-  failing on the primary key. Only the ingest that owns the row notifies, and
-  the rejected ingest's Calls session is left for Calls to clean up.
+- 配信者の配信が猶予期間内であれば、新しい SFU セッションでその配信を再開します。行のセッションとトラック情報が置き換えられ、新しい開始通知は送信されません。
+- 保存されているセッションが SFU 上で非アクティブになっており（OBS が DELETE を送らずにクラッシュまたはネットワーク断を起こした場合）、かつ過去 60 秒以内にいずれかのリクエストがアクティブを確認していた場合は、OBS の再接続とみなして同様に新しいセッションで配信を再開します。
+- 保存されているセッションが非アクティブであり、直近でもアクティブが確認されていなかった場合は、その配信を終了して行を削除（通知も削除キューへ登録）したうえで、新しい配信を開始します。
+- 猶予期間がすでに経過していた場合は、インジェストが参照する前に `LiveState` が配信を終了させているため、新しい配信を開始します。
+- 保存されているセッションがまだアクティブな場合は、2 本目のインジェストを拒否します。確認するのはそのユーザーの保存済み SFU セッションだけです。
+- このインジェストのネゴシエーション中に同一配信者の並行インジェストが先行して行を作成または再開していた場合は、主キー制約で失敗させる代わりに同じように後発のインジェストを拒否します。通知を行うのは行を所有したインジェストだけであり、拒否された側の Calls セッションは Calls の自動クリーンアップに委ねます。
 
-`DELETE /ingest/:userId/:sessionId` cannot tell an intentional stop from a
-reconnect, because OBS sends DELETE before every reconnect, including the
-frequent ones caused by unstable WHIP connections. Removing the broadcast here
-would delete and re-post the Discord notification on every reconnect, so DELETE
-starts a 60-second grace period instead. It closes the ingest tracks, keeps the
-row and the start notification, and sets the live state's alarm for the
-deadline. If no ingest resumed the broadcast by then, the live state removes
-the row and has the Worker delete the notification (see Notifications). The
-cost is that a deliberate stop removes the notification about a minute late. A
-repeated DELETE for the same session is accepted without starting another grace
-period.
+`DELETE /ingest/:userId/:sessionId` では意図的な停止と再接続を区別できません。不安定な WHIP 接続で頻発するものも含め、OBS は再接続のたびに毎回 DELETE を送信するためです。ここで配信を削除してしまうと再接続のたびに Discord 通知が削除・再投稿されてしまうため、代わりに DELETE は 60 秒間の猶予期間を開始します。インジェストのトラックを閉じつつも配信行と開始通知は残し、`LiveState` のアラームを期限時刻に設定します。期限までに新しいインジェストが配信を再開しなければ、`LiveState` が行を削除して Worker に通知を削除させます（「通知」を参照）。この設計のトレードオフとして、意図的に配信を停止した場合でも通知の削除が約 1 分遅れます。同一セッションに対する重複した DELETE は、新たな猶予期間を開始せずに受け入れます。
 
-OBS still sends DELETE when its window is closed; only crashes and network loss
-skip it. Those are not polled for: the live state must not call the SFU, and
-checking it throughout every broadcast would spend requests on a rare case.
-They are detected when the next ingest or playback request for that owner finds
-the stored session inactive, which Calls reports once it garbage-collects the
-session about 30 seconds after losing it.
+OBS はウィンドウを閉じたときでも DELETE を送信し、スキップされるのはクラッシュとネットワーク切断のときだけです。これらをポーリングで監視することはしません（`LiveState` は SFU を呼び出してはならず、配信中ずっとポーリングし続けるとまれなケースのためにリクエストを消費するためです）。これらの異常は、その配信者に対する次のインジェストまたは再生リクエストで保存済みセッションが非アクティブと判明したときに検出されます。Calls はセッションを失ってから約 30 秒後にガベージコレクションし、その後に非アクティブを返すようになります。
 
-Without DELETE, the Worker cannot tell when the session was lost, so it cannot
-tell an OBS reconnect from an ingest days later that is meant as a new
-broadcast. To still resume a reconnect without a second notification, requests
-that find the stored session active record when they did in
-`session_seen_active_at`: an ingest rejected because the session is still
-active, which is how a reconnecting OBS retries until Calls garbage-collects
-the session, and a playback request, which viewers keep sending once media
-stops. A session found inactive within 60 seconds of being seen active was lost
-just now:
+DELETE が送られない場合、Worker はセッションがいつ失われたかを知ることができないため、OBS の再接続と、何日も後に行われた新規配信目的のインジェストとを区別できません。それでも再通知なしで再接続を再開できるようにするため、保存済みセッションがアクティブであることを確認したリクエストはその時刻を `session_seen_active_at` に記録します。記録するのは「まだセッションがアクティブなため拒否されたインジェスト」（再接続中の OBS が Calls による GC までリトライを繰り返すため）と「再生リクエスト」（メディア停止後に視聴者が送り続けるため）です。アクティブを確認されてから 60 秒以内に非アクティブが見つかったセッションは、つい先ほど失われたと判断します。
 
-- An ingest resumes the broadcast without notifying.
-- A playback request starts a 30-second grace period, as a late DELETE would,
-  and answers 503. Together with the roughly 30 seconds Calls took to
-  garbage-collect the session, the broadcast waits about as long as after a
-  DELETE. Playback that loses the session between the activity check and the
-  Calls request does the same, because it just saw the session active.
+- インジェストの場合は、通知せずに配信を再開します。
+- 再生リクエストの場合は、遅延した DELETE と同様に 30 秒間の猶予期間を開始し、503 を返します。Calls がセッションを GC するまでのおよそ 30 秒と合わせると、DELETE の場合とほぼ同じ時間だけ配信が待機することになります。アクティブ確認と Calls リクエストの合間にセッションが失われた再生処理も、直前にアクティブを確認しているため同じ扱いになります。
 
-If nobody saw the session active shortly before it was garbage-collected, for
-example when OBS comes back more than 30 seconds after losing its network and
-nobody was watching, the next ingest starts a new broadcast with a new
-notification. That is accepted so that a broadcast started much later is never
-silently resumed without a notification.
+たとえばネットワーク切断後 30 秒以上経ってから OBS が復帰し、かつ誰も視聴していなかった場合のように、GC 直前に誰もセッションのアクティブを確認していなかったときは、次のインジェストは新しい通知を伴う新規配信を開始します。これは、はるか後に開始された別配信が通知なしで暗黙に再開されてしまうのを防ぐため許容している仕様です。
 
-The activity record is written at most every 10 seconds per session. The
-Worker already holds the row it just read, so it skips the call to the live
-state while the record is fresh; a viewer joining a healthy stream then costs
-the object one call instead of two. The `UPDATE` repeats the check for requests
-that raced each other. The record is best-effort; without it, a lost session
-ends the broadcast as before.
+アクティビティ記録の書き込みはセッションあたり最大でも 10 秒に 1 回に抑えています。Worker は読み取ったばかりの行をすでに持っているため、記録が新しければ `LiveState` への呼び出し自体をスキップします。これにより健全な配信に参加する視聴者がオブジェクトを呼び出す回数は 2 回ではなく 1 回で済みます。競合するリクエスト向けに `UPDATE` 文側でも間隔チェックを繰り返しています。この記録はベストエフォートであり、記録がなければセッション喪失時は従来通り即座に配信終了となります。
 
-## Playback Lifecycle
+## 再生のライフサイクル
 
-`POST /play/:userId` is authenticated with the viewer's JWT cookie and checks the
-named live session before creating a playback session. This keeps `/api/lives`
-cheap and shifts stale-session detection to the operation that actually needs
-the session.
+`POST /play/:userId` は視聴者の JWT Cookie で認証され、再生セッションを作成する前に指定された配信セッションを確認します。これにより `/api/lives` を軽量に保ち、古いセッションの検出を実際にセッションを必要とする操作へ寄せています。
 
-While the broadcast is in its grace period, `POST /play/:userId` returns 503
-with `Retry-After` without calling the SFU, because the stored tracks were closed
-by DELETE. A 404 therefore means the broadcast has ended. If a playback request
-finds the stored session inactive but cannot end the row because it changed in
-the meantime (OBS sent DELETE or resumed), it also answers 503 so the viewer
-retries against the new state. A session that was lost just now starts a short
-grace period instead of ending the broadcast, as described under Ingest
-Lifecycle. `/api/lives` keeps listing broadcasts in their grace period. One
-whose deadline passed is never listed, even when the alarm is late, because the
-live state ends overdue broadcasts before it answers any call.
+配信が猶予期間にある間、`POST /play/:userId` は SFU を呼び出さずに `Retry-After` 付きの 503 を返します（保存されていたトラックは DELETE によってすでに閉じられているためです）。したがって 404 は配信が終了したことを意味します。再生リクエストが保存済みセッションの非アクティブを検出したものの、その間に行が変化した（OBS が DELETE を送ったか再開した）ために行を終了できなかった場合も、視聴者が新しい状態に対してリトライできるよう 503 を返します。つい先ほど失われたセッションは、「インジェストのライフサイクル」で説明している通り配信を終了させるのではなく短い猶予期間を開始します。`/api/lives` は猶予期間中の配信も一覧に含め続けますが、期限を過ぎた配信はアラームが遅れていても決して一覧に載りません（`LiveState` がどの呼び出しに応答する前にも期限切れ配信を終了させるためです）。
 
-Playback DELETE requests close only the track mids embedded in the WHEP session
-URL returned by the Worker. The frontend must use that returned `Location`
-instead of reconstructing a session URL from stored data. Session IDs are not
-tied to the viewer, because only the viewer that created a playback session
-learns its ID. The Worker does reject IDs with characters other than
-`[0-9A-Za-z_-]` on playback DELETE and PATCH, because it embeds the decoded ID
-in a Calls API URL.
+再生の DELETE リクエストは、Worker が返した WHEP セッション URL に埋め込まれたトラック mid のみを閉じます。フロントエンドは保存データからセッション URL を再構築せず、返却された `Location` をそのまま使わなければなりません。再生セッションを作成した視聴者だけがそのセッション ID を知るため、セッション ID を視聴者ごとに紐付けて管理することはしていません。ただし Worker は、デコードした ID を Calls API URL に埋め込むため、再生の DELETE および PATCH において `[0-9A-Za-z_-]` 以外の文字を含むセッション ID を拒否します。
 
-Playback DELETE is best-effort. If a viewer disconnects while
-`POST /play/:userId` is still in flight, the client aborts the request and
-DELETEs nothing, even if the Worker already created a Calls playback session.
-Nobody connects to that session, so it carries no media until Calls cleans it
-up.
+再生の DELETE はベストエフォートです。`POST /play/:userId` の処理中に視聴者が切断した場合、Worker がすでに Calls の再生セッションを作成していたとしてもクライアントはリクエストを中断し DELETE は送りません。誰もそのセッションに接続しないためメディアは流れず、やがて Calls によってクリーンアップされます。
 
-## WHEP Client Decisions
+## WHEPクライアントの設計判断
 
-The frontend WHEP client is not a generic WHEP client. It connects to this
-Worker's `/play/:userId` endpoint so viewer access can remain cookie/JWT
-protected.
+フロントエンドの WHEP クライアントは汎用 WHEP クライアントではありません。視聴アクセスを Cookie/JWT で保護するため、この Worker の `/play/:userId` エンドポイントに接続します。
 
-The client waits for local ICE gathering before POSTing the SDP offer. This
-trades some setup latency for reliability because the current SFU path is
-effectively non-trickle. WHEP trickle ICE is optional, and the Worker PATCH route
-is reserved for the 406 counter-offer answer flow rather than
-`application/trickle-ice-sdpfrag`.
+クライアントは SDP オファーを POST する前にローカルの ICE 収集完了を待ちます。現在の SFU 経路が実質的にノン・トリクル（non-trickle）であるため、セットアップのレイテンシと引き換えに信頼性を確保しています。WHEP においてトリクル ICE は任意仕様であり、Worker の PATCH ルートは `application/trickle-ice-sdpfrag` 用ではなく 406 カウンターオファーへのアンサー送信専用に予約されています。
 
-TURN credentials are fetched from `/api/turn-credentials` before offer creation.
-This is an application-specific authenticated endpoint rather than a generic
-WHEP `OPTIONS`/`Link` implementation.
+TURN 認証情報はオファー作成前に `/api/turn-credentials` から取得します。これは汎用的な WHEP の `OPTIONS`/`Link` 探索ではなく、アプリ固有の認証済みエンドポイントです。
 
-The TURN response filters out ICE URLs on port 53. Cloudflare returns both
-primary and alternate ports, but their Realtime SFU docs note that browsers are
-known to block the alternate port 53. With trickle ICE this would only waste one
-candidate; this app waits for complete ICE gathering before POST/PATCH, so
-filtering port 53 avoids waiting for a browser-side timeout.
+TURN レスポンスではポート 53 の ICE URL を除外しています。Cloudflare はプライマリポートと代替ポートの両方を返しますが、ブラウザが代替ポート 53 をブロックすることが Realtime SFU のドキュメントにも記載されています。トリクル ICE なら候補を 1 つ無駄にするだけで済みますが、このアプリは POST/PATCH の前に完全な ICE 収集完了を待つため、ポート 53 を除外することでブラウザ側のタイムアウト待ちを回避できます。
 
-The custom `Wish-Live-Track-Count` response header tells the frontend how many
-stored live tracks it should expect. If playback negotiates fewer tracks than
-the ingest stored, the client treats that as an incomplete session and reconnects
-instead of accepting a degraded connection as healthy.
+カスタムレスポンスヘッダー `Wish-Live-Track-Count` により、フロントエンドへ期待される保存済み配信トラック数を通知します。インジェストが保存した数より少ないトラックしかネゴシエーションできなかった場合、クライアントは劣化した接続を正常とみなさず不完全なセッションとして再接続を行います。
 
-The client registers mute, unmute, and ended listeners when the PeerConnection
-delivers a remote track. Calling `MediaStream.addTrack()` does not emit `addtrack`,
-so the client also refreshes playable stream state directly in the track handler.
+クライアントは PeerConnection がリモートトラックを受け取ったときに `mute`、`unmute`、`ended` リスナーを登録します。`MediaStream.addTrack()` を呼び出しても `addtrack` イベントは発火しないため、トラックハンドラ内でも直接再生可能なストリーム状態を更新しています。
 
-## Frontend Recovery
+## フロントエンドのリカバリー
 
-The React player owns a `WHEPPlaybackController` instance and explicitly remounts
-it when the user loads a stream, even if the selected owner is unchanged. This
-forces a fresh WHEP session for manual reloads.
+React プレイヤーは `WHEPPlaybackController` インスタンスを所有し、選択された配信者が同じであってもユーザーが配信を読み込む操作をした際には明示的に再マウントします。これにより手動リロード時に必ず新しい WHEP セッションが開始されます。
 
-Playback recovery is viewer-driven and bounded. The frontend reconnects when the
-specific session loses expected tracks, stalls, or disconnects. The client
-treats the play endpoint's status as the source of truth for whether to keep
-waiting: a 503 means the broadcast still exists without a usable session, so
-the client keeps retrying every 2 seconds (the `Retry-After` the Worker sends),
-even on an initial load; a 404 means the broadcast has ended, so playback ends
-at once. Because the server decides, retries use a fixed interval instead of
-backing off.
+再生のリカバリーは視聴者主導かつ有界（上限付き）です。フロントエンドは特定のセッションで期待されるトラックの欠落、ストール（停止）、切断が起きたときに再接続します。クライアントは待機を続けるかどうかの判断基準（source of truth）として再生エンドポイントのステータスを参照します。503 は利用可能なセッションがないものの配信自体は存続していることを意味するため、初回ロード時であっても固定の 2 秒間隔（Worker が返す `Retry-After`）でリトライし続けます。404 は配信終了を意味するため即座に再生を終了します。サーバー側が判断を下すため、リトライにはバックオフではなく固定間隔を使います。
 
-The Worker answers 404 once the grace period has passed even if the alarm that
-ends the broadcast is late, so the client normally learns the end from the
-server. The
-client still gives up after a fixed window (75 seconds) as a safety net, so a
-server that keeps failing or answering 503 is not polled forever. The window
-must outlast the Worker's 60-second publisher reconnect grace period, because
-the viewer usually notices the stall a few seconds after OBS sent DELETE. Other 5xx responses and network
-errors fail the initial attempt, so a broken server still surfaces as an error
-on the initial load. They are retried only once the client is already
-reconnecting, whether after an established session dropped or while waiting out
-503 responses. If the window expires while the server keeps answering 503, playback ends with an error rather than "ended",
-because the Worker never confirmed that the broadcast was over.
+配信終了を処理するアラームが遅れたとしても猶予期間経過後の応答では Worker が 404 を返すため、通常クライアントはサーバー応答から配信終了を知ります。それでも、障害や 503 応答を返し続けるサーバーを永遠にポーリングし続けないよう、安全網として固定の時間枠（75 秒）でタイムアウトします。視聴者がストールを検知するのは通常 OBS が DELETE を送った数秒後になるため、この時間枠は Worker の 60 秒間の配信者再接続猶予期間より長く取る必要があります。その他の 5xx レスポンスやネットワークエラーは初回試行時には失敗として扱い、壊れたサーバーが初回ロード時にきちんとエラーとして表面化するようにしています。これらがリトライされるのは、確立済みセッションが切断された後や 503 応答の待機中など、すでに再接続フェーズに入っている場合のみです。サーバーが 503 を返し続けたまま時間枠が切れた場合、Worker が配信終了を確定させていないため、再生は「終了（ended）」ではなくエラーとして終了します。
 
-The stall check uses inbound `bytesReceived` per receiver as the required
-end-of-stream detector for the common publish-stop path. When a publisher ends a
-stream, the viewer commonly sees exactly this state: SFU session existence, ICE
-connection state, and negotiated track count can remain apparently healthy while
-RTP stops arriving. `bytesReceived` is the browser-side proof that media is still
-flowing for each expected track, so this is the primary path that turns a stopped
-stream into reconnect/end handling. The monitor runs only while the document is
-visible to avoid background throttling noise, and reconnects after a short stall
-because this app assumes a stable network suitable for higher-quality viewing.
+ストール検知では、一般的な配信終了パスを検出する必須手段としてレシーバーごとの受信バイト数（`bytesReceived`）を監視します。配信者が配信を終えた際、視聴者側では「SFU セッションの存在、ICE 接続状態、ネゴシエーション済みトラック数はいずれも正常に見えるのに RTP パケットだけが届かなくなる」という状態がよく発生します。各期待トラックでメディアが流れ続けているかをブラウザ側で証明できるのは `bytesReceived` であるため、これが停止した配信を再接続／終了処理へ導く主要な経路となっています。バックグラウンドスロットリングによる誤検知を避けるため、この監視はドキュメントが可視状態（`visible`）の間だけ動作し、本アプリは高画質視聴に適した安定回線を前提としているため短いストールで再接続を行います。
 
-Track discovery has a separate timeout because `bytesReceived` can only be
-checked after every expected inbound RTP receiver appears in browser stats. If
-the Worker said the live has two stored tracks but the PeerConnection exposes
-only one receiver, the playback session is incomplete even if ICE is connected;
-the client must replace that session rather than accepting partial playback.
+トラック検出にも別のタイムアウトを設けています。`bytesReceived` の監視は、期待されるすべてのインバウンド RTP レシーバーがブラウザの統計情報に現れてからでないとチェックできないためです。Worker が保存済みトラック数を 2 と通知したにもかかわらず PeerConnection にレシーバーが 1 つしか現れない場合、たとえ ICE が接続済みであっても再生セッションは不完全であり、クライアントは部分的な再生を受け入れるのではなくセッションを作り直さなければなりません。
 
-## Notifications
+## 通知
 
-A start notification is sent when `POST /ingest/:userId` starts a new
-broadcast, unless the ingest URL carries `notify=false` or `notify=0`. Resuming
-a broadcast never sends one.
+開始通知は `POST /ingest/:userId` が新しい配信を開始したときに送信されます（インジェスト URL に `notify=false` または `notify=0` が指定されている場合を除く）。配信の再開時には一切送信されません。
 
-Discord live-start notifications are best-effort. The Worker asks Discord to
-return the created message id so the message can be deleted when the broadcast
-ends. The id is stored by `broadcast_id`, not by ingest session, so a reconnect
-while the notification is still being sent does not orphan it. Message ids are
-64-bit snowflakes that do not fit in a JavaScript `number`, so the id is stored,
-and passed between the Worker and the live state, as decimal text.
+Discord への配信開始通知はベストエフォートです。配信終了時にメッセージを削除できるよう、Worker は Discord に対し作成されたメッセージ ID を返すよう要求します。この ID はインジェストセッションごとではなく `broadcast_id` に紐づけて保存されるため、通知送信中に再接続が起きても孤立しません。メッセージ ID は JavaScript の `number` に収まらない 64 ビットの Snowflake であるため、10 進数文字列として保存し、Worker と `LiveState` の間でも 10 進数文字列として受け渡します。
 
-Deleting the notification is the one external call the live state starts, and
-it cannot make that call itself (see Runtime Model). Ending a broadcast
-therefore moves its message id into the `notification_deletes` outbox in the
-same transaction that removes the row. The alarm leases every due entry and
-hands the batch to the Worker's `LiveEffects.deleteStartNotifications`, which
-returns at once and deletes the messages in `waitUntil`. The Worker then
-reports the finished deletes back (`settleNotificationDeletes`) and the object
-drops them. A delete is finished when Discord deleted the message or when
-trying again cannot succeed, such as for a message that was already deleted.
+通知の削除は `LiveState` 自身が起点となって開始する唯一の外部呼び出しであり、`LiveState` 自身はその通信を実行できません（「ランタイムモデル」を参照）。そのため配信を終了する際、行を削除するのと同一のトランザクション内でメッセージ ID を `notification_deletes` アウトボックスへ移します。アラームは期限を迎えたエントリをリースし、バッチを Worker の `LiveEffects.deleteStartNotifications` へ渡します。同メソッドは即座に返却し、`waitUntil` 内でメッセージ削除を実行します。その後 Worker が完了した削除を報告（`settleNotificationDeletes`）すると、`LiveState` はそれらのエントリを削除します。ここでいう「完了」とは、Discord がメッセージを削除したか、メッセージがすでに削除済みであるなど再試行しても成功し得ない状態を指します。
 
-A delete that failed with a network error, timeout, 429, or 5xx is not
-reported, so its lease expires and the alarm hands it out again. Leases start
-at 30 seconds, which covers the time a Worker's `waitUntil` may run, and double
-on every attempt, which puts the six attempts within about 15 minutes. If the
-last one does not finish the delete within 30 seconds, the entry is dropped
-with a `live_notification.delete_abandoned` warning and the message stays in
-Discord. The outbox is at-least-once, so a message can be deleted twice;
-Discord answers the second attempt with 404, which finishes it.
+ネットワークエラー、タイムアウト、429、5xx で失敗した削除は完了報告されないため、リース期限が切れるとアラームが再度払い出します。リース期間は Worker の `waitUntil` が実行され得る 30 秒をカバーする 30 秒から始まり、試行のたびに倍増するため、計 6 回の試行がおおよそ 15 分間に収まります。最後の試行でも 30 秒以内に削除が完了しなかった場合、そのエントリは `live_notification.delete_abandoned` 警告を出して破棄され、メッセージは Discord に残ります。このアウトボックスは少なくとも 1 回（at-least-once）実行されるため同じメッセージが 2 回削除されることがあり得ますが、2 回目の削除に対して Discord は 404 を返し、それによって完了扱いとなります。
 
-A broadcast that ends because a request found its session inactive queues its
-delete the same way, due at once, so the alarm set by that same call hands it
-out right away. If the notification id arrives after its broadcast ended, the
-live state queues it for deletion instead of storing it. If the call that
-stores the id fails with a transient Durable Object error, the Worker retries
-once on a new stub. The method is safe to repeat with the same id. If storing
-still fails, the Worker cannot know whether the id was stored, so it deletes
-the message itself.
+セッションの非アクティブを検出したリクエストによって終了した配信も同様に削除をキューに入れ、即座に期限到来扱いとするため、同じ呼び出しで設定されたアラームが即座に処理を払い出します。配信終了後に通知 ID が到着した場合、`LiveState` は保存せず代わりに削除キューへ登録します。ID を保存する呼び出しが一時的な Durable Object エラーで失敗した場合、Worker は新しいスタブで 1 回だけリトライします。このメソッドは同じ ID で繰り返し呼び出しても安全です。それでも保存に失敗した場合、Worker は ID が保存されたかどうかを判別できないため、Worker 自身がそのメッセージを削除します。
 
-Notification send/delete failures are logged but do not block ingest or
-playback cleanup.
+通知の送信・削除の失敗はログに記録されますが、インジェストや再生のクリーンアップ処理を妨げることはありません。
 
-## Deferred Work
+## 先送りしている作業
 
-Pushing live-state updates to clients is intentionally deferred; the client and
-normal HTTP requests remain the triggers for reconciliation. Do not add SSE for
-it. A Durable Object cannot hibernate while holding SSE connections, so
-`LiveState` would be billed for as long as anyone has the page open. If
-live-state push becomes necessary, revisit it with hibernatable WebSockets.
+クライアントへの配信状態プッシュ通知は意図的に先送りしており、引き続きクライアント側および通常の HTTP リクエストを状態調整のトリガーとします。その目的で SSE を追加しないでください。SSE 接続を保持している間は Durable Object がハイバネートできなくなるため、誰かがページを開いている間ずっと `LiveState` に課金が発生してしまいます。もし配信状態のプッシュ配信が必要になった場合は、ハイバネート可能な WebSocket（hibernatable WebSockets）での実装を再検討してください。

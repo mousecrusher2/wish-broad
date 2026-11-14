@@ -28,8 +28,8 @@ export type DiscordOAuthToken = {
   refreshToken?: string | undefined;
 };
 
-// The guild member response already includes the user object, so `identify`
-// (which only unlocks /users/@me) is unnecessary.
+// サーバーメンバーのレスポンスにユーザーオブジェクトがすでに含まれているため、
+// `/users/@me` のみを解放する `identify` スコープは不要。
 const DISCORD_OAUTH_SCOPE = "guilds.members.read";
 
 export const DISCORD_STATE_COOKIE_NAME = "discord_oauth_state";
@@ -145,8 +145,7 @@ function createDiscordBasicAuthHeader(env: DiscordEnv): string {
 }
 
 /**
- * @throws {DiscordApiError} When the request fails or times out before Discord
- * answers.
+ * @throws {DiscordApiError} Discord の応答前にリクエストが失敗またはタイムアウトした場合。
  */
 async function fetchDiscordWithTimeout(
   endpoint: string,
@@ -172,8 +171,8 @@ async function fetchDiscordWithTimeout(
 }
 
 /**
- * @throws {DiscordApiError} When the request fails, Discord answers with an
- * HTTP error, or the body is not JSON matching `schema`.
+ * @throws {DiscordApiError} リクエストに失敗したか、Discord が HTTP エラーを返したか、
+ * レスポンスボディが `schema` に一致する JSON でない場合。
  */
 async function fetchDiscordJson<TInput, TOutput>(
   endpoint: string,
@@ -295,9 +294,9 @@ export function buildDiscordAuthorizationUrl(
 }
 
 /**
- * Exchange an OAuth authorization code for a Discord access token.
+ * OAuth 認可コードを Discord アクセストークンに交換する。
  *
- * @throws {DiscordApiError} When the request fails or Discord rejects the code.
+ * @throws {DiscordApiError} リクエストに失敗したか、Discord がコードを拒否した場合。
  */
 export async function exchangeCodeForToken(
   env: DiscordEnv,
@@ -333,11 +332,10 @@ export async function exchangeCodeForToken(
 }
 
 /**
- * Look up the token owner's membership in one guild.
+ * 指定されたサーバー（ギルド）におけるトークン所有者のメンバー情報を照会する。
  *
- * @throws {DiscordApiError} When the request fails or Discord rejects it,
- * including `unauthorized`, `forbidden`, or `not_found` for a user who is not a
- * member.
+ * @throws {DiscordApiError} リクエストに失敗したか Discord に拒否された場合。
+ * 非メンバーユーザーに対する `unauthorized`、`forbidden`、`not_found` も含む。
  */
 export async function getGuildMember(
   accessToken: string,
@@ -357,9 +355,9 @@ export async function getGuildMember(
 }
 
 /**
- * Revoke a Discord access token.
+ * Discord アクセストークンを失効（revoke）させる。
  *
- * @throws {DiscordApiError} When the request fails or Discord rejects it.
+ * @throws {DiscordApiError} リクエストに失敗したか Discord に拒否された場合。
  */
 export async function revokeAccessToken(
   env: DiscordEnv,

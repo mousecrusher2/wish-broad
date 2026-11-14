@@ -166,9 +166,9 @@ export async function completeDiscordLogin<E extends ContextWithBindings>(
     );
   }
 
-  // Discord OAuth is used only to prove membership in the authorized guild.
-  // The app session is our own JWT cookie, so revoke the Discord access token
-  // after the membership check regardless of login success.
+  // Discord OAuth は許可されたサーバー（ギルド）への所属証明にのみ使用する。
+  // アプリのセッションには独自の JWT Cookie を使うため、ログイン成否にかかわらず
+  // メンバーシップ確認後に Discord アクセストークンを失効（revoke）する。
   try {
     let member: DiscordGuildMember;
     try {
@@ -195,8 +195,8 @@ export async function completeDiscordLogin<E extends ContextWithBindings>(
   }
 }
 
-// Revocation runs in a `finally`, so it must not throw: an error there would
-// replace the login response. A failed revocation is only logged.
+// 失効処理は `finally` 内で実行されるため例外を投げてはならない（ログインレスポンスが
+// エラーで上書きされてしまうため）。失効に失敗した場合はログ出力のみを行う。
 async function revokeAccessTokenQuietly(
   env: Bindings,
   accessToken: string,

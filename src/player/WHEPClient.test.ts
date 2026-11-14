@@ -48,7 +48,7 @@ class FakeMediaStream extends EventTarget {
     return [...this.tracks];
   }
 
-  // Like the browser API, addTrack() itself does not dispatch "addtrack".
+  // ブラウザの API と同様、addTrack() 自体は "addtrack" イベントを発火しない。
   addTrack(track: FakeTrack): void {
     if (!this.tracks.includes(track)) {
       this.tracks.push(track);

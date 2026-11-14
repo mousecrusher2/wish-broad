@@ -1,7 +1,7 @@
-// Worker entrypoint. Routes live in ./index; this module also exports the
-// classes Wrangler binds, which need the `cloudflare:` runtime modules and
-// therefore stay out of the Node-based tests. Their behavior lives in
-// ./live-state and ./live-end.
+// Worker のエントリーポイント。ルーティング定義は ./index にある。このモジュールでは
+// Wrangler がバインドするクラスもエクスポートしており、それらは `cloudflare:` ランタイム
+// モジュールを必要とするため Node ベースのテスト対象から切り離している。ロジック本体は
+// ./live-state と ./live-end にある。
 import { retryable } from "cloudflare:durable-objects";
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type { LiveRecord, User } from "./database";
@@ -12,13 +12,13 @@ import type { StoredTrack } from "./sfu";
 import type { Bindings } from "./types";
 
 /**
- * Work the LiveState object starts but must not wait for. The object reaches
- * this entrypoint through `ctx.exports`; it is not routed from the internet.
+ * LiveState オブジェクトが開始するが完了を待ってはならない処理群。オブジェクトは
+ * `ctx.exports` を通じてこのエントリーポイントを呼び出し、インターネットからは直接ルーティングされない。
  */
 export class LiveEffects extends WorkerEntrypoint<Bindings> {
   /**
-   * Returns at once and deletes the notifications in waitUntil, so the calling
-   * object is not billed for the time Discord takes to answer.
+   * 即座に返却して waitUntil 内で通知を削除することで、呼び出し元オブジェクトが
+   * Discord の応答待ち時間に対して課金されないようにする。
    */
   deleteStartNotifications(jobs: NotificationDeleteJob[]): void {
     this.ctx.waitUntil(runNotificationDeletes(this.env, jobs));
@@ -26,16 +26,15 @@ export class LiveEffects extends WorkerEntrypoint<Bindings> {
 }
 
 /**
- * Holds live broadcasts, publisher tokens, and users, and ends a broadcast
- * once its reconnect grace period passes. See LiveStateCore.
+ * ライブ配信、配信者トークン、およびユーザーを保持し、再接続猶予期間の経過後に
+ * 配信を終了させる。詳細は LiveStateCore を参照。
  */
 export class LiveState extends DurableObject<Bindings> {
   static {
-    // When a connection drops, the runtime cannot tell whether the call it
-    // carried ran, and repeats it only for a method marked here. Storing a
-    // notification is safe to run twice, and failing it instead costs the
-    // broadcast its start notification.
-    // oxlint-disable-next-line typescript/unbound-method -- retryable marks the prototype function; it does not call it.
+    // 接続が切れた際、ランタイムはその呼び出しが実行済みかどうかを判別できないため、
+    // ここにマークされたメソッドのみを再実行する。開始通知の保存は 2 回実行されても安全であり、
+    // ここで失敗させると配信の開始通知が失われてしまう。
+    // oxlint-disable-next-line typescript/unbound-method -- retryable はプロトタイプ関数に印を付けるだけで呼び出さないため。
     retryable(this.prototype.setLiveNotificationMessageId);
   }
 

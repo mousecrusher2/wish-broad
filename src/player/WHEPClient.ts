@@ -42,8 +42,8 @@ type WHEPSessionLifecycle =
   | { cleanupPromise: Promise<void>; kind: "closingServerSession" }
   | { kind: "disposed" };
 
-// The session only swaps the playback source and starts playback, so it does
-// not need the rest of HTMLVideoElement.
+// セッションは再生ソースの差し替えと再生開始のみを行うため、
+// HTMLVideoElement のそれ以外の機能は不要。
 type WHEPVideoElement = Pick<HTMLVideoElement, "srcObject" | "play">;
 
 type WHEPSessionOptions = {
@@ -124,8 +124,7 @@ export class WHEPSessionError extends Error {
     return this.kind === "resource_not_found";
   }
 
-  // The Worker answers 503 while the broadcast waits for its publisher to
-  // reconnect; 404 means the broadcast ended.
+  // Worker は配信者の再接続待ちの間は 503 を返し、配信終了時は 404 を返す。
   isUnavailable(): boolean {
     return this.kind === "resource_unavailable";
   }
@@ -173,7 +172,7 @@ async function createResponseError(
 }
 
 /**
- * @throws {WHEPSessionError} When the response is not a non-empty SDP body.
+ * @throws {WHEPSessionError} レスポンスが空でない SDP ボディでない場合。
  */
 async function readSdpResponse(response: Response): Promise<string> {
   const contentType = response.headers.get("content-type");
@@ -200,8 +199,8 @@ async function readSdpResponse(response: Response): Promise<string> {
 }
 
 /**
- * @throws {WHEPSessionError} When the response is not a 201 or 406 session
- * with a location header, a valid track count header, and an SDP body.
+ * @throws {WHEPSessionError} location ヘッダー、有効なトラック数ヘッダー、および
+ * SDP ボディを備えた 201 または 406 セッションレスポンスでない場合。
  */
 async function parseWhepSessionResponse(
   response: Response,
@@ -343,7 +342,7 @@ export class WHEPSession {
   private maxRemoteTrackCount = 0;
   private runtimeState: WHEPSessionRuntimeState =
     createRuntimeState("disconnected");
-  // The WHEP session URL the Worker returned, once POST /play succeeded.
+  // POST /play 成功後に Worker が返した WHEP セッション URL。
   private serverSessionLocation: string | null = null;
 
   constructor({
@@ -734,16 +733,15 @@ export class WHEPSession {
   }
 
   /**
-   * Negotiate playback for this session.
+   * このセッションの再生ネゴシエーションを行う。
    *
-   * Resolves quietly when `attemptSignal` aborts or the session is disposed
-   * meanwhile. On any other failure the session disposes itself and reports
-   * `failed` before rethrowing.
+   * 処理中に `attemptSignal` が中断されるかセッションが破棄された場合は静かに
+   * 解決する。それ以外の失敗では、エラーを再スローする前にセッション自身を破棄して
+   * `failed` を報告する。
    *
-   * @throws {WHEPSessionError} When the WHEP resource rejects the session or
-   * answers unexpectedly; its `kind` tells whether the live ended or is
-   * waiting for the publisher.
-   * @throws {Error} When the local SDP negotiation or a request fails.
+   * @throws {WHEPSessionError} WHEP リソースがセッションを拒否したか予期しない応答を
+   * 返した場合。配信終了か配信者の再接続待ちかは `kind` で判別できる。
+   * @throws {Error} ローカル SDP ネゴシエーションまたはリクエストが失敗した場合。
    */
   async start(attemptSignal: AbortSignal): Promise<void> {
     const signal = AbortSignal.any([
@@ -772,8 +770,8 @@ export class WHEPSession {
 
       const localOffer = await this.pc.createOffer();
       await this.pc.setLocalDescription(localOffer);
-      // The current Calls-backed Worker path is effectively non-trickle. Send a
-      // complete local offer instead of relying on later trickle ICE PATCHes.
+      // 現在の Calls ベースの Worker 経路は実質的にノン・トリクルである。後続の
+      // トリクル ICE 用 PATCH に頼らず、完全なローカルオファーを送信する。
       await waitForIceGatheringComplete(this.pc, signal);
 
       const localOfferSdp = this.pc.localDescription?.sdp;
@@ -781,9 +779,9 @@ export class WHEPSession {
         throw new Error("Failed to create local SDP offer");
       }
 
-      // Disposing aborts this POST. If the Worker already created a Calls
-      // playback session by then, nothing DELETEs it; nobody connects to it,
-      // so it carries no media until Calls cleans it up.
+      // 破棄時はこの POST を中断する。その時点で Worker がすでに Calls 再生セッションを
+      // 作成していた場合、DELETE は送られないが誰も接続しないため、Calls がクリーンアップ
+      // するまでメディアは一切流れない。
       const offerResponse = await fetch(resourceUrl, {
         method: "POST",
         headers: {
@@ -797,8 +795,8 @@ export class WHEPSession {
         offerResponse,
         resourceUrl,
       );
-      // Custom Worker header: expected ingest track count. It lets the
-      // controller reject degraded playback that negotiates only a subset.
+      // Worker 独自のヘッダー: 期待されるインジェストトラック数。トラックの一部しか
+      // ネゴシエートされない劣化再生をコントローラー側で拒否できるようにする。
       this.expectedRemoteTrackCount =
         sessionResponse.expectedRemoteTrackCount ?? 0;
       this.serverSessionLocation = sessionResponse.sessionUrl.toString();
@@ -819,8 +817,8 @@ export class WHEPSession {
 
           const localAnswer = await this.pc.createAnswer();
           await this.pc.setLocalDescription(localAnswer);
-          // This PATCH answers a WHEP 406 counter-offer. It is not a trickle ICE
-          // candidate PATCH, so gather the full answer before sending.
+          // この PATCH は WHEP 406 カウンターオファーへの応答であり、トリクル ICE 候補の
+          // PATCH ではないため、送信前に完全なアンサーを収集する。
           await waitForIceGatheringComplete(this.pc, signal);
 
           const localAnswerSdp = this.pc.localDescription.sdp;
