@@ -1,7 +1,5 @@
-import {
-  getPlaybackPhaseMessage,
-  type WHEPPlaybackState,
-} from "../../player/playback-state";
+import type { WHEPPlaybackState } from "../../player/playback-state";
+import { getPlaybackPhaseMessage } from "./messages";
 
 export function ConnectionControls({
   playbackState,

@@ -3,7 +3,7 @@ import {
   WHEPPlaybackController,
   type WHEPPlaybackControllerSnapshot,
 } from "../../player/controller";
-import { getPlaybackPlaceholderText } from "../../player/playback-state";
+import { getPlaybackPlaceholderText } from "./messages";
 
 type WHEPPlayerSnapshot = WHEPPlaybackControllerSnapshot;
 

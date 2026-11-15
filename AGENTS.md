@@ -7,11 +7,18 @@
 `src/` には React 19 + Vite のクライアントコードを配置しています。
 
 - `src/main.tsx`、`src/App.tsx`: アプリケーションの起動処理
-- `src/api/`: API 関連
+- `src/api/`: Worker API の呼び出し（`client.ts`: リクエストとレスポンスの検証、`hooks.ts`: SWR によるプリロードとキャッシュ、React フック）
 - `src/pages/`: ページレベルコンポーネント
-- `src/features/`: 機能ごとの UI（`player/`: 再生画面、`obs-settings/`: OBS 配信設定）
+- `src/features/`: 機能ごとの UI（`player/`: 再生画面と再生状態の表示文言、`obs-settings/`: OBS 配信設定）
 - `src/components/`: 機能に依存しない小さな UI 部品
-- `src/player/`: React に依存しない WHEP 再生処理（再接続処理、TURN 認証情報の取得、PeerConnection のセッション管理）
+- `src/player/`: React に依存しない WHEP 再生処理
+  - `controller.ts`: 再接続とリカバリーを含む再生全体の制御
+  - `session.ts`: 1 回分の PeerConnection のセッション管理
+  - `signaling.ts`: Worker の `/play` との POST・PATCH・DELETE と応答の解析
+  - `stall-monitor.ts`: `bytesReceived` による再生停止の判定
+  - `reconnect-policy.ts`: 再接続の時間と、失敗の分類
+  - `playback-state.ts`: 画面に渡す再生状態の型
+  - `turn-credentials.ts`: TURN 認証情報の取得
 
 ### Worker（`worker/`）
 

@@ -1,14 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("swr", async (importOriginal) => {
-  const original = await importOriginal<typeof import("swr")>();
-  return {
-    ...original,
-    preload: vi.fn<() => undefined>(),
-  };
-});
-
-import { fetchCurrentUser, fetchLiveStreams, UnauthorizedError } from "./hooks";
+import {
+  fetchCurrentUser,
+  fetchLiveStreams,
+  UnauthorizedError,
+} from "./client";
 
 function createJsonResponse(data: unknown, init?: ResponseInit): Response {
   const headers = new Headers(init?.headers);
@@ -19,7 +14,7 @@ function createJsonResponse(data: unknown, init?: ResponseInit): Response {
   });
 }
 
-describe("api data layer", () => {
+describe("api client", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
