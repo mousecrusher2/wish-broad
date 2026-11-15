@@ -231,8 +231,7 @@ export function getLiveState(env: Pick<Bindings, "LIVE_STATE">) {
  * Worker が SFU で観測した結果に基づく状態遷移は、Worker が観測したセッションに対する
  * Compare-And-Set になっている（docs/architecture.md「配信行のセマンティクス」）。
  * 保存されている行がこのオブジェクトの書き込む形式と一致しなければ、その行を読んだメソッドは
- * reject する。reject したメソッドは何も保存していない。メソッドがスローしたエラーは RPC を
- * 越えるとクラスが失われ、同じメッセージの `Error` として呼び出し元に届く。
+ * reject する。reject したメソッドは何も保存していない。
  */
 export class LiveState extends DurableObject<Bindings> {
   constructor(ctx: DurableObjectState, env: Bindings) {
@@ -265,7 +264,12 @@ export class LiveState extends DurableObject<Bindings> {
       }
       const row = rowResult.output;
 
-      const parsedTracksInput: unknown = JSON.parse(row.tracks_json);
+      let parsedTracksInput: unknown;
+      try {
+        parsedTracksInput = JSON.parse(row.tracks_json);
+      } catch (error: unknown) {
+        throw new Error("Invalid lives.tracks_json", { cause: error });
+      }
       const tracksResult = v.safeParse(
         getStoredTracksSchema(),
         parsedTracksInput,

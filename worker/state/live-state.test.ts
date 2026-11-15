@@ -186,7 +186,7 @@ describe("live state", () => {
 
     await insertRawLive(stub, { tracks_json: "'not-json'" });
     await expect(asPromise(stub.getLive("user-1"))).rejects.toThrow(
-      SyntaxError,
+      "Invalid lives.tracks_json",
     );
 
     await insertRawLive(stub, {
