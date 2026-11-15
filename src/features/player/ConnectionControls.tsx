@@ -1,7 +1,7 @@
 import {
   getPlaybackPhaseMessage,
   type WHEPPlaybackState,
-} from "../player/whep-playback";
+} from "../../player/playback-state";
 
 export function ConnectionControls({
   playbackState,

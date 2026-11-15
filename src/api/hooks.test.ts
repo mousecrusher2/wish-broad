@@ -8,7 +8,7 @@ vi.mock("swr", async (importOriginal) => {
   };
 });
 
-import { fetchCurrentUser, fetchLiveStreams, UnauthorizedError } from "./api";
+import { fetchCurrentUser, fetchLiveStreams, UnauthorizedError } from "./hooks";
 
 function createJsonResponse(data: unknown, init?: ResponseInit): Response {
   const headers = new Headers(init?.headers);

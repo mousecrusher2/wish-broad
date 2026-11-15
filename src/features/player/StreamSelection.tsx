@@ -1,13 +1,13 @@
-import type { Live } from "../types";
+import type { Live } from "../../types";
 import { ConnectionControls } from "./ConnectionControls";
-import { WHEPPlaybackState } from "../player/whep-playback";
+import { WHEPPlaybackState } from "../../player/playback-state";
 import {
   buttonClasses,
   headingClasses,
   insetClasses,
   mutedTextClasses,
   radioClasses,
-} from "./styles";
+} from "../../components/styles";
 
 export function StreamSelection({
   resource,

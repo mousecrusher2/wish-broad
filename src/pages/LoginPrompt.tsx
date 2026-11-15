@@ -1,5 +1,5 @@
-import { CenteredCard } from "./components/CenteredCard";
-import { buttonClasses, centeredCardBodyClasses } from "./components/styles";
+import { CenteredCard } from "../components/CenteredCard";
+import { buttonClasses, centeredCardBodyClasses } from "../components/styles";
 
 export function LoginPrompt() {
   return (

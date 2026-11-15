@@ -1,7 +1,7 @@
-import { useBootstrapAuthState } from "./api";
+import { useBootstrapAuthState } from "./api/hooks";
 import { CenteredCard } from "./components/CenteredCard";
-import { LoginPrompt } from "./LoginPrompt";
-import { WHEPPlayerPage } from "./WHEPPlayerPage";
+import { LoginPrompt } from "./pages/LoginPrompt";
+import { WHEPPlayerPage } from "./pages/WHEPPlayerPage";
 import { buttonClasses, centeredCardBodyClasses } from "./components/styles";
 
 function AuthLoadingScreen() {

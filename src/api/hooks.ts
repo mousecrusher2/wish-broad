@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import useSWR, { mutate as mutateGlobal, preload } from "swr";
 import * as v from "valibot";
-import type { Live, User } from "./types";
+import type { Live, User } from "../types";
 
 const currentUserKey = "current-user";
 const liveStreamsKey = "live-streams";

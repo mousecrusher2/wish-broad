@@ -1,4 +1,4 @@
-import type { WHEPConnectionStatus } from "./WHEPClient";
+import type { WHEPConnectionStatus } from "./session";
 
 type WHEPRecoveringConnectionStatus = Exclude<
   WHEPConnectionStatus,

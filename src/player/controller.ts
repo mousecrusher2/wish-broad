@@ -2,7 +2,7 @@ import {
   WHEPSession,
   WHEPSessionError,
   type WHEPInboundReceiverStat,
-} from "./WHEPClient";
+} from "./session";
 import {
   type WHEPReconnectAttemptMode,
   WHEP_RECONNECT_DELAY_MS,
@@ -12,12 +12,12 @@ import {
   resolveReconnectDisposition,
   shouldReconnectForPlaybackStall,
   shouldRecoverEstablishedSession,
-} from "./whep-reconnect";
+} from "./reconnect-policy";
 import {
   createDefaultPlaybackState,
   createPlaybackState,
   type WHEPPlaybackState,
-} from "./whep-playback";
+} from "./playback-state";
 
 type AttemptMode = WHEPReconnectAttemptMode;
 type AttemptId = symbol;

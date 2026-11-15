@@ -1,13 +1,17 @@
 import { useState } from "react";
-import { OBSStreamingInfo } from "./OBSStreamingInfo";
-import { StreamSelection } from "./components/StreamSelection";
-import { WHEPPlayer } from "./WHEPPlayer";
+import { OBSStreamingInfo } from "../features/obs-settings/OBSStreamingInfo";
+import { StreamSelection } from "../features/player/StreamSelection";
+import { WHEPPlayer } from "../features/player/WHEPPlayer";
 import {
   createDefaultSnapshot,
   type WHEPPlaybackControllerSnapshot,
-} from "./player/WHEPPlaybackController";
-import { revalidateLiveStreams, useCurrentUser, useLiveStreams } from "./api";
-import { buttonClasses, surfaceClasses } from "./components/styles";
+} from "../player/controller";
+import {
+  revalidateLiveStreams,
+  useCurrentUser,
+  useLiveStreams,
+} from "../api/hooks";
+import { buttonClasses, surfaceClasses } from "../components/styles";
 
 type PlayerSelection = {
   resourceUserId: string;

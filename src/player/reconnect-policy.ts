@@ -1,4 +1,4 @@
-import { WHEPSessionError, type WHEPSessionSnapshot } from "./WHEPClient";
+import { WHEPSessionError, type WHEPSessionSnapshot } from "./session";
 
 // 以下の値の根拠は docs/architecture.md の「フロントエンドのリカバリー」を参照。
 

@@ -1,12 +1,12 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { useCurrentUser, useLiveToken } from "./api";
+import { useCurrentUser, useLiveToken } from "../../api/hooks";
 import {
   buttonClasses,
   fieldLabelClasses,
   headingClasses,
   inputClasses,
   insetClasses,
-} from "./components/styles";
+} from "../../components/styles";
 
 type LiveTokenState = ReturnType<typeof useLiveToken>["state"];
 type CopyStatus = "url" | "token" | null;

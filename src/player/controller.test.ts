@@ -10,7 +10,7 @@ import {
 import {
   WHEPPlaybackController,
   type WHEPPlaybackControllerSnapshot,
-} from "./WHEPPlaybackController";
+} from "./controller";
 
 vi.mock("./turn-credentials", () => ({
   fetchTurnIceServers: async () => null,

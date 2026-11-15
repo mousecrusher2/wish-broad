@@ -11,7 +11,7 @@ import {
   type WHEPConnectionStatus,
   WHEPSession,
   WHEPSessionError,
-} from "./WHEPClient";
+} from "./session";
 
 const turnMocks = vi.hoisted(() => ({
   fetchTurnIceServers:

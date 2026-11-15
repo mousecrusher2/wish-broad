@@ -7,10 +7,11 @@
 `src/` には React 19 + Vite のクライアントコードを配置しています。
 
 - `src/main.tsx`、`src/App.tsx`: アプリケーションの起動処理
-- `src/api.ts`: API 関連
-- `src/` 直下のページレベルコンポーネント
-- `src/components/`: 小さな UI 部品
-- `src/player/`: WHEP 再生、再接続処理、TURN 認証情報の取得、PeerConnection のセッション管理
+- `src/api/`: API 関連
+- `src/pages/`: ページレベルコンポーネント
+- `src/features/`: 機能ごとの UI（`player/`: 再生画面、`obs-settings/`: OBS 配信設定）
+- `src/components/`: 機能に依存しない小さな UI 部品
+- `src/player/`: React に依存しない WHEP 再生処理（再接続処理、TURN 認証情報の取得、PeerConnection のセッション管理）
 
 ### Worker（`worker/`）
 

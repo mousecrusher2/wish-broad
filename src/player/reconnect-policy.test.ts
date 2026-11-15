@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { WHEPSessionError } from "./WHEPClient";
+import { WHEPSessionError } from "./session";
 import {
   resolveReconnectDisposition,
   shouldReconnectForPlaybackStall,
   shouldReconnectForTrackDiscoveryTimeout,
   shouldRecoverEstablishedSession,
-} from "./whep-reconnect";
+} from "./reconnect-policy";
 
-describe("whep-reconnect", () => {
+describe("reconnect-policy", () => {
   it("classifies reconnect outcomes", () => {
     expect(
       resolveReconnectDisposition(

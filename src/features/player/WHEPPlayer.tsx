@@ -2,8 +2,8 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import {
   WHEPPlaybackController,
   type WHEPPlaybackControllerSnapshot,
-} from "./player/WHEPPlaybackController";
-import { getPlaybackPlaceholderText } from "./player/whep-playback";
+} from "../../player/controller";
+import { getPlaybackPlaceholderText } from "../../player/playback-state";
 
 type WHEPPlayerSnapshot = WHEPPlaybackControllerSnapshot;
 
