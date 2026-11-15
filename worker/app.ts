@@ -1,4 +1,4 @@
-// ミドルウェアの登録とルートの組み立てだけを行う。各ルートの処理は ./routes にある。
+// エラーハンドラーの登録とルートの組み立てだけを行う。各ルートの処理は ./routes にある。
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { createErrorLogFields, logError } from "./lib/logger";

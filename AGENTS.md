@@ -18,15 +18,30 @@
 `worker/` には Cloudflare Worker を配置しています。
 
 - `worker/main.ts`: Worker のエントリーポイント。Hono アプリ、`LiveState` Durable Object クラス、および `LiveState` から呼び出される `LiveEffects` エントリーポイントを再エクスポートするだけの薄いモジュールです。ここに実装ロジックを書かないでください。
-- `worker/app.ts`: ルート構成層
-- `worker/routes/`: ルート
-- `worker/middleware/`: Hono ミドルウェア
-- `worker/live/`: 配信のライフサイクルで Worker が行う処理
-  - `worker/live/effects.ts`: Durable Object からの依頼で Worker が実行する処理
+- `worker/app.ts`: 各ルートのマウントと、未処理エラーの応答だけを行う構成層
+- `worker/routes/`: パスごとのルート（`auth.ts`、`api.ts`、`ingest.ts`、`play.ts`）。リクエストの検証と、`worker/live/` の結果から HTTP 応答への変換だけを行います。`create-app.ts` はサブアプリの生成、`sdp.ts` は SDP 本文の読み取りです。
+- `worker/middleware/`: Hono ミドルウェア（`app-jwt.ts`: 視聴者の JWT Cookie 認証、`hashed-bearer-auth.ts`: OBS の Bearer トークン認証）
+- `worker/live/`: 配信のライフサイクルで Worker が行う処理。HTTP に依存せず、判別共用体の結果を返します。
+  - `worker/live/ingest.ts`、`worker/live/playback.ts`: インジェストと再生の開始・終了
   - `worker/live/session.ts`: 配信行が保持するインジェストセッションの生死の判定と、`DELETE` なしで失われたセッションの扱い
+  - `worker/live/notifications.ts`: 開始通知の送信と削除
+  - `worker/live/tracks.ts`: SFU のトラックを `waitUntil` 内で閉じる処理
+  - `worker/live/effects.ts`: Durable Object からの依頼で Worker が実行する処理（`LiveEffects`）
+  - `worker/live/types.ts`: Worker と `LiveState` の間で受け渡す型
 - `worker/state/`: `LiveState` Durable Object（`live-state.ts`: トランザクション、再接続猶予アラーム、開始通知の削除の引き渡し）と、そのストレージ用 SQL（`database.ts`）
-- `worker/clients/`: 外部 API（Realtime SFU、TURN、Discord OAuth、Discord Webhook）のクライアント
+- `worker/clients/`: 外部 API（Realtime SFU、TURN、Discord OAuth、Discord Webhook）のクライアント。配信のライフサイクルを知らず、API が必要とする値だけを受け取ります。
 - `worker/lib/`: ログ出力やトークン処理などのユーティリティ
+- `worker/testing/`: Worker テストの共有ヘルパー（Worker のビルドには含めません）
+
+### 層の依存方向
+
+`.oxlintrc.json` の `no-restricted-imports` で次の依存方向を強制しています（テストファイルは対象外）。
+
+- `worker/state/` は `worker/live/types.ts` を除く `worker/live/`、`worker/clients/`、`worker/routes/`、`worker/middleware/`、Hono に依存しない
+- `worker/clients/` は `worker/live/`、`worker/state/`、`worker/routes/`、`worker/middleware/`、Hono に依存しない
+- `worker/live/` は `worker/routes/`、`worker/middleware/`、Hono に依存しない
+- `worker/lib/` と `shared/` は他の層に依存しない
+- `src/player/` は React、SWR、`src/api/`、`src/components/`、`src/features/`、`src/pages/` に依存しない
 
 ### Worker とクライアントの取り決め（`shared/`）
 

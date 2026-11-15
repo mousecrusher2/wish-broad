@@ -99,6 +99,115 @@
       }
     },
     {
+      "files": ["worker/state/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": ["hono"],
+            "patterns": [
+              {
+                "group": [
+                  "../app",
+                  "../clients/**",
+                  "../live/**",
+                  "!../live/types",
+                  "../middleware/**",
+                  "../routes/**",
+                  "hono/**"
+                ],
+                "message": "LiveState は外部 API を呼ばず、Worker の処理にも依存しない。共有する型は ../live/types に置く。"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["worker/clients/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": ["hono"],
+            "patterns": [
+              {
+                "group": [
+                  "../app",
+                  "../live/**",
+                  "../middleware/**",
+                  "../routes/**",
+                  "../state/**",
+                  "hono/**"
+                ],
+                "message": "外部 API のクライアントは配信のライフサイクルやルートを知らない。"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["worker/live/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": ["hono"],
+            "patterns": [
+              {
+                "group": [
+                  "../app",
+                  "../middleware/**",
+                  "../routes/**",
+                  "hono/**"
+                ],
+                "message": "ユースケースは HTTP に依存せず、結果を返してルートに応答を選ばせる。"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["worker/lib/**/*.ts", "shared/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["../**"],
+                "message": "ユーティリティと共有の取り決めは他の層に依存しない。"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/player/**/*.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": ["react", "react-dom", "swr"],
+            "patterns": [
+              {
+                "group": [
+                  "../api/**",
+                  "../components/**",
+                  "../features/**",
+                  "../pages/**"
+                ],
+                "message": "WHEP の再生処理は React と UI に依存しない。"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["vite.config.ts", "vitest.config.ts"],
       "env": {
         "node": true
@@ -110,6 +219,7 @@
         "vitest": true
       },
       "rules": {
+        "no-restricted-imports": "off",
         "no-underscore-dangle": "off"
       }
     }
