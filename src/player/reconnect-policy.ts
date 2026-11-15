@@ -1,5 +1,6 @@
 import { LIVE_RECONNECTING_RETRY_AFTER_SECONDS } from "../../shared/protocol";
-import { WHEPSessionError, type WHEPSessionSnapshot } from "./session";
+import type { WHEPSessionSnapshot } from "./session";
+import { WHEPSessionError } from "./signaling";
 
 // 以下の値の根拠は docs/architecture.md の「フロントエンドのリカバリー」を参照。
 
@@ -50,14 +51,4 @@ export function shouldRecoverEstablishedSession(
   status: "disconnected" | "failed";
 } {
   return snapshot.status === "disconnected" || snapshot.status === "failed";
-}
-
-export function shouldReconnectForPlaybackStall(stalledForMs: number): boolean {
-  return stalledForMs >= 3_000;
-}
-
-export function shouldReconnectForTrackDiscoveryTimeout(
-  waitingForExpectedTracksMs: number,
-): boolean {
-  return waitingForExpectedTracksMs >= WHEP_TRACK_DISCOVERY_GRACE_MS;
 }

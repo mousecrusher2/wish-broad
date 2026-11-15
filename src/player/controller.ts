@@ -1,8 +1,5 @@
-import {
-  WHEPSession,
-  WHEPSessionError,
-  type WHEPInboundReceiverStat,
-} from "./session";
+import { WHEPSession } from "./session";
+import { WHEPSessionError } from "./signaling";
 import {
   type WHEPReconnectAttemptMode,
   WHEP_RECONNECT_DELAY_MS,
@@ -10,7 +7,6 @@ import {
   WHEP_SESSION_RECOVERY_GRACE_MS,
   WHEP_TRACK_DISCOVERY_GRACE_MS,
   resolveReconnectDisposition,
-  shouldReconnectForPlaybackStall,
   shouldRecoverEstablishedSession,
 } from "./reconnect-policy";
 import {
@@ -18,6 +14,12 @@ import {
   createPlaybackState,
   type WHEPPlaybackState,
 } from "./playback-state";
+import {
+  createStallMonitorState,
+  observeReceiverStats,
+  type StallMonitorState,
+  WHEP_STALL_POLL_INTERVAL_MS,
+} from "./stall-monitor";
 
 type AttemptMode = WHEPReconnectAttemptMode;
 type AttemptId = symbol;
@@ -31,11 +33,8 @@ type PendingAttempt = {
 
 type PlaybackMonitorState = {
   discoveryTimeoutId: number | null;
-  expectedTrackCount: number;
   intervalId: number | null;
-  lastBytesReceivedByReceiver: Map<string, number>;
-  requiredReceiverIds: string[] | null;
-  receiverStalledForMs: Map<string, number>;
+  stall: StallMonitorState;
   resourceUserId: string;
   session: WHEPSession;
   sync: () => void;
@@ -450,22 +449,16 @@ export class WHEPPlaybackController {
 
     const playbackMonitor: PlaybackMonitorState = {
       discoveryTimeoutId: null,
-      expectedTrackCount: Math.max(
-        1,
+      intervalId: null,
+      stall: createStallMonitorState(
         session.getSnapshot().expectedRemoteTrackCount,
       ),
-      intervalId: null,
-      lastBytesReceivedByReceiver: new Map(),
-      requiredReceiverIds: null,
-      receiverStalledForMs: new Map(),
       resourceUserId,
       session,
       sync: () => {},
       cleanup: () => {},
     };
 
-    // レシーバーごとの bytesReceived の監視は、配信終了を検知する主要な経路である
-    // （docs/architecture.md「フロントエンドのリカバリー」）。
     const stopInterval = () => {
       if (playbackMonitor.intervalId !== null) {
         window.clearInterval(playbackMonitor.intervalId);
@@ -487,7 +480,10 @@ export class WHEPPlaybackController {
         return;
       }
 
-      playbackMonitor.intervalId = window.setInterval(tick, 1_000);
+      playbackMonitor.intervalId = window.setInterval(
+        tick,
+        WHEP_STALL_POLL_INTERVAL_MS,
+      );
     };
 
     const syncMonitor = () => {
@@ -502,7 +498,7 @@ export class WHEPPlaybackController {
       startInterval();
 
       if (
-        playbackMonitor.requiredReceiverIds === null &&
+        playbackMonitor.stall.receivers === null &&
         playbackMonitor.discoveryTimeoutId === null
       ) {
         // レシーバーの統計情報は SDP や track イベントより遅れて現れることがあり、すべて揃うまで
@@ -513,7 +509,7 @@ export class WHEPPlaybackController {
           if (
             this.playbackMonitor !== playbackMonitor ||
             !this.isActiveSession(attemptId, session) ||
-            playbackMonitor.requiredReceiverIds !== null
+            playbackMonitor.stall.receivers !== null
           ) {
             return;
           }
@@ -524,24 +520,6 @@ export class WHEPPlaybackController {
           this.queueReconnect(resourceUserId, { immediate: true });
         }, WHEP_TRACK_DISCOVERY_GRACE_MS);
       }
-    };
-
-    const initializeRequiredReceivers = (
-      receiverStats: WHEPInboundReceiverStat[],
-    ) => {
-      playbackMonitor.requiredReceiverIds = receiverStats.map(
-        (stat) => stat.id,
-      );
-      playbackMonitor.lastBytesReceivedByReceiver.clear();
-      playbackMonitor.receiverStalledForMs.clear();
-      for (const receiverStat of receiverStats) {
-        playbackMonitor.lastBytesReceivedByReceiver.set(
-          receiverStat.id,
-          receiverStat.bytesReceived,
-        );
-        playbackMonitor.receiverStalledForMs.set(receiverStat.id, 0);
-      }
-      clearDiscoveryTimeout();
     };
 
     const tick = () => {
@@ -565,54 +543,22 @@ export class WHEPPlaybackController {
             return;
           }
 
-          if (playbackMonitor.requiredReceiverIds === null) {
-            if (receiverStats.length < playbackMonitor.expectedTrackCount) {
-              return;
-            }
-
-            initializeRequiredReceivers(receiverStats);
-            return;
-          }
-
-          const receiverStatsById = new Map(
-            receiverStats.map((receiverStat) => [
-              receiverStat.id,
-              receiverStat,
-            ]),
+          const observation = observeReceiverStats(
+            playbackMonitor.stall,
+            receiverStats,
           );
-
-          for (const receiverId of playbackMonitor.requiredReceiverIds) {
-            const receiverStat = receiverStatsById.get(receiverId);
-            const previousBytesReceived =
-              playbackMonitor.lastBytesReceivedByReceiver.get(receiverId) ?? 0;
-            const nextStalledForMs =
-              receiverStat === undefined ||
-              receiverStat.bytesReceived <= previousBytesReceived
-                ? (playbackMonitor.receiverStalledForMs.get(receiverId) ?? 0) +
-                  1_000
-                : 0;
-
-            if (receiverStat !== undefined) {
-              playbackMonitor.lastBytesReceivedByReceiver.set(
-                receiverId,
-                receiverStat.bytesReceived,
-              );
-            }
-            playbackMonitor.receiverStalledForMs.set(
-              receiverId,
-              nextStalledForMs,
-            );
-
-            if (!shouldReconnectForPlaybackStall(nextStalledForMs)) {
-              continue;
-            }
-
-            this.clearPlaybackMonitor();
-            this.updateRecoveringPlaybackState(resourceUserId, "disconnected");
-            this.disposeSession();
-            this.queueReconnect(resourceUserId, { immediate: true });
+          playbackMonitor.stall = observation.state;
+          if (observation.state.receivers !== null) {
+            clearDiscoveryTimeout();
+          }
+          if (!observation.stalled) {
             return;
           }
+
+          this.clearPlaybackMonitor();
+          this.updateRecoveringPlaybackState(resourceUserId, "disconnected");
+          this.disposeSession();
+          this.queueReconnect(resourceUserId, { immediate: true });
         })
         .catch((error: Error) => {
           // ポーリング途中で dispose() が PeerConnection を閉じた直後、ブラウザによっては

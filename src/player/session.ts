@@ -1,10 +1,13 @@
-import { LIVE_TRACK_COUNT_HEADER } from "../../shared/protocol";
+import {
+  deleteWhepSession,
+  patchWhepAnswer,
+  postWhepOffer,
+  WHEPSessionError,
+} from "./signaling";
 import { fetchTurnIceServers } from "./turn-credentials";
 
 export type WHEPConnectionStatus =
   "disconnected" | "connecting" | "connected" | "failed";
-
-type WHEPSessionRequestStage = "post" | "patch" | "delete" | "local";
 
 export type WHEPSessionSnapshot = {
   connectionState: RTCPeerConnectionState;
@@ -52,37 +55,6 @@ type WHEPSessionOptions = {
   videoElement: WHEPVideoElement;
 };
 
-type WhepSessionResponse =
-  | {
-      expectedRemoteTrackCount: number | null;
-      kind: "accepted";
-      sdp: string;
-      sessionUrl: URL;
-    }
-  | {
-      expectedRemoteTrackCount: number | null;
-      kind: "counterOffer";
-      sdp: string;
-      sessionUrl: URL;
-    };
-
-type WHEPSessionErrorKind =
-  | "resource_not_found"
-  | "resource_unavailable"
-  | "client_request_error"
-  | "server_request_error"
-  | "unexpected_response"
-  | "invalid_sdp_response"
-  | "missing_session_location"
-  | "aborted";
-
-type WHEPSessionErrorOptions = {
-  kind: WHEPSessionErrorKind;
-  responseText: string | undefined;
-  retryable?: boolean;
-  stage: WHEPSessionRequestStage;
-};
-
 function createRuntimeState(
   status: WHEPConnectionStatus,
   previousState?: WHEPSessionRuntimeState,
@@ -103,157 +75,6 @@ function createRuntimeState(
     case "failed":
       return { hasStream: false, status };
   }
-}
-
-export class WHEPSessionError extends Error {
-  readonly kind: WHEPSessionErrorKind;
-  readonly responseText: string | undefined;
-  readonly retryable: boolean;
-  readonly stage: WHEPSessionRequestStage;
-
-  constructor(message: string, options: WHEPSessionErrorOptions) {
-    super(message);
-    this.name = "WHEPSessionError";
-    this.kind = options.kind;
-    this.responseText = options.responseText;
-    this.retryable = options.retryable ?? true;
-    this.stage = options.stage;
-  }
-
-  isNotFound(): boolean {
-    return this.kind === "resource_not_found";
-  }
-
-  /** 配信者の再接続待ちで再生できない（Worker が 409 を返した）場合に true を返す。 */
-  isUnavailable(): boolean {
-    return this.kind === "resource_unavailable";
-  }
-
-  isClientRequestError(): boolean {
-    return (
-      this.kind === "resource_not_found" || this.kind === "client_request_error"
-    );
-  }
-}
-
-async function readResponseText(
-  response: Response,
-): Promise<string | undefined> {
-  return response
-    .text()
-    .then((responseText) =>
-      responseText.trim().length > 0 ? responseText : undefined,
-    )
-    .catch(() => undefined);
-}
-
-async function createResponseError(
-  response: Response,
-  fallbackMessage: string,
-  stage: WHEPSessionRequestStage,
-): Promise<WHEPSessionError> {
-  const responseText = await readResponseText(response);
-  let kind: WHEPSessionErrorKind = "unexpected_response";
-  if (response.status === 404) {
-    kind = "resource_not_found";
-  } else if (response.status === 409) {
-    kind = "resource_unavailable";
-  } else if (response.status >= 400 && response.status < 500) {
-    kind = "client_request_error";
-  } else if (response.status >= 500) {
-    kind = "server_request_error";
-  }
-
-  return new WHEPSessionError(responseText ?? fallbackMessage, {
-    kind,
-    responseText,
-    stage,
-  });
-}
-
-/**
- * @throws {WHEPSessionError} レスポンスが空でない SDP ボディでない場合。
- */
-async function readSdpResponse(response: Response): Promise<string> {
-  const contentType = response.headers.get("content-type");
-  if (!contentType?.toLowerCase().startsWith("application/sdp")) {
-    throw new WHEPSessionError("Unexpected WHEP SDP response content type", {
-      kind: "invalid_sdp_response",
-      responseText: undefined,
-      retryable: false,
-      stage: "post",
-    });
-  }
-
-  const sdp = await response.text();
-  if (sdp.trim().length === 0) {
-    throw new WHEPSessionError("Empty SDP response", {
-      kind: "invalid_sdp_response",
-      responseText: undefined,
-      retryable: false,
-      stage: "post",
-    });
-  }
-
-  return sdp;
-}
-
-/**
- * @throws {WHEPSessionError} location ヘッダー、有効なトラック数ヘッダー、および
- * SDP ボディを備えた 201 または 406 セッションレスポンスでない場合。
- */
-async function parseWhepSessionResponse(
-  response: Response,
-  resourceUrl: URL,
-): Promise<WhepSessionResponse> {
-  if (response.status !== 201 && response.status !== 406) {
-    throw await createResponseError(
-      response,
-      `Unexpected WHEP session response: ${String(response.status)}`,
-      "post",
-    );
-  }
-
-  const sessionLocation = response.headers.get("location");
-  if (!sessionLocation) {
-    throw new WHEPSessionError("Missing WHEP session location header", {
-      kind: "missing_session_location",
-      responseText: undefined,
-      retryable: false,
-      stage: "post",
-    });
-  }
-
-  const sessionUrl = new URL(sessionLocation, resourceUrl);
-  const expectedRemoteTrackCountHeader = response.headers.get(
-    LIVE_TRACK_COUNT_HEADER,
-  );
-  let expectedRemoteTrackCount: number | null = null;
-  if (expectedRemoteTrackCountHeader !== null) {
-    const parsedExpectedRemoteTrackCount = Number.parseInt(
-      expectedRemoteTrackCountHeader,
-      10,
-    );
-    if (
-      !Number.isInteger(parsedExpectedRemoteTrackCount) ||
-      parsedExpectedRemoteTrackCount < 1
-    ) {
-      throw new WHEPSessionError(`Invalid ${LIVE_TRACK_COUNT_HEADER} header`, {
-        kind: "unexpected_response",
-        responseText: expectedRemoteTrackCountHeader,
-        retryable: false,
-        stage: "post",
-      });
-    }
-    expectedRemoteTrackCount = parsedExpectedRemoteTrackCount;
-  }
-  const sdp = await readSdpResponse(response);
-
-  if (response.status === 406) {
-    return { expectedRemoteTrackCount, kind: "counterOffer", sdp, sessionUrl };
-  }
-
-  return { expectedRemoteTrackCount, kind: "accepted", sdp, sessionUrl };
 }
 
 function readInboundReceiverBytes(report: unknown): number | null {
@@ -344,7 +165,7 @@ export class WHEPSession {
   private runtimeState: WHEPSessionRuntimeState =
     createRuntimeState("disconnected");
   /** POST /play 成功後に Worker が返した WHEP セッション URL。 */
-  private serverSessionLocation: string | null = null;
+  private serverSessionUrl: URL | null = null;
 
   /** @throws {Error} `resourceUserId` が空白だけの場合。 */
   constructor({
@@ -709,29 +530,8 @@ export class WHEPSession {
   }
 
   private async deleteServerSession(): Promise<void> {
-    if (this.serverSessionLocation === null) {
-      return;
-    }
-
-    const sessionUrl = new URL(
-      this.serverSessionLocation,
-      window.location.origin,
-    );
-    let response: Response;
-    try {
-      response = await fetch(sessionUrl, { method: "DELETE" });
-    } catch (error: unknown) {
-      console.warn("Failed to close WHEP session:", error);
-      return;
-    }
-
-    if (!response.ok) {
-      const responseError = await createResponseError(
-        response,
-        `Unexpected WHEP delete response: ${String(response.status)}`,
-        "delete",
-      );
-      console.warn("Failed to close WHEP session:", responseError);
+    if (this.serverSessionUrl !== null) {
+      await deleteWhepSession(this.serverSessionUrl);
     }
   }
 
@@ -758,11 +558,6 @@ export class WHEPSession {
     this.setStatus("connecting");
 
     const runStart = async (): Promise<void> => {
-      const resourceUrl = new URL(
-        `/play/${encodeURIComponent(this.resourceUserId)}`,
-        window.location.origin,
-      );
-
       const turnIceServers = await fetchTurnIceServers(signal);
       if (turnIceServers !== null) {
         this.pc.setConfiguration({
@@ -784,22 +579,14 @@ export class WHEPSession {
 
       // 破棄時はこの POST を中断する。作成済みの SFU 再生セッションには DELETE を送らないが、
       // 誰も接続しないまま SFU が片付ける。
-      const offerResponse = await fetch(resourceUrl, {
-        method: "POST",
-        headers: {
-          Accept: "application/sdp",
-          "Content-Type": "application/sdp",
-        },
-        body: localOfferSdp,
+      const sessionResponse = await postWhepOffer(
+        this.resourceUserId,
+        localOfferSdp,
         signal,
-      });
-      const sessionResponse = await parseWhepSessionResponse(
-        offerResponse,
-        resourceUrl,
       );
       this.expectedRemoteTrackCount =
         sessionResponse.expectedRemoteTrackCount ?? 0;
-      this.serverSessionLocation = sessionResponse.sessionUrl.toString();
+      this.serverSessionUrl = sessionResponse.sessionUrl;
 
       if (!this.isActive()) {
         return;
@@ -826,22 +613,11 @@ export class WHEPSession {
             throw new Error("Failed to create local SDP answer");
           }
 
-          const patchResponse = await fetch(sessionResponse.sessionUrl, {
-            method: "PATCH",
-            headers: {
-              Accept: "application/sdp",
-              "Content-Type": "application/sdp",
-            },
-            body: localAnswerSdp,
+          await patchWhepAnswer(
+            sessionResponse.sessionUrl,
+            localAnswerSdp,
             signal,
-          });
-          if (patchResponse.status !== 204) {
-            throw await createResponseError(
-              patchResponse,
-              `Unexpected WHEP answer response: ${String(patchResponse.status)}`,
-              "patch",
-            );
-          }
+          );
           break;
         }
         case "accepted":

@@ -33,6 +33,13 @@ type ConnectionStates = Partial<{
 
 type RequestRecord = { method: string; url: string };
 
+type FakeReceiver = {
+  getStats: () => Promise<{
+    forEach: (callback: (report: unknown) => void) => void;
+  }>;
+  track: { id: string; kind: string };
+};
+
 let onRemoteDescription: (pc: FakePeerConnection) => void = () => undefined;
 
 class FakeMediaStream extends EventTarget {
@@ -51,6 +58,8 @@ class FakePeerConnection extends EventTarget {
   iceGatheringState: RTCIceGatheringState = "complete";
   signalingState: RTCSignalingState = "stable";
   localDescription: RTCSessionDescriptionInit | null = null;
+  /** 映像レシーバーの bytesReceived を返す。null の間はレシーバーが統計情報に現れない。 */
+  readInboundBytes: (() => number) | null = null;
   remoteDescriptionApplied = false;
 
   constructor() {
@@ -87,8 +96,25 @@ class FakePeerConnection extends EventTarget {
 
   setConfiguration(): void {}
 
-  getReceivers(): RTCRtpReceiver[] {
-    return [];
+  getReceivers(): FakeReceiver[] {
+    const readInboundBytes = this.readInboundBytes;
+    if (readInboundBytes === null) {
+      return [];
+    }
+
+    return [
+      {
+        getStats: async () => ({
+          forEach: (callback) => {
+            callback({
+              bytesReceived: readInboundBytes(),
+              type: "inbound-rtp",
+            });
+          },
+        }),
+        track: { id: "video-track", kind: "video" },
+      },
+    ];
   }
 
   getTransceivers(): RTCRtpTransceiver[] {
@@ -280,6 +306,63 @@ describe("WHEPPlaybackController", () => {
       url: `${ORIGIN}/play/alice/session-2?mid=0`,
     });
     expect(snapshots.at(-1)?.playbackState.phase).toBe("reconnecting");
+  });
+
+  it("replaces the session once inbound media stops flowing", async () => {
+    const requests = mockPlayEndpoint();
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+    lastPeer().readInboundBytes = () => 100;
+    lastPeer().updateStates(ICE_CONNECTED);
+    // 1 秒後の読み取りでレシーバーが揃い、その後 bytesReceived が 3 秒間増えない。
+    await vi.advanceTimersByTimeAsync(3_999);
+    expect(countPosts(requests)).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => {
+      expect(countPosts(requests)).toBe(2);
+    });
+    expect(requests).toContainEqual({
+      method: "DELETE",
+      url: `${ORIGIN}/play/alice/session-1?mid=0`,
+    });
+    expect(snapshots.map((snapshot) => snapshot.playbackState.phase)).toContain(
+      "reconnecting",
+    );
+  });
+
+  it("keeps the session while inbound bytes keep growing", async () => {
+    const requests = mockPlayEndpoint();
+    const { controller, snapshots } = createController();
+    let bytesReceived = 0;
+
+    await controller.load("alice");
+    lastPeer().readInboundBytes = () => {
+      bytesReceived += 100;
+      return bytesReceived;
+    };
+    lastPeer().updateStates(ICE_CONNECTED);
+    // レシーバーが揃った後は、トラック検出の期限（15 秒）を過ぎても作り直さない。
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(requests).toEqual([{ method: "POST", url: `${ORIGIN}/play/alice` }]);
+    expect(snapshots.at(-1)?.playbackState.phase).toBe("connected");
+  });
+
+  it("replaces a session whose receivers never appear in the stats", async () => {
+    const requests = mockPlayEndpoint();
+    const { controller } = createController();
+
+    await controller.load("alice");
+    lastPeer().updateStates(ICE_CONNECTED);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(countPosts(requests)).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => {
+      expect(countPosts(requests)).toBe(2);
+    });
   });
 
   it("waits for the publisher on an initial load that gets 409", async () => {

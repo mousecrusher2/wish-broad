@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { LIVE_RECONNECT_GRACE_MS } from "../../shared/protocol";
-import { WHEPSessionError } from "./session";
+import { WHEPSessionError } from "./signaling";
 import {
   resolveReconnectDisposition,
-  shouldReconnectForPlaybackStall,
-  shouldReconnectForTrackDiscoveryTimeout,
   shouldRecoverEstablishedSession,
   WHEP_RECONNECT_WINDOW_MS,
 } from "./reconnect-policy";
@@ -117,18 +115,5 @@ describe("reconnect-policy", () => {
         status: "failed",
       }),
     ).toBe(true);
-  });
-
-  it("reconnects after three seconds without inbound bytesReceived progress", () => {
-    expect(shouldReconnectForPlaybackStall(0)).toBe(false);
-    expect(shouldReconnectForPlaybackStall(999)).toBe(false);
-    expect(shouldReconnectForPlaybackStall(1_000)).toBe(false);
-    expect(shouldReconnectForPlaybackStall(2_999)).toBe(false);
-    expect(shouldReconnectForPlaybackStall(3_000)).toBe(true);
-  });
-
-  it("waits for all expected inbound RTP receivers before reconnecting", () => {
-    expect(shouldReconnectForTrackDiscoveryTimeout(14_999)).toBe(false);
-    expect(shouldReconnectForTrackDiscoveryTimeout(15_000)).toBe(true);
   });
 });

@@ -7,11 +7,8 @@ import {
   it,
   vi,
 } from "vitest";
-import {
-  type WHEPConnectionStatus,
-  WHEPSession,
-  WHEPSessionError,
-} from "./session";
+import { type WHEPConnectionStatus, WHEPSession } from "./session";
+import { WHEPSessionError } from "./signaling";
 
 const turnMocks = vi.hoisted(() => ({
   fetchTurnIceServers:
