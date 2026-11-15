@@ -1,6 +1,6 @@
-import { Bindings } from "./types";
+import { Bindings } from "../types";
 import * as v from "valibot";
-import { createRandomHex } from "./hex";
+import { createRandomHex } from "../lib/hex";
 import { fetchWithTimeout, trimResponseBody } from "./http";
 
 type DiscordEnv = Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">;

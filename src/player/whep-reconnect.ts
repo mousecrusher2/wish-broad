@@ -7,7 +7,7 @@ export const WHEP_RECONNECT_DELAY_MS = 2_000;
 
 /**
  * 再接続を諦めるまでの時間。Worker の配信者再接続猶予期間
- * （`LIVE_RECONNECT_GRACE_MS`、worker/live-end.ts）より長くなければならない。
+ * （`LIVE_RECONNECT_GRACE_MS`、worker/live/effects.ts）より長くなければならない。
  */
 export const WHEP_RECONNECT_WINDOW_MS = 75_000;
 

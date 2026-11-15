@@ -1,5 +1,5 @@
 import { fetchWithTimeout, trimResponseBody } from "./http";
-import type { Bindings } from "./types";
+import type { Bindings } from "../types";
 
 type NotificationsEnv = Pick<Bindings, "NOTIFICATIONS_DISCORD_WEBHOOK_URL">;
 

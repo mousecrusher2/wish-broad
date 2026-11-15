@@ -1,4 +1,4 @@
-import { Bindings } from "./types";
+import { Bindings } from "../types";
 import * as v from "valibot";
 import { fetchWithTimeout, readResponseBody } from "./http";
 

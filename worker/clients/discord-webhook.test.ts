@@ -1,10 +1,10 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
-import { createErrorLogFields } from "./logger";
+import { createErrorLogFields } from "../lib/logger";
 import {
   deleteLiveStartedNotification,
   DiscordWebhookError,
   sendLiveStartedNotification,
-} from "./notifications";
+} from "./discord-webhook";
 
 async function catchWebhookError(
   promise: Promise<unknown>,

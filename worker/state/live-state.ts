@@ -1,11 +1,11 @@
 // LiveState Durable Object。オブジェクトは自身のストレージとアラーム以外を await せず、
-// 外部 API は Worker と LiveEffects（./live-end）が呼び出す。理由は docs/architecture.md の
+// 外部 API は Worker と LiveEffects（../live/effects）が呼び出す。理由は docs/architecture.md の
 // 「ランタイムモデル」を参照。
 import { DurableObject } from "cloudflare:workers";
 import * as db from "./database";
-import { createErrorLogFields, logInfo, logWarn } from "./logger";
-import type { StoredTrack } from "./sfu";
-import type { Bindings } from "./types";
+import { createErrorLogFields, logInfo, logWarn } from "../lib/logger";
+import type { StoredTrack } from "../clients/sfu";
+import type { Bindings } from "../types";
 
 /**
  * すべての状態を保持する唯一のオブジェクトの名前。1 つにまとめている理由は

@@ -20,12 +20,16 @@ import {
   DiscordApiError,
   type DiscordGuildMember,
   type DiscordOAuthToken,
-} from "./discord";
-import { LiveEffects } from "./live-end";
-import { getLiveState, LiveState } from "./live-state";
-import { LiveNotFoundError, SfuApiError, type StoredTrack } from "./sfu";
-import { hashTokenWithPepper } from "./token-hash";
-import { TurnApiError } from "./turn";
+} from "./clients/discord-oauth";
+import { LiveEffects } from "./live/effects";
+import { getLiveState, LiveState } from "./state/live-state";
+import {
+  LiveNotFoundError,
+  SfuApiError,
+  type StoredTrack,
+} from "./clients/sfu";
+import { hashTokenWithPepper } from "./lib/token-hash";
+import { TurnApiError } from "./clients/turn";
 import type { Bindings } from "./types";
 
 // 外部 API ラッパー（SFU、Discord OAuth、Discord Webhook、TURN）は各モジュールのテストで
@@ -76,26 +80,28 @@ const discordMocks = vi.hoisted(() => ({
     >(),
 }));
 
-vi.mock("./sfu", async () => ({
-  ...(await vi.importActual<typeof import("./sfu")>("./sfu")),
+vi.mock("./clients/sfu", async () => ({
+  ...(await vi.importActual<typeof import("./clients/sfu")>("./clients/sfu")),
   ...sfuMocks,
 }));
-vi.mock("./discord", async () => ({
-  ...(await vi.importActual<typeof import("./discord")>("./discord")),
+vi.mock("./clients/discord-oauth", async () => ({
+  ...(await vi.importActual<typeof import("./clients/discord-oauth")>(
+    "./clients/discord-oauth",
+  )),
   ...discordMocks,
 }));
-vi.mock("./notifications", async () => ({
-  ...(await vi.importActual<typeof import("./notifications")>(
-    "./notifications",
+vi.mock("./clients/discord-webhook", async () => ({
+  ...(await vi.importActual<typeof import("./clients/discord-webhook")>(
+    "./clients/discord-webhook",
   )),
   ...notificationsMocks,
 }));
-vi.mock("./turn", async () => ({
-  ...(await vi.importActual<typeof import("./turn")>("./turn")),
+vi.mock("./clients/turn", async () => ({
+  ...(await vi.importActual<typeof import("./clients/turn")>("./clients/turn")),
   ...turnMocks,
 }));
 
-import app from "./index";
+import app from "./app";
 
 /** 実際のアラームが自動発火しないよう、テストの時計は遠い未来に置く。 */
 const NOW = Date.UTC(2100, 0, 1);
@@ -323,7 +329,7 @@ describe("worker app", () => {
   let consoleError: MockInstance<Console["error"]>;
   let consoleInfo: MockInstance<Console["info"]>;
   let consoleWarn: MockInstance<Console["warn"]>;
-  /** LiveState が開始通知の削除を引き渡す先。削除そのものは ./live-end.test.ts で検証する。 */
+  /** LiveState が開始通知の削除を引き渡す先。削除そのものは ./live/effects.test.ts で検証する。 */
   let dispatch: MockInstance<LiveEffects["deleteStartNotifications"]>;
 
   beforeEach(async () => {

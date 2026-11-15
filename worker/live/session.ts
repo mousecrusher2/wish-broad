@@ -1,10 +1,10 @@
 // 配信行が保持するインジェストセッションの生死の判定と、DELETE なしで失われたセッションの扱い。
 // 判定の各分岐と以下の値の根拠は docs/architecture.md の「インジェストのライフサイクル」を参照。
-import type { LiveRecord } from "./database";
-import { getLiveState } from "./live-state";
-import { createErrorLogFields, logInfo, logWarn } from "./logger";
-import { isSessionActive } from "./sfu";
-import type { Bindings } from "./types";
+import type { LiveRecord } from "../state/database";
+import { getLiveState } from "../state/live-state";
+import { createErrorLogFields, logInfo, logWarn } from "../lib/logger";
+import { isSessionActive } from "../clients/sfu";
+import type { Bindings } from "../types";
 
 /** リクエストがセッションの生存確認時刻を記録する最小間隔。 */
 const LIVE_SESSION_SEEN_ACTIVE_WRITE_INTERVAL_MS = 10_000;

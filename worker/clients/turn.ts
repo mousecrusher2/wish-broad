@@ -1,6 +1,6 @@
 import * as v from "valibot";
 import { fetchWithTimeout, readResponseBody } from "./http";
-import type { Bindings } from "./types";
+import type { Bindings } from "../types";
 
 type TurnEnv = Pick<Bindings, "TURN_KEY_API_TOKEN" | "TURN_KEY_ID">;
 

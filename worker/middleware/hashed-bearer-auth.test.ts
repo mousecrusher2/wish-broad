@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { hashTokenWithPepper } from "./token-hash";
+import { hashTokenWithPepper } from "../lib/token-hash";
 import { hashedBearerAuth } from "./hashed-bearer-auth";
 
 type AuthEnv = { Bindings: { pepper: string; tokenHash: string | null } };

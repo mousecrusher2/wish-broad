@@ -17,10 +17,15 @@
 `worker/` には Cloudflare Worker を配置しています。
 
 - `worker/main.ts`: Worker のエントリーポイント。Hono アプリ、`LiveState` Durable Object クラス、および `LiveState` から呼び出される `LiveEffects` エントリーポイントを再エクスポートするだけの薄いモジュールです。ここに実装ロジックを書かないでください。
-- `worker/index.ts`: ルート構成層
-- `worker/live-state.ts`: Durable Object の挙動（`LiveState`: トランザクション、再接続猶予アラーム、開始通知の削除の引き渡し）
-- `worker/live-end.ts`: Durable Object からの依頼で Worker が実行する処理
-- `worker/live-session.ts`: 配信行が保持するインジェストセッションの生死の判定と、`DELETE` なしで失われたセッションの扱い
+- `worker/app.ts`: ルート構成層
+- `worker/routes/`: ルート
+- `worker/middleware/`: Hono ミドルウェア
+- `worker/live/`: 配信のライフサイクルで Worker が行う処理
+  - `worker/live/effects.ts`: Durable Object からの依頼で Worker が実行する処理
+  - `worker/live/session.ts`: 配信行が保持するインジェストセッションの生死の判定と、`DELETE` なしで失われたセッションの扱い
+- `worker/state/`: `LiveState` Durable Object（`live-state.ts`: トランザクション、再接続猶予アラーム、開始通知の削除の引き渡し）と、そのストレージ用 SQL（`database.ts`）
+- `worker/clients/`: 外部 API（Realtime SFU、TURN、Discord OAuth、Discord Webhook）のクライアント
+- `worker/lib/`: ログ出力やトークン処理などのユーティリティ
 
 ## ビルド・テスト・開発コマンド
 

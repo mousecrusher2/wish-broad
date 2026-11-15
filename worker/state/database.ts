@@ -1,6 +1,6 @@
 // LiveState Durable Object のストレージ用 SQL。ここにある関数はすべて
-// オブジェクト内で同期的に実行され、ルートからは ./live-state の RPC メソッド経由で参照する。
-import type { StoredTrack } from "./sfu";
+// オブジェクト内で同期的に実行され、オブジェクトの外からは ./live-state の RPC メソッド経由で参照する。
+import type { StoredTrack } from "../clients/sfu";
 import * as v from "valibot";
 
 export type User = {

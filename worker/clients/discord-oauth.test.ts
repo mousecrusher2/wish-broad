@@ -7,7 +7,7 @@ import {
   getDiscordErrorMessage,
   getGuildMember,
   revokeAccessToken,
-} from "./discord";
+} from "./discord-oauth";
 
 async function catchDiscordError(
   promise: Promise<unknown>,

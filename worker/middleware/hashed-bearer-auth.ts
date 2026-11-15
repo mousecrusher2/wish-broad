@@ -1,6 +1,6 @@
 import type { Context, MiddlewareHandler } from "hono";
-import { verifyTokenHash } from "./token-hash";
-import { createErrorLogFields, logError } from "./logger";
+import { verifyTokenHash } from "../lib/token-hash";
+import { createErrorLogFields, logError } from "../lib/logger";
 
 type MaybePromise<T> = T | Promise<T>;
 

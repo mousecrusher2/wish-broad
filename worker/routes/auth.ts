@@ -12,11 +12,11 @@ import {
   getDiscordErrorMessage,
   getGuildMember,
   revokeAccessToken,
-} from "./discord";
-import { calcJwtTimestamps, JWT_DURATION_SECONDS } from "./jwt-utils";
-import { getLiveState } from "./live-state";
-import { Bindings, JWTPayload } from "./types";
-import { createErrorLogFields, logError, logWarn } from "./logger";
+} from "../clients/discord-oauth";
+import { calcJwtTimestamps, JWT_DURATION_SECONDS } from "../lib/jwt-utils";
+import { getLiveState } from "../state/live-state";
+import { Bindings, JWTPayload } from "../types";
+import { createErrorLogFields, logError, logWarn } from "../lib/logger";
 
 type ContextWithBindings = { Bindings: Bindings };
 

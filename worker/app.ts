@@ -2,12 +2,12 @@ import type { Context } from "hono";
 import { HonoBase } from "hono/hono-base";
 import { LinearRouter } from "hono/router/linear-router";
 import { JWTPayload, Bindings } from "./types";
-import type { LiveRecord } from "./database";
+import type { LiveRecord } from "./state/database";
 import {
   clearAuthCookie,
   completeDiscordLogin,
   startDiscordLogin,
-} from "./discord-login";
+} from "./routes/auth";
 import {
   type IngestSession,
   type PlaybackSession,
@@ -18,27 +18,27 @@ import {
   startIngest,
   startPlay,
   LiveNotFoundError,
-} from "./sfu";
-import { createLiveToken } from "./live-token";
-import { hashedBearerAuth } from "./hashed-bearer-auth";
+} from "./clients/sfu";
+import { createLiveToken } from "./lib/live-token";
+import { hashedBearerAuth } from "./middleware/hashed-bearer-auth";
 import { HTTPException } from "hono/http-exception";
 import { jwt } from "hono/jwt";
 import { csrf } from "hono/csrf";
-import { sendLiveStartedNotification } from "./notifications";
-import { hashTokenWithPepper } from "./token-hash";
+import { sendLiveStartedNotification } from "./clients/discord-webhook";
+import { hashTokenWithPepper } from "./lib/token-hash";
 import {
   generateTurnIceServers,
   TurnApiError,
   type TurnIceServer,
-} from "./turn";
-import { createErrorLogFields, logError, logInfo, logWarn } from "./logger";
-import { LIVE_RECONNECT_GRACE_MS } from "./live-end";
-import { getLiveState } from "./live-state";
+} from "./clients/turn";
+import { createErrorLogFields, logError, logInfo, logWarn } from "./lib/logger";
+import { LIVE_RECONNECT_GRACE_MS } from "./live/effects";
+import { getLiveState } from "./state/live-state";
 import {
   checkLiveSession,
   type LiveSessionStatus,
   startLostSessionGrace,
-} from "./live-session";
+} from "./live/session";
 
 type AppEnv = {
   Bindings: Bindings;

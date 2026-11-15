@@ -14,7 +14,7 @@ import {
   type MockInstance,
   vi,
 } from "vitest";
-import { LiveEffects } from "./live-end";
+import { LiveEffects } from "../live/effects";
 import type { LiveState } from "./live-state";
 
 /** 実際のアラームが自動発火しないよう、テストの時計は遠い未来に置く。 */
@@ -61,7 +61,7 @@ async function startNotifiedLive(stub: LiveStateStub): Promise<void> {
 describe("live state", () => {
   /**
    * オブジェクトが開始通知の削除を引き渡す LiveEffects エントリーポイント。実際の削除処理は
-   * ./live-end.test.ts で検証する。
+   * ../live/effects.test.ts で検証する。
    */
   let dispatch: MockInstance<LiveEffects["deleteStartNotifications"]>;
   // テストランナーの console はアクセスのたびに別の関数を返すため、スパイは戻り値で参照する。

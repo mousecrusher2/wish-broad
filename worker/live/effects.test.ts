@@ -14,8 +14,8 @@ import {
   type MockInstance,
   vi,
 } from "vitest";
-import { LIVE_RECONNECT_GRACE_MS, runNotificationDeletes } from "./live-end";
-import { getLiveState } from "./live-state";
+import { LIVE_RECONNECT_GRACE_MS, runNotificationDeletes } from "./effects";
+import { getLiveState } from "../state/live-state";
 
 /** 実際のアラームが自動発火しないよう、テストの時計は遠い未来に置く。 */
 const NOW = Date.UTC(2100, 0, 1);

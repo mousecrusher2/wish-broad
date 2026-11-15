@@ -1,8 +1,8 @@
-// Worker のエントリーポイント。Wrangler がバインドするクラスとルーティング（./index）を
+// Worker のエントリーポイント。Wrangler がバインドするクラスとルーティング（./app）を
 // 再エクスポートするだけで、処理は書かない。
-import app from "./index";
+import app from "./app";
 
-export { LiveEffects } from "./live-end";
-export { LiveState } from "./live-state";
+export { LiveEffects } from "./live/effects";
+export { LiveState } from "./state/live-state";
 
 export default app;
