@@ -1845,7 +1845,7 @@ describe("worker app", () => {
 
     const response = await requestPlayOffer();
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(409);
     expect(response.headers.get("retry-after")).toBe("2");
     await expect(getLive("streamer-1")).resolves.toMatchObject({
       sessionId: "resumed-session",
@@ -1875,7 +1875,7 @@ describe("worker app", () => {
 
       const response = await requestPlayOffer();
 
-      expect(response.status).toBe(503);
+      expect(response.status).toBe(409);
       expect(response.headers.get("retry-after")).toBe("2");
       expect(await response.text()).toBe(
         "Live stream is waiting for the publisher to reconnect",
@@ -1976,7 +1976,7 @@ describe("worker app", () => {
     const response = await requestPlayOffer();
 
     // セッションが直前まで生存していたため、OBS はたった今失われたと判定される。
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(409);
     expect(response.headers.get("retry-after")).toBe("2");
     await expect(getLive("streamer-1")).resolves.toMatchObject({
       graceExpiresAt: NOW + 30_000,
@@ -1995,7 +1995,7 @@ describe("worker app", () => {
 
     const response = await requestPlayOffer();
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(409);
     expect(response.headers.get("retry-after")).toBe("2");
     // LiveState が猶予期限と配信を終了させるアラームの両方を設定する。
     await expect(getLive("streamer-1")).resolves.toMatchObject({
@@ -2031,7 +2031,7 @@ describe("worker app", () => {
 
     const response = await requestPlayOffer();
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(409);
     await expect(getLive("streamer-1")).resolves.toMatchObject({
       graceExpiresAt: NOW + 60_000,
     });

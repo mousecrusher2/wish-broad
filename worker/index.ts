@@ -46,7 +46,7 @@ type AppEnv = {
   };
 };
 
-/** 再接続待ちの 503 に付ける Retry-After。プレーヤー側の固定リトライ間隔と一致させている。 */
+/** 再接続待ちの 409 に付ける Retry-After。プレーヤー側の固定リトライ間隔と一致させている。 */
 const LIVE_RECONNECTING_RETRY_AFTER_SECONDS = 2;
 
 // DELETE なしで失われたインジェストセッションの扱いに使う値。それぞれの根拠は
@@ -328,9 +328,9 @@ async function startLostSessionGrace(
   });
 }
 
-/** 配信者の再接続待ちを示す 503。視聴者はこれを受けてリトライを続け、404 は配信終了を表す。 */
+/** 配信者の再接続待ちを示す 409。視聴者はこれを受けてリトライを続け、404 は配信終了を表す。 */
 function respondLiveReconnecting(c: Context<AppEnv>): Response {
-  return c.text("Live stream is waiting for the publisher to reconnect", 503, {
+  return c.text("Live stream is waiting for the publisher to reconnect", 409, {
     "Retry-After": String(LIVE_RECONNECTING_RETRY_AFTER_SECONDS),
   });
 }

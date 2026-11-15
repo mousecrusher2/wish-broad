@@ -238,17 +238,20 @@ describe("WHEPPlaybackController", () => {
     },
   );
 
-  it("handles a rejected offer once even though the session also reports failed", async () => {
-    const requests = mockPlayEndpoint(502);
-    const { controller, snapshots } = createController();
+  it.each([502, 503])(
+    "handles a rejected %i offer once even though the session also reports failed",
+    async (status) => {
+      const requests = mockPlayEndpoint(status);
+      const { controller, snapshots } = createController();
 
-    await controller.load("alice");
-    await vi.advanceTimersByTimeAsync(5_000);
+      await controller.load("alice");
+      await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(snapshots.at(-1)?.playbackState.phase).toBe("error");
-    expect(console.error).toHaveBeenCalledOnce();
-    expect(countPosts(requests)).toBe(1);
-  });
+      expect(snapshots.at(-1)?.playbackState.phase).toBe("error");
+      expect(console.error).toHaveBeenCalledOnce();
+      expect(countPosts(requests)).toBe(1);
+    },
+  );
 
   it("keeps reconnecting when ICE fails on a retry attempt", async () => {
     const requests = mockPlayEndpoint();
@@ -279,9 +282,9 @@ describe("WHEPPlaybackController", () => {
     expect(snapshots.at(-1)?.playbackState.phase).toBe("reconnecting");
   });
 
-  it("waits for the publisher on an initial load that gets 503", async () => {
+  it("waits for the publisher on an initial load that gets 409", async () => {
     const requests = mockPlayEndpoint((postIndex) =>
-      postIndex < 2 ? 503 : 201,
+      postIndex < 2 ? 409 : 201,
     );
     const { controller, snapshots } = createController();
 
@@ -330,7 +333,7 @@ describe("WHEPPlaybackController", () => {
   it("keeps reconnecting through the publisher's 60 second grace period", async () => {
     const publisherBackAt = Date.now() + 3_000 + 60_000;
     const requests = mockPlayEndpoint((postIndex) =>
-      postIndex === 0 || Date.now() >= publisherBackAt ? 201 : 503,
+      postIndex === 0 || Date.now() >= publisherBackAt ? 201 : 409,
     );
     const { controller, snapshots } = createController();
 
@@ -354,8 +357,8 @@ describe("WHEPPlaybackController", () => {
     expect(console.error).not.toHaveBeenCalled();
   });
 
-  it("gives up with an error when the server stays unavailable", async () => {
-    mockPlayEndpoint((postIndex) => (postIndex === 0 ? 201 : 503));
+  it("gives up with an error when the publisher never reconnects", async () => {
+    mockPlayEndpoint((postIndex) => (postIndex === 0 ? 201 : 409));
     const { controller, snapshots } = createController();
 
     await controller.load("alice");

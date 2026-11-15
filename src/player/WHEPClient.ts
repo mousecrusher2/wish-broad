@@ -123,7 +123,7 @@ export class WHEPSessionError extends Error {
     return this.kind === "resource_not_found";
   }
 
-  // Worker は配信者の再接続待ちの間は 503 を返し、配信終了時は 404 を返す。
+  // Worker は配信者の再接続待ちの間は 409 を返し、配信終了時は 404 を返す。
   isUnavailable(): boolean {
     return this.kind === "resource_unavailable";
   }
@@ -155,7 +155,7 @@ async function createResponseError(
   let kind: WHEPSessionErrorKind = "unexpected_response";
   if (response.status === 404) {
     kind = "resource_not_found";
-  } else if (response.status === 503) {
+  } else if (response.status === 409) {
     kind = "resource_unavailable";
   } else if (response.status >= 400 && response.status < 500) {
     kind = "client_request_error";
