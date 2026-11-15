@@ -14,35 +14,15 @@ import {
   type MockInstance,
   vi,
 } from "vitest";
-import { getDueNotificationDeletes } from "./database";
 import { LIVE_RECONNECT_GRACE_MS, runNotificationDeletes } from "./live-end";
-import { getLiveState, LiveState } from "./live-state";
+import { getLiveState } from "./live-state";
 
 /** 実際のアラームが自動発火しないよう、テストの時計は遠い未来に置く。 */
 const NOW = Date.UTC(2100, 0, 1);
 
 const WEBHOOK_URL = env.NOTIFICATIONS_DISCORD_WEBHOOK_URL;
 
-/** 終了済みの配信に対する開始通知を報告し、LiveState の削除キューへ追加させる。 */
-async function queueNotificationDelete(
-  messageId: string,
-  userId: string,
-): Promise<void> {
-  await getLiveState(env).setLiveNotificationMessageId(
-    userId,
-    "ended-broadcast",
-    messageId,
-  );
-}
-
-/** リース中のものも含め、LiveState がまだ Discord から削除済みと把握していない通知。 */
-async function getQueuedMessageIds(): Promise<string[]> {
-  return runInDurableObject(getLiveState(env), (_instance, state) =>
-    getDueNotificationDeletes(state.storage.sql, Number.MAX_SAFE_INTEGER).map(
-      (entry) => entry.messageId,
-    ),
-  );
-}
+const JOB = { messageId: "9", userId: "user-1" };
 
 function getRequestUrl(input: RequestInfo | URL): string {
   return input instanceof Request ? input.url : input.toString();
@@ -79,11 +59,8 @@ describe("live end", () => {
     expect(LIVE_RECONNECT_GRACE_MS).toBe(60_000);
   });
 
-  it("deletes each notification and reports them as finished", async () => {
+  it("deletes each notification", async () => {
     // 実際の Discord snowflake と同様、Number.MAX_SAFE_INTEGER より大きい値。
-    await queueNotificationDelete("1300000000000000123", "user-1");
-    await queueNotificationDelete("9", "user-2");
-
     await runNotificationDeletes(env, [
       { messageId: "1300000000000000123", userId: "user-1" },
       { messageId: "9", userId: "user-2" },
@@ -93,19 +70,19 @@ describe("live end", () => {
       `${WEBHOOK_URL}/messages/1300000000000000123`,
       `${WEBHOOK_URL}/messages/9`,
     ]);
-    await expect(getQueuedMessageIds()).resolves.toEqual([]);
     expect(warn).not.toHaveBeenCalled();
   });
 
   it.each([429, 500, 503])(
-    "leaves a delete that failed with %i for a later attempt",
+    "retries a delete that failed with %i once",
     async (status) => {
-      await queueNotificationDelete("9", "user-1");
-      fetchSpy.mockImplementation(async () => new Response(null, { status }));
+      fetchSpy.mockImplementationOnce(
+        async () => new Response(null, { status }),
+      );
 
-      await runNotificationDeletes(env, [{ messageId: "9", userId: "user-1" }]);
+      await runNotificationDeletes(env, [JOB]);
 
-      await expect(getQueuedMessageIds()).resolves.toEqual(["9"]);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
       expect(warn).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           errorKind: "http_error",
@@ -118,31 +95,38 @@ describe("live end", () => {
     },
   );
 
-  it("leaves a delete that timed out for a later attempt", async () => {
-    await queueNotificationDelete("9", "user-1");
+  it("gives up when the retry also times out", async () => {
     fetchSpy.mockRejectedValue(new DOMException("aborted", "AbortError"));
 
-    await runNotificationDeletes(env, [{ messageId: "9", userId: "user-1" }]);
+    await runNotificationDeletes(env, [JOB]);
 
-    await expect(getQueuedMessageIds()).resolves.toEqual(["9"]);
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         errorKind: "request_timeout",
         event: "live_notification.delete_failed",
         willRetry: true,
       }),
     );
+    expect(warn).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        errorKind: "request_timeout",
+        event: "live_notification.delete_failed",
+        willRetry: false,
+      }),
+    );
   });
 
-  it("finishes a delete that Discord rejects, without another attempt", async () => {
-    await queueNotificationDelete("9", "user-1");
+  it("does not retry a delete that Discord rejects", async () => {
     fetchSpy.mockImplementation(
       async () => new Response("Unknown Message", { status: 404 }),
     );
 
-    await runNotificationDeletes(env, [{ messageId: "9", userId: "user-1" }]);
+    await runNotificationDeletes(env, [JOB]);
 
-    await expect(getQueuedMessageIds()).resolves.toEqual([]);
+    expect(fetchSpy).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         endpoint: "https://discord.com/api/webhooks/123/[redacted]/messages/9",
@@ -153,44 +137,7 @@ describe("live end", () => {
     );
   });
 
-  it("reports only the deletes that finished", async () => {
-    await queueNotificationDelete("8", "user-1");
-    await queueNotificationDelete("9", "user-2");
-    fetchSpy.mockImplementation(async (input) =>
-      getRequestUrl(input).endsWith("/messages/8")
-        ? new Response(null, { status: 503 })
-        : new Response(null, { status: 204 }),
-    );
-
-    await runNotificationDeletes(env, [
-      { messageId: "8", userId: "user-1" },
-      { messageId: "9", userId: "user-2" },
-    ]);
-
-    await expect(getQueuedMessageIds()).resolves.toEqual(["8"]);
-  });
-
-  it("logs instead of throwing when the result cannot be reported", async () => {
-    vi.spyOn(
-      LiveState.prototype,
-      "settleNotificationDeletes",
-    ).mockRejectedValue(new Error("live state unavailable"));
-
-    await expect(
-      runNotificationDeletes(env, [{ messageId: "9", userId: "user-1" }]),
-    ).resolves.toBeUndefined();
-
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        errorMessage: "live state unavailable",
-        event: "live_notification.settle_failed",
-        messageIds: ["9"],
-      }),
-    );
-  });
-
   it("returns to the live state before Discord answers", async () => {
-    await queueNotificationDelete("9", "user-1");
     let respond!: (response: Response) => void;
     fetchSpy.mockReturnValue(
       new Promise<Response>((resolve) => {
@@ -198,23 +145,16 @@ describe("live end", () => {
       }),
     );
 
-    await exports.LiveEffects.deleteStartNotifications([
-      { messageId: "9", userId: "user-1" },
-    ]);
+    await exports.LiveEffects.deleteStartNotifications([JOB]);
 
     // オブジェクトは Discord の応答を待たずに次の処理へ進める。
     await vi.waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledOnce();
     });
-    await expect(getQueuedMessageIds()).resolves.toEqual(["9"]);
-
     respond(new Response(null, { status: 204 }));
-    await vi.waitFor(async () => {
-      await expect(getQueuedMessageIds()).resolves.toEqual([]);
-    });
   });
 
-  it("deletes an ended broadcast's notification once the alarm hands it to the Worker", async () => {
+  it("deletes an ended broadcast's notification once the alarm ends it", async () => {
     const liveState = getLiveState(env);
     const broadcastId = await liveState.insertLive("user-1", "session-1", []);
     assert.isNotNull(broadcastId, "Expected a new broadcast");
@@ -228,12 +168,11 @@ describe("live end", () => {
     vi.setSystemTime(NOW + LIVE_RECONNECT_GRACE_MS);
     await expect(runDurableObjectAlarm(liveState)).resolves.toBe(true);
 
-    await vi.waitFor(async () => {
-      await expect(getQueuedMessageIds()).resolves.toEqual([]);
+    await vi.waitFor(() => {
+      expect(getDeletedMessageUrls(fetchSpy)).toEqual([
+        `${WEBHOOK_URL}/messages/9`,
+      ]);
     });
-    expect(getDeletedMessageUrls(fetchSpy)).toEqual([
-      `${WEBHOOK_URL}/messages/9`,
-    ]);
     await expect(liveState.getLive("user-1")).resolves.toBeNull();
     await expect(
       runInDurableObject(liveState, async (_instance, state) =>

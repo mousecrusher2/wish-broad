@@ -1,5 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { getLiveState, type NotificationDeleteJob } from "./live-state";
+import type { NotificationDeleteJob } from "./live-state";
 import { createErrorLogFields, logWarn } from "./logger";
 import {
   deleteLiveStartedNotification,
@@ -15,66 +15,47 @@ export const LIVE_RECONNECT_GRACE_MS = 60_000;
 
 type LiveEndEnv = Pick<
   Bindings,
-  | "ENVIRONMENT"
-  | "LIVE_STATE"
-  | "LOG_LEVEL"
-  | "NOTIFICATIONS_DISCORD_WEBHOOK_URL"
+  "ENVIRONMENT" | "LOG_LEVEL" | "NOTIFICATIONS_DISCORD_WEBHOOK_URL"
 >;
 
-/**
- * 削除が完了したかどうかを返す。すでに削除済みのメッセージなど、再試行しても
- * 回復しない失敗も完了扱いに含める。失敗はスローせずログ出力する。
- */
-async function deleteNotification(
+/** 削除できたか、再試行しても成功しない失敗だった場合は true を返す。失敗はログ出力する。 */
+async function tryDeleteNotification(
   env: LiveEndEnv,
   job: NotificationDeleteJob,
+  canRetry: boolean,
 ): Promise<boolean> {
   try {
     await deleteLiveStartedNotification(env, BigInt(job.messageId));
     return true;
   } catch (error: unknown) {
-    const willRetry =
+    const retryable =
       !(error instanceof DiscordWebhookError) || error.isRetryable();
     logWarn(env, "live_notification.delete_failed", {
       ...createErrorLogFields(error),
       messageId: job.messageId,
       userId: job.userId,
-      willRetry,
+      willRetry: canRetry && retryable,
     });
-    return !willRetry;
+    return !retryable;
   }
 }
 
 /**
- * 終了した配信の開始通知を Discord から削除し、どの削除が完了したかを LiveState
- * オブジェクトに報告する。ネットワークエラー、タイムアウト、429、または 5xx で
- * 失敗した削除は未報告のまま残すため、リース期限が切れるとオブジェクトが再び払い出す。
+ * 終了した配信の開始通知を Discord から削除する。ベストエフォートのため、ネットワークエラー、
+ * タイムアウト、429、5xx で失敗した削除をすぐに 1 回だけ再試行し、それでも失敗したら諦める。
  * waitUntil 内で実行されるため、すべての失敗はスローせずログ出力する。
  */
 export async function runNotificationDeletes(
   env: LiveEndEnv,
   jobs: readonly NotificationDeleteJob[],
 ): Promise<void> {
-  const finished = await Promise.all(
-    jobs.map(async (job) => deleteNotification(env, job)),
+  await Promise.all(
+    jobs.map(async (job) => {
+      if (!(await tryDeleteNotification(env, job, true))) {
+        await tryDeleteNotification(env, job, false);
+      }
+    }),
   );
-  const finishedMessageIds = jobs.flatMap((job, index) =>
-    finished[index] === true ? [job.messageId] : [],
-  );
-  if (finishedMessageIds.length === 0) {
-    return;
-  }
-
-  try {
-    await getLiveState(env).settleNotificationDeletes(finishedMessageIds);
-  } catch (error: unknown) {
-    // 削除タスクは再度払い出される。その際 Discord はメッセージがすでに存在しない旨を
-    // 返すため、それによって削除タスクは完了扱いとなる。
-    logWarn(env, "live_notification.settle_failed", {
-      ...createErrorLogFields(error),
-      messageIds: finishedMessageIds,
-    });
-  }
 }
 
 /**

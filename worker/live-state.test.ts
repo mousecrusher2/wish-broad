@@ -60,7 +60,7 @@ async function startNotifiedLive(stub: LiveStateStub): Promise<void> {
 
 describe("live state", () => {
   /**
-   * オブジェクトが削除タスクを引き渡す LiveEffects エントリーポイント。実際の削除処理は
+   * オブジェクトが開始通知の削除を引き渡す LiveEffects エントリーポイント。実際の削除処理は
    * ./live-end.test.ts で検証する。
    */
   let dispatch: MockInstance<LiveEffects["deleteStartNotifications"]>;
@@ -159,8 +159,7 @@ describe("live state", () => {
         userId: "user-1",
       }),
     );
-    // Worker が完了報告をしなかった場合、削除タスクは再度払い出される。
-    await expect(getAlarm(stub)).resolves.toBe(NOW + GRACE_MS + 30_000);
+    await expect(getAlarm(stub)).resolves.toBeNull();
   });
 
   it("does not wake the Worker for a broadcast without a notification", async () => {
@@ -189,6 +188,9 @@ describe("live state", () => {
 
     vi.setSystemTime(NOW + GRACE_MS + 5000);
     await expect(stub.getAllLives()).resolves.toEqual([]);
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith([
+      { messageId: "9", userId: "user-1" },
+    ]);
     await expect(stub.getLive("user-1")).resolves.toBeNull();
     // 新しいインジェストは、終了済みの配信を再開するのではなく新しい配信を開始する。
     await expect(
@@ -197,13 +199,7 @@ describe("live state", () => {
     await expect(
       stub.insertLive("user-1", "session-2", []),
     ).resolves.not.toBeNull();
-
-    // 終了した配信の通知削除は即座に実行期限を迎える。
-    await expect(getAlarm(stub)).resolves.toBe(NOW + GRACE_MS + 5000);
-    await runDurableObjectAlarm(stub);
-    expect(dispatch).toHaveBeenCalledExactlyOnceWith([
-      { messageId: "9", userId: "user-1" },
-    ]);
+    await expect(getAlarm(stub)).resolves.toBeNull();
   });
 
   it("ends a broadcast whose session was found inactive", async () => {
@@ -222,11 +218,10 @@ describe("live state", () => {
         userId: "user-1",
       }),
     );
-    await expect(getAlarm(stub)).resolves.toBe(NOW);
-    await runDurableObjectAlarm(stub);
     expect(dispatch).toHaveBeenCalledExactlyOnceWith([
       { messageId: "9", userId: "user-1" },
     ]);
+    await expect(getAlarm(stub)).resolves.toBeNull();
   });
 
   it("does not end a broadcast that is waiting for the publisher", async () => {
@@ -238,77 +233,27 @@ describe("live state", () => {
     await expect(stub.getLive("user-1")).resolves.not.toBeNull();
   });
 
-  it("queues a notification for deletion when its broadcast already ended", async () => {
+  it("hands a notification to the Worker when its broadcast already ended", async () => {
     const stub = createLiveState();
 
     await expect(
       stub.setLiveNotificationMessageId("user-1", "ended-broadcast", "7"),
     ).resolves.toBe(false);
 
-    await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
     expect(dispatch).toHaveBeenCalledExactlyOnceWith([
       { messageId: "7", userId: "user-1" },
     ]);
-  });
-
-  it("hands out an unsettled delete with a doubling lease and gives up after six attempts", async () => {
-    const stub = createLiveState();
-    await startNotifiedLive(stub);
-    await stub.endLive("user-1", "session-1");
-
-    let now = NOW;
-    // 最終試行は結果の待機のみを行うため、配信終了から 16 分後に削除タスクは破棄される。
-    for (const leaseMs of [30_000, 60_000, 120_000, 240_000, 480_000, 30_000]) {
-      // oxlint-disable-next-line no-await-in-loop -- 各試行は直前のリース期限切れ後に順番に行われるため。
-      await expect(getAlarm(stub)).resolves.toBe(now);
-      vi.setSystemTime(now);
-      // oxlint-disable-next-line no-await-in-loop -- 同上。
-      await runDurableObjectAlarm(stub);
-      now += leaseMs;
-    }
-    expect(dispatch).toHaveBeenCalledTimes(6);
-    expect(now).toBe(NOW + 16 * 60_000);
-    await expect(getAlarm(stub)).resolves.toBe(now);
-
-    vi.setSystemTime(now);
-    await runDurableObjectAlarm(stub);
-
-    expect(dispatch).toHaveBeenCalledTimes(6);
     await expect(getAlarm(stub)).resolves.toBeNull();
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        attempts: 6,
-        event: "live_notification.delete_abandoned",
-        messageId: "9",
-        userId: "user-1",
-      }),
-    );
   });
 
-  it("stops handing out a delete once the Worker settles it", async () => {
+  it("ends the broadcast and gives up on its notification when the Worker cannot be reached", async () => {
     const stub = createLiveState();
     await startNotifiedLive(stub);
-    await stub.endLive("user-1", "session-1");
-    await runDurableObjectAlarm(stub);
-    await expect(getAlarm(stub)).resolves.toBe(NOW + 30_000);
-
-    await stub.settleNotificationDeletes(["9", "unknown"]);
-
-    await expect(getAlarm(stub)).resolves.toBeNull();
-    vi.setSystemTime(NOW + 30_000);
-    await expect(runDurableObjectAlarm(stub)).resolves.toBe(false);
-    expect(dispatch).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a delete leased when the Worker cannot be reached", async () => {
-    const stub = createLiveState();
-    await startNotifiedLive(stub);
-    await stub.endLive("user-1", "session-1");
     dispatch.mockImplementationOnce(() => {
       throw new Error("worker unavailable");
     });
 
-    await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
+    await expect(stub.endLive("user-1", "session-1")).resolves.toBe(true);
 
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
@@ -317,10 +262,9 @@ describe("live state", () => {
         messageIds: ["9"],
       }),
     );
-    await expect(getAlarm(stub)).resolves.toBe(NOW + 30_000);
-    vi.setSystemTime(NOW + 30_000);
-    await runDurableObjectAlarm(stub);
-    expect(dispatch).toHaveBeenCalledTimes(2);
+    await expect(stub.getLive("user-1")).resolves.toBeNull();
+    await expect(getAlarm(stub)).resolves.toBeNull();
+    expect(dispatch).toHaveBeenCalledOnce();
   });
 
   it("wakes for the earliest of several deadlines", async () => {
@@ -362,24 +306,31 @@ describe("live state", () => {
     await expect(getAlarm(stub)).resolves.toBe(NOW + GRACE_MS);
   });
 
-  it("does not report a live end if its alarm update rolls back", async () => {
+  it("does not report or hand off a live end if its alarm update rolls back", async () => {
     const stub = createLiveState();
     await startNotifiedLive(stub);
+    await stub.startLiveReconnectGrace("user-1", "session-1", GRACE_MS);
     info.mockClear();
-    await failNextSetAlarm(stub);
+    await runInDurableObject(stub, (_instance, state) => {
+      vi.spyOn(state.storage, "deleteAlarm").mockRejectedValueOnce(
+        new Error("storage unavailable"),
+      );
+    });
+    vi.setSystemTime(NOW + GRACE_MS);
 
-    await expect(
-      asPromise(stub.endLive("user-1", "session-1")),
-    ).rejects.toThrow("storage unavailable");
+    await expect(asPromise(stub.getAllLives())).rejects.toThrow(
+      "storage unavailable",
+    );
 
     expect(info).not.toHaveBeenCalled();
-    await expect(stub.getLive("user-1")).resolves.not.toBeNull();
-    await expect(getAlarm(stub)).resolves.toBeNull();
+    expect(dispatch).not.toHaveBeenCalled();
+    await expect(getAlarm(stub)).resolves.toBe(NOW + GRACE_MS);
 
-    await expect(stub.endLive("user-1", "session-1")).resolves.toBe(true);
+    await expect(stub.getLive("user-1")).resolves.toBeNull();
     expect(info).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ event: "live.ended", userId: "user-1" }),
     );
+    expect(dispatch).toHaveBeenCalledOnce();
   });
 
   it("rejects an invalid notification id without poisoning later calls", async () => {

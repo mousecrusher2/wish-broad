@@ -4,18 +4,14 @@ import { assert, describe, expect, it } from "vitest";
 import {
   endLive,
   endOverdueLives,
-  enqueueNotificationDelete,
   getAllLives,
-  getDueNotificationDeletes,
   getLive,
   getLiveTokenHash,
   getNextWakeAt,
   hasLiveToken,
   insertLive,
-  leaseNotificationDelete,
   markLiveSessionSeenActive,
   migrateSchema,
-  removeNotificationDelete,
   resumeLive,
   setLiveNotificationMessageId,
   setLiveToken,
@@ -182,12 +178,6 @@ describe("live state SQL", () => {
       expect(() =>
         markLiveSessionSeenActive(sql, "user-1", "session-1", NaN, 10_000),
       ).toThrow("Invalid lives.session_seen_active_at");
-      expect(() => {
-        enqueueNotificationDelete(sql, "bad-id", "user-1", NOW);
-      }).toThrow("Invalid notification_deletes.message_id");
-      expect(() => {
-        enqueueNotificationDelete(sql, "1", "user-1", NOW + 0.5);
-      }).toThrow("Invalid notification_deletes.next_attempt_at");
 
       expect(getLive(sql, "user-1")).toMatchObject({
         graceExpiresAt: null,
@@ -343,41 +333,7 @@ describe("live state SQL", () => {
     });
   });
 
-  it("hands out notification deletes once they are due, oldest first", async () => {
-    await withSql((sql) => {
-      enqueueNotificationDelete(sql, "2", "user-2", NOW + 5);
-      enqueueNotificationDelete(sql, "1", "user-1", NOW);
-      // 同じメッセージは 1 回だけキューに追加される。
-      enqueueNotificationDelete(sql, "1", "user-1", NOW + 99);
-
-      expect(getDueNotificationDeletes(sql, NOW - 1)).toEqual([]);
-      expect(getDueNotificationDeletes(sql, NOW)).toEqual([
-        { attempts: 0, messageId: "1", userId: "user-1" },
-      ]);
-      expect(getDueNotificationDeletes(sql, NOW + 5)).toEqual([
-        { attempts: 0, messageId: "1", userId: "user-1" },
-        { attempts: 0, messageId: "2", userId: "user-2" },
-      ]);
-    });
-  });
-
-  it("hides a leased notification delete until its lease expires", async () => {
-    await withSql((sql) => {
-      enqueueNotificationDelete(sql, "1", "user-1", NOW);
-
-      leaseNotificationDelete(sql, "1", NOW + 30_000);
-
-      expect(getDueNotificationDeletes(sql, NOW + 29_999)).toEqual([]);
-      expect(getDueNotificationDeletes(sql, NOW + 30_000)).toEqual([
-        { attempts: 1, messageId: "1", userId: "user-1" },
-      ]);
-
-      removeNotificationDelete(sql, "1");
-      expect(getDueNotificationDeletes(sql, NOW + 30_000)).toEqual([]);
-    });
-  });
-
-  it("reports the earliest grace deadline or due notification delete", async () => {
+  it("reports the earliest grace deadline", async () => {
     await withSql((sql) => {
       insertLive(sql, "live-user", "live-session", []);
       expect(getNextWakeAt(sql)).toBeNull();
@@ -386,11 +342,9 @@ describe("live state SQL", () => {
       startLiveReconnectGrace(sql, "waiting-user", "waiting-session", NOW + 60);
       expect(getNextWakeAt(sql)).toBe(NOW + 60);
 
-      enqueueNotificationDelete(sql, "1", "user-1", NOW + 30);
+      insertLive(sql, "other-user", "other-session", []);
+      startLiveReconnectGrace(sql, "other-user", "other-session", NOW + 30);
       expect(getNextWakeAt(sql)).toBe(NOW + 30);
-
-      removeNotificationDelete(sql, "1");
-      expect(getNextWakeAt(sql)).toBe(NOW + 60);
     });
   });
 

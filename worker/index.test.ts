@@ -16,12 +16,12 @@ import {
   type MockInstance,
   vi,
 } from "vitest";
-import { getDueNotificationDeletes } from "./database";
 import {
   DiscordApiError,
   type DiscordGuildMember,
   type DiscordOAuthToken,
 } from "./discord";
+import { LiveEffects } from "./live-end";
 import { getLiveState, LiveState } from "./live-state";
 import { LiveNotFoundError, SfuApiError, type StoredTrack } from "./sfu";
 import { hashTokenWithPepper } from "./token-hash";
@@ -40,7 +40,6 @@ const callsMocks = vi.hoisted(() => ({
 }));
 
 const notificationsMocks = vi.hoisted(() => ({
-  deleteLiveStartedNotification: vi.fn<() => Promise<unknown>>(),
   sendLiveStartedNotification: vi.fn<() => Promise<unknown>>(),
 }));
 
@@ -286,15 +285,6 @@ async function getStoredNotificationMessageId(
   );
 }
 
-/** LiveState が Discord から削除するためにキューに積んでいる開始通知。 */
-async function getQueuedNotificationDeletes(): Promise<string[]> {
-  return runInDurableObject(getLiveState(env), (_instance, state) =>
-    getDueNotificationDeletes(state.storage.sql, Number.MAX_SAFE_INTEGER).map(
-      (entry) => entry.messageId,
-    ),
-  );
-}
-
 async function getStoredUsers(): Promise<Record<string, SqlStorageValue>[]> {
   return runInDurableObject(getLiveState(env), (_instance, state) =>
     state.storage.sql
@@ -333,9 +323,14 @@ describe("worker app", () => {
   let consoleError: MockInstance<Console["error"]>;
   let consoleInfo: MockInstance<Console["info"]>;
   let consoleWarn: MockInstance<Console["warn"]>;
+  /** LiveState が開始通知の削除を引き渡す先。削除そのものは ./live-end.test.ts で検証する。 */
+  let dispatch: MockInstance<LiveEffects["deleteStartNotifications"]>;
 
   beforeEach(async () => {
     vi.setSystemTime(NOW);
+    dispatch = vi
+      .spyOn(LiveEffects.prototype, "deleteStartNotifications")
+      .mockImplementation(() => undefined);
     vi.spyOn(console, "debug").mockImplementation(() => undefined);
     consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -389,9 +384,6 @@ describe("worker app", () => {
       sdpType: "answer",
       tracks: createTracks("viewer-session"),
     });
-    notificationsMocks.deleteLiveStartedNotification.mockResolvedValue(
-      undefined,
-    );
     notificationsMocks.sendLiveStartedNotification.mockResolvedValue({
       messageId: 1n,
     });
@@ -1008,8 +1000,10 @@ describe("worker app", () => {
       tracks: INGEST_SESSION.tracks,
     });
     expect(live?.broadcastId).not.toBe(staleBroadcastId);
-    // 終了した配信の通知削除は LiveState 自身が引き受ける。
-    await expect(getQueuedNotificationDeletes()).resolves.toEqual(["5"]);
+    // 終了した配信の通知削除は LiveState が Worker に引き渡す。
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith([
+      { messageId: "5", userId: "user-1" },
+    ]);
 
     await waitOnExecutionContext(executionContext);
 
@@ -1019,9 +1013,6 @@ describe("worker app", () => {
       "http://localhost/",
     );
     await expect(getStoredNotificationMessageId()).resolves.toBe("1");
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
     expect(consoleWarn).not.toHaveBeenCalled();
   });
 
@@ -1086,7 +1077,9 @@ describe("worker app", () => {
     const live = await getLive();
     expect(live).toMatchObject({ sessionId: "new-session" });
     expect(live?.broadcastId).not.toBe(previousBroadcastId);
-    await expect(getQueuedNotificationDeletes()).resolves.toEqual(["5"]);
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith([
+      { messageId: "5", userId: "user-1" },
+    ]);
     await waitOnExecutionContext(executionContext);
     expect(notificationsMocks.sendLiveStartedNotification).toHaveBeenCalled();
     await expect(getStoredNotificationMessageId()).resolves.toBe("1");
@@ -1119,9 +1112,7 @@ describe("worker app", () => {
       "https://wish-broad.example/",
     );
     await expect(getStoredNotificationMessageId()).resolves.toBe("1");
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
     expect(consoleWarn).not.toHaveBeenCalled();
   });
 
@@ -1153,7 +1144,7 @@ describe("worker app", () => {
     await expect(getStoredNotificationMessageId()).resolves.toBeNull();
   });
 
-  it("leaves an orphaned start notification to the live state when the broadcast ended before persistence", async () => {
+  it("hands an orphaned start notification to the Worker when the broadcast ended before persistence", async () => {
     notificationsMocks.sendLiveStartedNotification.mockImplementation(
       async () => {
         // 通知の送信中に、Calls 上で失われたセッションとして配信が終了した。
@@ -1169,15 +1160,14 @@ describe("worker app", () => {
 
     await waitOnExecutionContext(executionContext);
 
-    // メッセージ ID を報告したことで LiveState 側の削除キューに積まれた。
-    await expect(getQueuedNotificationDeletes()).resolves.toEqual(["1"]);
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
+    // 保存先の配信がないため、LiveState がメッセージの削除を Worker に引き渡した。
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith([
+      { messageId: "1", userId: "user-1" },
+    ]);
     expect(consoleWarn).not.toHaveBeenCalled();
   });
 
-  it("deletes the notification and logs when persisting its id throws", async () => {
+  it("logs and leaves the notification when persisting its id throws", async () => {
     vi.spyOn(
       LiveState.prototype,
       "setLiveNotificationMessageId",
@@ -1196,40 +1186,9 @@ describe("worker app", () => {
         messageId: "1",
         sessionId: "new-session",
         userId: "user-1",
-        willRetry: false,
       }),
     );
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).toHaveBeenCalledWith(env, 1n);
-  });
-
-  it("retries a transient live state failure before deleting the start notification", async () => {
-    const persist = vi
-      .spyOn(LiveState.prototype, "setLiveNotificationMessageId")
-      .mockImplementationOnce(async () => {
-        throw Object.assign(new Error("object restarting"), {
-          retryable: true,
-        });
-      });
-    const executionContext = createExecutionContext();
-
-    const response = await requestIngestOffer(executionContext);
-    expect(response.status).toBe(201);
-    await waitOnExecutionContext(executionContext);
-
-    expect(persist).toHaveBeenCalledTimes(2);
-    expect(consoleWarn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        attempt: 1,
-        event: "live_notification.persist_failed",
-        willRetry: true,
-      }),
-    );
-    await expect(getStoredNotificationMessageId()).resolves.toBe("1");
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("returns 204 for GET on the WHIP endpoint", async () => {
@@ -1535,9 +1494,7 @@ describe("worker app", () => {
     expect(
       notificationsMocks.sendLiveStartedNotification,
     ).not.toHaveBeenCalled();
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
     expect(consoleInfo).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ingest.resumed",
@@ -1656,7 +1613,7 @@ describe("worker app", () => {
     );
     // 開始通知は猶予期間が経過して配信が終了するまで維持される。
     await expect(getStoredNotificationMessageId()).resolves.toBe("5");
-    await expect(getQueuedNotificationDeletes()).resolves.toEqual([]);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("accepts a repeated ingest delete during the grace period", async () => {
@@ -1821,12 +1778,11 @@ describe("worker app", () => {
     expect(response.status).toBe(404);
     expect(await response.text()).toBe("Live stream not found: streamer-1");
     await expect(getLive("streamer-1")).resolves.toBeNull();
-    // 配信を終了したことで、その開始通知が LiveState の削除キューに追加された。
-    await expect(getQueuedNotificationDeletes()).resolves.toEqual(["5"]);
+    // 配信を終了したことで、その開始通知の削除が Worker に引き渡された。
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith([
+      { messageId: "5", userId: "streamer-1" },
+    ]);
     await waitOnExecutionContext(executionContext);
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
     expect(callsMocks.startPlay).not.toHaveBeenCalled();
   });
 

@@ -38,23 +38,13 @@ export type EndedLive = {
   userId: string;
 };
 
-/** まだ Discord から削除されていない開始通知。 */
-export type NotificationDelete = {
-  /** これまでに削除タスクを Worker に払い出した回数。 */
-  attempts: number;
-  messageId: string;
-  userId: string;
-};
-
 /**
  * 各エントリは 1 つのスキーマバージョンを表す。オブジェクトは起動時に未適用のエントリを
  * 順に適用するため、デプロイ済みのエントリは編集せず、変更は末尾に新しいエントリとして追加する。
  *
  * lives の列は LiveRecord と EndedLive の各フィールドに対応する（tracks_json は
  * StoredTrack[] の JSON）。live_tokens.token_hash は生トークンではなく HMAC。
- * notification_deletes は削除待ちの開始通知のアウトボックスで、next_attempt_at
- * （Unix エポックミリ秒）以降に Worker へ払い出す。状態遷移は docs/architecture.md の
- * 「配信行（lives）のセマンティクス」と「通知」を参照。
+ * 状態遷移は docs/architecture.md の「配信行のセマンティクス」を参照。
  */
 const SCHEMA_MIGRATIONS: readonly (readonly string[])[] = [
   [
@@ -74,12 +64,6 @@ const SCHEMA_MIGRATIONS: readonly (readonly string[])[] = [
     `CREATE TABLE users (
       user_id TEXT PRIMARY KEY,
       display_name TEXT NOT NULL
-    )`,
-    `CREATE TABLE notification_deletes (
-      message_id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      attempts INTEGER NOT NULL,
-      next_attempt_at INTEGER NOT NULL
     )`,
   ],
 ];
@@ -235,23 +219,6 @@ function getEndedLiveRowSchema() {
   endedLiveRowSchema ??= createEndedLiveRowSchema();
 
   return endedLiveRowSchema;
-}
-
-function createNotificationDeleteRowSchema() {
-  return v.object({
-    attempts: v.pipe(v.number(), v.integer()),
-    message_id: v.string(),
-    user_id: v.string(),
-  });
-}
-
-let notificationDeleteRowSchema:
-  ReturnType<typeof createNotificationDeleteRowSchema> | undefined;
-
-function getNotificationDeleteRowSchema() {
-  notificationDeleteRowSchema ??= createNotificationDeleteRowSchema();
-
-  return notificationDeleteRowSchema;
 }
 
 function createNextWakeRowSchema() {
@@ -526,96 +493,14 @@ export function endOverdueLives(sql: SqlStorage, now: number): EndedLive[] {
 }
 
 /**
- * `nextAttemptAt` 以降に削除を実行するよう開始通知をキューに追加する。
- * すでにキューに入っている通知については試行回数と次回予定時刻を維持する。
- *
- * @throws {Error} `messageId` が 10 進数文字列の Discord snowflake でない場合、または
- * `nextAttemptAt` が整数でない場合。この場合、何も保存されない。
- */
-export function enqueueNotificationDelete(
-  sql: SqlStorage,
-  messageId: string,
-  userId: string,
-  nextAttemptAt: number,
-): void {
-  assertNotificationMessageId(messageId, "notification_deletes.message_id");
-  assertTimestamp(nextAttemptAt, "notification_deletes.next_attempt_at");
-  sql.exec(
-    "INSERT INTO notification_deletes (message_id, user_id, attempts, next_attempt_at) VALUES (?, ?, 0, ?) ON CONFLICT (message_id) DO NOTHING",
-    messageId,
-    userId,
-    nextAttemptAt,
-  );
-}
-
-/**
- * 時刻 `now` 時点で払い出し可能な通知削除タスクを古い順に返す。
- *
- * @throws {Error} 保存されている行の形式が本モジュールの書き込む形式と一致しない場合。
- */
-export function getDueNotificationDeletes(
-  sql: SqlStorage,
-  now: number,
-): NotificationDelete[] {
-  return sql
-    .exec(
-      "SELECT message_id, user_id, attempts FROM notification_deletes WHERE next_attempt_at <= ? ORDER BY next_attempt_at, message_id",
-      now,
-    )
-    .toArray()
-    .map((row) => {
-      const rowResult = v.safeParse(getNotificationDeleteRowSchema(), row);
-      if (!rowResult.success) {
-        throw new Error("Invalid notification_deletes row");
-      }
-
-      return {
-        attempts: rowResult.output.attempts,
-        messageId: rowResult.output.message_id,
-        userId: rowResult.output.user_id,
-      };
-    });
-}
-
-/**
- * 試行回数を 1 増やし、`nextAttemptAt` までその削除タスクを非表示にする。
- *
- * @throws {Error} `nextAttemptAt` が整数でない場合。この場合、何も保存されない。
- */
-export function leaseNotificationDelete(
-  sql: SqlStorage,
-  messageId: string,
-  nextAttemptAt: number,
-): void {
-  assertTimestamp(nextAttemptAt, "notification_deletes.next_attempt_at");
-  sql.exec(
-    "UPDATE notification_deletes SET attempts = attempts + 1, next_attempt_at = ? WHERE message_id = ?",
-    nextAttemptAt,
-    messageId,
-  );
-}
-
-export function removeNotificationDelete(
-  sql: SqlStorage,
-  messageId: string,
-): void {
-  sql.exec("DELETE FROM notification_deletes WHERE message_id = ?", messageId);
-}
-
-/**
- * 保存済みの状態に対して処理が必要になる最も早い時刻（猶予期間の終了または
- * 通知削除の実行期限到来）を返す。保留中の処理がなければ null を返す。
+ * 最も早く終わる再接続猶予期間の期限を返す。猶予期間中の配信がなければ null を返す。
  *
  * @throws {Error} 保存されている時刻値が整数にならない場合。
  */
 export function getNextWakeAt(sql: SqlStorage): number | null {
   const rowResult = v.safeParse(
     getNextWakeRowSchema(),
-    sql
-      .exec(
-        "SELECT MIN(wake_at) AS wake_at FROM (SELECT grace_expires_at AS wake_at FROM lives WHERE grace_expires_at IS NOT NULL UNION ALL SELECT next_attempt_at AS wake_at FROM notification_deletes)",
-      )
-      .toArray()[0],
+    sql.exec("SELECT MIN(grace_expires_at) AS wake_at FROM lives").toArray()[0],
   );
   if (!rowResult.success) {
     throw new Error("Invalid next wake row");

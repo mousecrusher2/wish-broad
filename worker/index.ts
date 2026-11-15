@@ -25,10 +25,7 @@ import { hashedBearerAuth } from "./hashed-bearer-auth";
 import { HTTPException } from "hono/http-exception";
 import { jwt } from "hono/jwt";
 import { csrf } from "hono/csrf";
-import {
-  deleteLiveStartedNotification,
-  sendLiveStartedNotification,
-} from "./notifications";
+import { sendLiveStartedNotification } from "./notifications";
 import { hashTokenWithPepper } from "./token-hash";
 import {
   generateTurnIceServers,
@@ -37,7 +34,7 @@ import {
 } from "./turn";
 import { createErrorLogFields, logError, logInfo, logWarn } from "./logger";
 import { LIVE_RECONNECT_GRACE_MS } from "./live-end";
-import { getLiveState, isTransientLiveStateError } from "./live-state";
+import { getLiveState } from "./live-state";
 
 type AppEnv = {
   Bindings: Bindings;
@@ -57,15 +54,6 @@ const LIVE_SESSION_SEEN_ACTIVE_WRITE_INTERVAL_MS = 10_000;
 const LIVE_SESSION_RECENTLY_ACTIVE_MS = 60_000;
 /** たった今失われたセッションの配信に与える再接続猶予期間。 */
 const LIVE_LOST_SESSION_GRACE_MS = 30_000;
-
-// 一時的な失敗で開始通知の保存をやり直す回数と間隔。最後まで保存できなかった通知は
-// 同じ waitUntil 内で削除するため、その時間が残るよう短く保つ。
-const NOTIFICATION_PERSIST_MAX_ATTEMPTS = 2;
-const NOTIFICATION_PERSIST_RETRY_DELAY_MS = 500;
-const NOTIFICATION_PERSIST_RPC_RETRY = {
-  maxRetries: 1,
-  timeoutMs: 5_000,
-};
 
 const app = new HonoBase<AppEnv>({ router: new LinearRouter() });
 
@@ -163,59 +151,10 @@ function scheduleTrackClose(
   );
 }
 
-async function wait(milliseconds: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, milliseconds);
-  });
-}
-
 /**
- * 開始通知を LiveState に報告する。LiveState は配信にメッセージ ID を保存するか、
- * 配信がすでに終了している場合は削除キューへ追加する。報告できなかった場合は
- * ログ出力して false を返す。
- */
-async function persistLiveStartNotification(
-  c: Context<AppEnv>,
-  userId: string,
-  broadcastId: string,
-  sessionId: string,
-  messageId: string,
-): Promise<boolean> {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      // 失敗した呼び出しはスタブを壊れた状態に残す場合があるため、試行ごとに新しいスタブを取得する。
-      // 同じ ID を再保存するだけなので再実行しても安全。
-      // oxlint-disable-next-line no-await-in-loop -- 前回の失敗後に次の試行を行うため。
-      await getLiveState(
-        c.env,
-        NOTIFICATION_PERSIST_RPC_RETRY,
-      ).setLiveNotificationMessageId(userId, broadcastId, messageId);
-      return true;
-    } catch (error: unknown) {
-      const willRetry =
-        attempt < NOTIFICATION_PERSIST_MAX_ATTEMPTS &&
-        isTransientLiveStateError(error);
-      logWarn(c.env, "live_notification.persist_failed", {
-        ...createErrorLogFields(error),
-        attempt,
-        messageId,
-        sessionId,
-        userId,
-        willRetry,
-      });
-      if (!willRetry) {
-        return false;
-      }
-    }
-
-    // oxlint-disable-next-line no-await-in-loop -- 失敗の原因が解消するのを待ってから次の試行を行うため。
-    await wait(NOTIFICATION_PERSIST_RETRY_DELAY_MS);
-  }
-}
-
-/**
- * 開始通知を送信し、そのメッセージ ID を LiveState に報告する。インジェスト応答の返却後に
- * waitUntil 内で実行されるため、失敗はすべてスローせずログ出力する。
+ * 開始通知を送信し、そのメッセージ ID を LiveState に保存する。配信がすでに終了していた
+ * 場合は LiveState が削除を Worker に引き渡す。インジェスト応答の返却後に waitUntil 内で
+ * 実行されるため、失敗はすべてスローせずログ出力する。
  */
 async function sendLiveStartNotification(
   c: Context<AppEnv>,
@@ -236,24 +175,14 @@ async function sendLiveStartNotification(
     return;
   }
 
-  if (
-    await persistLiveStartNotification(
-      c,
+  try {
+    await getLiveState(c.env).setLiveNotificationMessageId(
       userId,
       broadcastId,
-      sessionId,
       messageId.toString(),
-    )
-  ) {
-    return;
-  }
-
-  // メッセージ ID が保存されたかどうか不明なため、後から自動で削除されない可能性がある。
-  // ここで即座に削除しておく（保存済み ID に対する後続の削除はすでに存在しないことを検知して完了する）。
-  try {
-    await deleteLiveStartedNotification(c.env, messageId);
+    );
   } catch (error: unknown) {
-    logWarn(c.env, "live_notification.orphan_delete_failed", {
+    logWarn(c.env, "live_notification.persist_failed", {
       ...createErrorLogFields(error),
       messageId: messageId.toString(),
       sessionId,
@@ -882,7 +811,7 @@ app.get("/api/me/livetoken", async (c) => {
 
 app.get("/api/lives", async (c) => {
   // 一覧を軽量に保つため Calls には問い合わせない。古い行はインジェストや再生のときに整合をとる
-  // （docs/architecture.md「配信行（lives）のセマンティクス」）。
+  // （docs/architecture.md「配信行のセマンティクス」）。
   const lives = await getLiveState(c.env).getAllLives();
   return c.json(lives);
 });

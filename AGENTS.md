@@ -18,7 +18,7 @@
 
 - `worker/main.ts`: Worker のエントリーポイント。Hono アプリ、`LiveState` Durable Object クラス、および `LiveState` から呼び出される `LiveEffects` エントリーポイントを再エクスポートするだけの薄いモジュールです。ここに実装ロジックを書かないでください。
 - `worker/index.ts`: ルート構成層
-- `worker/live-state.ts`: Durable Object の挙動（`LiveState`: トランザクション、再接続猶予アラーム、通知削除アウトボックス）
+- `worker/live-state.ts`: Durable Object の挙動（`LiveState`: トランザクション、再接続猶予アラーム、開始通知の削除の引き渡し）
 - `worker/live-end.ts`: Durable Object からの依頼で Worker が実行する処理
 
 ## ビルド・テスト・開発コマンド
