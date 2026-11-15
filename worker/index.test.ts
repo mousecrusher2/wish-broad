@@ -28,10 +28,10 @@ import { hashTokenWithPepper } from "./token-hash";
 import { TurnApiError } from "./turn";
 import type { Bindings } from "./types";
 
-// 外部 API ラッパー（Calls、Discord OAuth、Discord Webhook、TURN）は各モジュールのテストで
+// 外部 API ラッパー（SFU、Discord OAuth、Discord Webhook、TURN）は各モジュールのテストで
 // HTTP レベルまで検証しているため、ここではルートとの境界で差し替える。LiveState は
 // 実際の Durable Object をそのまま使う。
-const callsMocks = vi.hoisted(() => ({
+const sfuMocks = vi.hoisted(() => ({
   closeTracks: vi.fn<() => Promise<unknown>>(),
   isSessionActive: vi.fn<() => Promise<boolean>>(),
   renegotiateSession: vi.fn<() => Promise<unknown>>(),
@@ -78,7 +78,7 @@ const discordMocks = vi.hoisted(() => ({
 
 vi.mock("./sfu", async () => ({
   ...(await vi.importActual<typeof import("./sfu")>("./sfu")),
-  ...callsMocks,
+  ...sfuMocks,
 }));
 vi.mock("./discord", async () => ({
   ...(await vi.importActual<typeof import("./discord")>("./discord")),
@@ -338,7 +338,7 @@ describe("worker app", () => {
     consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     for (const mock of [
-      ...Object.values(callsMocks),
+      ...Object.values(sfuMocks),
       ...Object.values(discordMocks),
       ...Object.values(notificationsMocks),
       ...Object.values(turnMocks),
@@ -374,11 +374,11 @@ describe("worker app", () => {
     } satisfies DiscordGuildMember);
     discordMocks.revokeAccessToken.mockResolvedValue(undefined);
 
-    callsMocks.closeTracks.mockResolvedValue({});
-    callsMocks.isSessionActive.mockResolvedValue(true);
-    callsMocks.renegotiateSession.mockResolvedValue(undefined);
-    callsMocks.startIngest.mockResolvedValue(INGEST_SESSION);
-    callsMocks.startPlay.mockResolvedValue({
+    sfuMocks.closeTracks.mockResolvedValue({});
+    sfuMocks.isSessionActive.mockResolvedValue(true);
+    sfuMocks.renegotiateSession.mockResolvedValue(undefined);
+    sfuMocks.startIngest.mockResolvedValue(INGEST_SESSION);
+    sfuMocks.startPlay.mockResolvedValue({
       sdpAnswer: "viewer-answer-sdp",
       sessionId: "viewer-session",
       sdpType: "answer",
@@ -958,7 +958,7 @@ describe("worker app", () => {
 
     expect(response.status).toBe(401);
     expect(await response.text()).toBe("Unauthorized");
-    expect(callsMocks.startIngest).not.toHaveBeenCalled();
+    expect(sfuMocks.startIngest).not.toHaveBeenCalled();
   });
 
   it("starts ingest after removing a stale live row", async () => {
@@ -966,7 +966,7 @@ describe("worker app", () => {
       notificationMessageId: "5",
       sessionId: "stale-session",
     });
-    callsMocks.isSessionActive.mockResolvedValue(false);
+    sfuMocks.isSessionActive.mockResolvedValue(false);
     const executionContext = createExecutionContext();
 
     const response = await requestIngestOffer(executionContext);
@@ -984,11 +984,8 @@ describe("worker app", () => {
     expect(response.headers.get("content-type")).toBe("application/sdp");
     expect(response.headers.get("etag")).toBe('"new-session"');
     expect(await response.text()).toBe("answer-sdp");
-    expect(callsMocks.isSessionActive).toHaveBeenCalledWith(
-      env,
-      "stale-session",
-    );
-    expect(callsMocks.startIngest).toHaveBeenCalledWith(
+    expect(sfuMocks.isSessionActive).toHaveBeenCalledWith(env, "stale-session");
+    expect(sfuMocks.startIngest).toHaveBeenCalledWith(
       env,
       "user-1",
       "offer-sdp",
@@ -1030,8 +1027,8 @@ describe("worker app", () => {
     expect(await response.text()).toBe("answer-sdp");
     expect(response.headers.get("location")).toBe("/ingest/user-1/new-session");
     // 前回セッションのトラックはその DELETE 時にすでに閉じられているため、
-    // 再開前に Calls セッションの生存確認は行わない。
-    expect(callsMocks.isSessionActive).not.toHaveBeenCalled();
+    // 再開前に SFU セッションの生存確認は行わない。
+    expect(sfuMocks.isSessionActive).not.toHaveBeenCalled();
     await expect(getLive()).resolves.toEqual({
       broadcastId,
       graceExpiresAt: null,
@@ -1064,8 +1061,8 @@ describe("worker app", () => {
       notificationMessageId: "5",
       sessionId: "previous-session",
     });
-    callsMocks.startIngest.mockImplementation(async () => {
-      // Calls とのネゴシエーション中に猶予期間が過ぎる。
+    sfuMocks.startIngest.mockImplementation(async () => {
+      // SFUとのネゴシエーション中に猶予期間が過ぎる。
       vi.setSystemTime(NOW + 1);
       return INGEST_SESSION;
     });
@@ -1147,7 +1144,7 @@ describe("worker app", () => {
   it("hands an orphaned start notification to the Worker when the broadcast ended before persistence", async () => {
     notificationsMocks.sendLiveStartedNotification.mockImplementation(
       async () => {
-        // 通知の送信中に、Calls 上で失われたセッションとして配信が終了した。
+        // 通知の送信中に、SFU 上で失われたセッションとして配信が終了した。
         await getLiveState(env).endLive("user-1", "new-session");
         return { messageId: 1n };
       },
@@ -1233,7 +1230,7 @@ describe("worker app", () => {
 
     expect(response.status).toBe(415);
     expect(await response.text()).toBe("Content-Type must be application/sdp");
-    expect(callsMocks.startIngest).not.toHaveBeenCalled();
+    expect(sfuMocks.startIngest).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1273,7 +1270,7 @@ describe("worker app", () => {
 
       expect(response.status).toBe(status);
       expect(await response.text()).toBe(expectedBody);
-      expect(callsMocks.startIngest).not.toHaveBeenCalled();
+      expect(sfuMocks.startIngest).not.toHaveBeenCalled();
     },
   );
 
@@ -1290,7 +1287,7 @@ describe("worker app", () => {
     );
 
     expect(response.status).toBe(201);
-    expect(callsMocks.startIngest).toHaveBeenCalledWith(
+    expect(sfuMocks.startIngest).toHaveBeenCalledWith(
       env,
       "user-1",
       "offer-sdp",
@@ -1318,10 +1315,10 @@ describe("worker app", () => {
     },
   );
 
-  it("rejects stale-ingest checks when Calls cannot verify the stored session", async () => {
+  it("rejects stale-ingest checks when the SFU cannot verify the stored session", async () => {
     await seedLive({ sessionId: "stale-session" });
-    callsMocks.isSessionActive.mockRejectedValue(
-      new SfuApiError("Calls request failed", {
+    sfuMocks.isSessionActive.mockRejectedValue(
+      new SfuApiError("SFU request failed", {
         endpoint: "/sessions/stale-session",
         kind: "request_failed",
       }),
@@ -1336,7 +1333,7 @@ describe("worker app", () => {
     await expect(getLive()).resolves.toMatchObject({
       sessionId: "stale-session",
     });
-    expect(callsMocks.startIngest).not.toHaveBeenCalled();
+    expect(sfuMocks.startIngest).not.toHaveBeenCalled();
     expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         endpoint: "/sessions/stale-session",
@@ -1349,7 +1346,7 @@ describe("worker app", () => {
   });
 
   it("returns SFU client errors for invalid ingest offers", async () => {
-    callsMocks.startIngest.mockRejectedValue(
+    sfuMocks.startIngest.mockRejectedValue(
       new SfuApiError("SFU request failed: unprocessable content", {
         endpoint: "/tracks/new",
         kind: "unprocessable_content",
@@ -1371,7 +1368,7 @@ describe("worker app", () => {
   });
 
   it("keeps SFU auth failures as worker errors during ingest", async () => {
-    callsMocks.startIngest.mockRejectedValue(
+    sfuMocks.startIngest.mockRejectedValue(
       new SfuApiError("SFU request failed", {
         endpoint: "/sessions/new",
         kind: "http_error",
@@ -1406,7 +1403,7 @@ describe("worker app", () => {
     expect(await response.text()).toBe(
       "A live stream is already active for this user",
     );
-    expect(callsMocks.startIngest).not.toHaveBeenCalled();
+    expect(sfuMocks.startIngest).not.toHaveBeenCalled();
     await waitOnExecutionContext(executionContext);
     expect(
       notificationsMocks.sendLiveStartedNotification,
@@ -1454,7 +1451,7 @@ describe("worker app", () => {
         sessionId: "lost-session",
         ...(sessionSeenActiveAt === undefined ? {} : { sessionSeenActiveAt }),
       });
-      callsMocks.isSessionActive.mockResolvedValue(false);
+      sfuMocks.isSessionActive.mockResolvedValue(false);
       const executionContext = createExecutionContext();
 
       const response = await requestIngestOffer(executionContext);
@@ -1475,7 +1472,7 @@ describe("worker app", () => {
       // ちょうど 1 分前までは直前（just now）とみなす。
       sessionSeenActiveAt: NOW - 60_000,
     });
-    callsMocks.isSessionActive.mockResolvedValue(false);
+    sfuMocks.isSessionActive.mockResolvedValue(false);
     const executionContext = createExecutionContext();
 
     const response = await requestIngestOffer(executionContext);
@@ -1520,9 +1517,9 @@ describe("worker app", () => {
     "rejects an ingest that loses a race for the owner's row after reading %s",
     async (_case, seed) => {
       await seed();
-      callsMocks.isSessionActive.mockResolvedValue(false);
-      // Calls とのネゴシエーション中に、競合する別のインジェストが先に行を再開または作成した。
-      callsMocks.startIngest.mockImplementation(async () => {
+      sfuMocks.isSessionActive.mockResolvedValue(false);
+      // SFUとのネゴシエーション中に、競合する別のインジェストが先に行を再開または作成した。
+      sfuMocks.startIngest.mockImplementation(async () => {
         const liveState = getLiveState(env);
         if (
           !(await liveState.resumeLive(
@@ -1606,7 +1603,7 @@ describe("worker app", () => {
 
     await waitOnExecutionContext(executionContext);
 
-    expect(callsMocks.closeTracks).toHaveBeenCalledWith(
+    expect(sfuMocks.closeTracks).toHaveBeenCalledWith(
       env,
       "session-1",
       createTracks("session-1"),
@@ -1630,7 +1627,7 @@ describe("worker app", () => {
       graceExpiresAt: NOW + 60_000,
     });
     await waitOnExecutionContext(executionContext);
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
+    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
   });
 
   it("rejects ingest deletion when there is no live row", async () => {
@@ -1639,12 +1636,12 @@ describe("worker app", () => {
     expect(response.status).toBe(400);
     expect(await response.text()).toBe("No live stream found for this user");
     await expect(getLive()).resolves.toBeNull();
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
+    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
   });
 
   it("returns success and logs when ingest close reports track errors", async () => {
     await seedLive();
-    callsMocks.closeTracks.mockResolvedValue({
+    sfuMocks.closeTracks.mockResolvedValue({
       tracks: [{ mid: "0" }, { errorCode: "failed_to_close", mid: "1" }],
     });
     const executionContext = createExecutionContext();
@@ -1673,7 +1670,7 @@ describe("worker app", () => {
 
   it("returns success when ingest close says tracks are already gone", async () => {
     await seedLive();
-    callsMocks.closeTracks.mockRejectedValue(
+    sfuMocks.closeTracks.mockRejectedValue(
       new SfuApiError("SFU request failed: session not found", {
         endpoint: "/tracks/close",
         kind: "session_not_found",
@@ -1704,7 +1701,7 @@ describe("worker app", () => {
     );
     await expect(getLive()).resolves.toMatchObject({ graceExpiresAt: null });
     await waitOnExecutionContext(executionContext);
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
+    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
   });
 
   it.each<[string, StoredTrack[]]>([
@@ -1733,7 +1730,7 @@ describe("worker app", () => {
       expect(await response.text()).toBe("Stored live track data is invalid");
       await expect(getLive()).resolves.toMatchObject({ graceExpiresAt: null });
       await waitOnExecutionContext(executionContext);
-      expect(callsMocks.closeTracks).not.toHaveBeenCalled();
+      expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
     },
   );
 
@@ -1761,7 +1758,7 @@ describe("worker app", () => {
       sessionId: "session-2",
     });
     await waitOnExecutionContext(executionContext);
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
+    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
   });
 
   it("returns 404 and ends the broadcast when a stored play session is inactive", async () => {
@@ -1770,7 +1767,7 @@ describe("worker app", () => {
       sessionId: "live-session",
       userId: "streamer-1",
     });
-    callsMocks.isSessionActive.mockResolvedValue(false);
+    sfuMocks.isSessionActive.mockResolvedValue(false);
     const executionContext = createExecutionContext();
 
     const response = await requestPlayOffer(executionContext);
@@ -1783,13 +1780,13 @@ describe("worker app", () => {
       { messageId: "5", userId: "streamer-1" },
     ]);
     await waitOnExecutionContext(executionContext);
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
   });
 
   it("asks viewers to retry when an inactive play session's row changed meanwhile", async () => {
     await seedLive({ sessionId: "live-session", userId: "streamer-1" });
-    callsMocks.isSessionActive.mockImplementation(async () => {
-      // Calls への確認中に OBS が新しいセッションで配信を再開した。
+    sfuMocks.isSessionActive.mockImplementation(async () => {
+      // SFUへの確認中に OBS が新しいセッションで配信を再開した。
       await getLiveState(env).resumeLive(
         "streamer-1",
         "live-session",
@@ -1806,7 +1803,7 @@ describe("worker app", () => {
     await expect(getLive("streamer-1")).resolves.toMatchObject({
       sessionId: "resumed-session",
     });
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1836,15 +1833,15 @@ describe("worker app", () => {
       expect(await response.text()).toBe(
         "Live stream is waiting for the publisher to reconnect",
       );
-      expect(callsMocks.isSessionActive).not.toHaveBeenCalled();
-      expect(callsMocks.startPlay).not.toHaveBeenCalled();
+      expect(sfuMocks.isSessionActive).not.toHaveBeenCalled();
+      expect(sfuMocks.startPlay).not.toHaveBeenCalled();
     },
   );
 
-  it("returns a logged 502 when Calls cannot verify a play session", async () => {
+  it("returns a logged 502 when the SFU cannot verify a play session", async () => {
     await seedLive({ sessionId: "live-session", userId: "streamer-1" });
-    callsMocks.isSessionActive.mockRejectedValue(
-      new SfuApiError("Calls request failed", {
+    sfuMocks.isSessionActive.mockRejectedValue(
+      new SfuApiError("SFU request failed", {
         endpoint: "/sessions/live-session",
         kind: "request_failed",
       }),
@@ -1854,13 +1851,13 @@ describe("worker app", () => {
 
     expect(response.status).toBe(502);
     expect(await response.text()).toBe("Failed to verify live stream status");
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
     await expect(getLive("streamer-1")).resolves.not.toBeNull();
     expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         endpoint: "/sessions/live-session",
         errorKind: "request_failed",
-        errorMessage: "Calls request failed",
+        errorMessage: "SFU request failed",
         event: "play.session_activity_check_failed",
         level: "error",
         sessionId: "live-session",
@@ -1870,7 +1867,7 @@ describe("worker app", () => {
   });
 
   it("maps a missing live from the playback negotiator to 404", async () => {
-    callsMocks.startPlay.mockRejectedValue(new LiveNotFoundError("streamer-1"));
+    sfuMocks.startPlay.mockRejectedValue(new LiveNotFoundError("streamer-1"));
 
     const response = await requestPlayOffer();
 
@@ -1879,7 +1876,7 @@ describe("worker app", () => {
   });
 
   it("leaves non-SFU playback errors to the unhandled error handler", async () => {
-    callsMocks.startPlay.mockRejectedValue(
+    sfuMocks.startPlay.mockRejectedValue(
       new TypeError("unexpected playback error"),
     );
 
@@ -1897,7 +1894,7 @@ describe("worker app", () => {
   });
 
   it("logs SFU playback negotiation errors and returns 502", async () => {
-    callsMocks.startPlay.mockRejectedValue(
+    sfuMocks.startPlay.mockRejectedValue(
       new SfuApiError("SFU request failed", {
         endpoint: "/tracks/new",
         kind: "http_error",
@@ -1919,9 +1916,9 @@ describe("worker app", () => {
     );
   });
 
-  it("waits for OBS when Calls loses the session between its check and play start", async () => {
+  it("waits for OBS when the SFU loses the session between its check and play start", async () => {
     await seedLive({ sessionId: "live-session", userId: "streamer-1" });
-    callsMocks.startPlay.mockRejectedValue(
+    sfuMocks.startPlay.mockRejectedValue(
       new SfuApiError("SFU request failed: session not found", {
         endpoint: "/tracks/new",
         kind: "session_not_found",
@@ -1947,7 +1944,7 @@ describe("worker app", () => {
       sessionSeenActiveAt: NOW - 5000,
       userId: "streamer-1",
     });
-    callsMocks.isSessionActive.mockResolvedValue(false);
+    sfuMocks.isSessionActive.mockResolvedValue(false);
 
     const response = await requestPlayOffer();
 
@@ -1958,7 +1955,7 @@ describe("worker app", () => {
       graceExpiresAt: NOW + 30_000,
     });
     await expect(getLiveStateAlarm()).resolves.toBe(NOW + 30_000);
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
     expect(consoleInfo).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "live.session_lost",
@@ -1975,8 +1972,8 @@ describe("worker app", () => {
       sessionSeenActiveAt: NOW,
       userId: "streamer-1",
     });
-    callsMocks.isSessionActive.mockImplementation(async () => {
-      // Calls への確認中に OBS が DELETE を送信した。
+    sfuMocks.isSessionActive.mockImplementation(async () => {
+      // SFUへの確認中に OBS が DELETE を送信した。
       await getLiveState(env).startLiveReconnectGrace(
         "streamer-1",
         "live-session",
@@ -2032,7 +2029,7 @@ describe("worker app", () => {
   });
 
   it("returns 404 when the SFU loses playback for an owner with no stored row", async () => {
-    callsMocks.startPlay.mockRejectedValue(
+    sfuMocks.startPlay.mockRejectedValue(
       new SfuApiError("Session not found", {
         endpoint: "/tracks/new",
         kind: "session_not_found",
@@ -2043,7 +2040,7 @@ describe("worker app", () => {
 
     expect(response.status).toBe(404);
     expect(await response.text()).toBe("Live stream not found: streamer-1");
-    expect(callsMocks.startPlay).toHaveBeenCalledWith(
+    expect(sfuMocks.startPlay).toHaveBeenCalledWith(
       env,
       "streamer-1",
       [],
@@ -2066,7 +2063,7 @@ describe("worker app", () => {
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe("SDP offer is required");
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
   });
 
   it("rejects whitespace WHEP offers and offers with no Content-Type", async () => {
@@ -2098,7 +2095,7 @@ describe("worker app", () => {
     expect(await missingType.text()).toBe(
       "Content-Type must be application/sdp",
     );
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
   });
 
   it("returns 204 for GET on the WHEP endpoint", async () => {
@@ -2144,12 +2141,12 @@ describe("worker app", () => {
 
     expect(response.status).toBe(415);
     expect(await response.text()).toBe("Content-Type must be application/sdp");
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
   });
 
   it("returns SFU client errors for invalid WHEP offers", async () => {
     await seedLive({ sessionId: "live-session", userId: "streamer-1" });
-    callsMocks.startPlay.mockRejectedValue(
+    sfuMocks.startPlay.mockRejectedValue(
       new SfuApiError("SFU request failed: unprocessable content", {
         endpoint: "/tracks/new",
         kind: "unprocessable_content",
@@ -2185,11 +2182,8 @@ describe("worker app", () => {
         userId: "viewer-1",
       }),
     );
-    expect(callsMocks.isSessionActive).toHaveBeenCalledWith(
-      env,
-      "live-session",
-    );
-    expect(callsMocks.startPlay).toHaveBeenCalledWith(
+    expect(sfuMocks.isSessionActive).toHaveBeenCalledWith(env, "live-session");
+    expect(sfuMocks.startPlay).toHaveBeenCalledWith(
       env,
       "streamer-1",
       liveTracks,
@@ -2205,7 +2199,7 @@ describe("worker app", () => {
 
   it("returns a WHEP counter-offer with 406", async () => {
     await seedLive({ sessionId: "live-session", userId: "streamer-1" });
-    callsMocks.startPlay.mockResolvedValue({
+    sfuMocks.startPlay.mockResolvedValue({
       sdpAnswer: "viewer-counter-offer-sdp",
       sessionId: "viewer-session",
       sdpType: "offer",
@@ -2241,7 +2235,7 @@ describe("worker app", () => {
 
     await waitOnExecutionContext(executionContext);
 
-    expect(callsMocks.closeTracks).toHaveBeenCalledWith(env, "viewer-session", [
+    expect(sfuMocks.closeTracks).toHaveBeenCalledWith(env, "viewer-session", [
       {
         location: "remote",
         mid: "0",
@@ -2268,13 +2262,13 @@ describe("worker app", () => {
     expect(response.status).toBe(400);
     expect(await response.text()).toBe("WHEP session track mids are required");
     await waitOnExecutionContext(executionContext);
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
+    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
   });
 
   it("rejects WHEP session requests whose session id is not URL-safe", async () => {
     const executionContext = createExecutionContext();
     // Hono はパラメーター内の %2F や %3F をデコードするため、検証がないと
-    // Calls API の URL が別のパスへ書き換えられてしまう。
+    // SFUAPI の URL が別のパスへ書き換えられてしまう。
     const sessionUrl = "http://localhost/play/streamer-1/..%2F..%2Fother%3F";
 
     const deleteResponse = await fetchApp(
@@ -2304,8 +2298,8 @@ describe("worker app", () => {
     expect(patchResponse.status).toBe(400);
     expect(await patchResponse.text()).toBe("Invalid WHEP session ID");
     await waitOnExecutionContext(executionContext);
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-    expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
+    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
+    expect(sfuMocks.renegotiateSession).not.toHaveBeenCalled();
   });
 
   it("trims and deduplicates requested WHEP track mids", async () => {
@@ -2327,7 +2321,7 @@ describe("worker app", () => {
 
     expect(response.status).toBe(200);
     await waitOnExecutionContext(executionContext);
-    expect(callsMocks.closeTracks).toHaveBeenCalledWith(env, "viewer-session", [
+    expect(sfuMocks.closeTracks).toHaveBeenCalledWith(env, "viewer-session", [
       {
         location: "remote",
         mid: "0",
@@ -2344,7 +2338,7 @@ describe("worker app", () => {
   });
 
   it("returns success and logs when WHEP close reports track errors", async () => {
-    callsMocks.closeTracks.mockResolvedValue({
+    sfuMocks.closeTracks.mockResolvedValue({
       tracks: [{ errorCode: "failed_to_close", mid: "0" }],
     });
     const executionContext = createExecutionContext();
@@ -2392,7 +2386,7 @@ describe("worker app", () => {
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe("SDP answer is required");
-    expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
+    expect(sfuMocks.renegotiateSession).not.toHaveBeenCalled();
   });
 
   it("rejects WHEP answers when Content-Type is not application/sdp", async () => {
@@ -2410,11 +2404,11 @@ describe("worker app", () => {
 
     expect(response.status).toBe(415);
     expect(await response.text()).toBe("Content-Type must be application/sdp");
-    expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
+    expect(sfuMocks.renegotiateSession).not.toHaveBeenCalled();
   });
 
   it("returns SFU client errors for invalid WHEP answers", async () => {
-    callsMocks.renegotiateSession.mockRejectedValue(
+    sfuMocks.renegotiateSession.mockRejectedValue(
       new SfuApiError("SFU request failed: unprocessable content", {
         endpoint: "/renegotiate",
         kind: "unprocessable_content",
@@ -2451,7 +2445,7 @@ describe("worker app", () => {
     );
 
     expect(response.status).toBe(204);
-    expect(callsMocks.renegotiateSession).toHaveBeenCalledWith(
+    expect(sfuMocks.renegotiateSession).toHaveBeenCalledWith(
       env,
       "viewer-session",
       "viewer-answer",
@@ -2459,7 +2453,7 @@ describe("worker app", () => {
   });
 
   it("logs non-SFU WHEP answer errors and returns 502", async () => {
-    callsMocks.renegotiateSession.mockRejectedValue(
+    sfuMocks.renegotiateSession.mockRejectedValue(
       new SfuApiError("unexpected renegotiation error", {
         endpoint: "/renegotiate",
         kind: "request_failed",

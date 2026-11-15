@@ -408,7 +408,7 @@ describe("SFU API", () => {
     });
   });
 
-  it("passes a plain-text Calls rejection through to the client", async () => {
+  it("passes a plain-text SFU rejection through to the client", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("Malformed SDP answer", { status: 422 }),
     );
@@ -424,7 +424,7 @@ describe("SFU API", () => {
     });
   });
 
-  it("keeps a JSON Calls error body as parsed JSON", async () => {
+  it("keeps a JSON SFU error body as parsed JSON", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({ errorCode: "invalid_sdp" }, 400),
     );

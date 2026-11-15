@@ -781,8 +781,8 @@ export class WHEPSession {
         throw new Error("Failed to create local SDP offer");
       }
 
-      // 破棄時はこの POST を中断する。作成済みの Calls 再生セッションには DELETE を送らないが、
-      // 誰も接続しないまま Calls が片付ける。
+      // 破棄時はこの POST を中断する。作成済みの SFU 再生セッションには DELETE を送らないが、
+      // 誰も接続しないまま SFU が片付ける。
       const offerResponse = await fetch(resourceUrl, {
         method: "POST",
         headers: {

@@ -19,12 +19,12 @@ export type LiveRecord = {
   /** 再接続猶予期間の終了時刻（Unix エポックミリ秒）。インジェストセッションが配信中なら null。 */
   graceExpiresAt: number | null;
   /**
-   * リクエストが Calls 上でインジェストセッションの生存を最後に確認した時刻
+   * リクエストが SFU 上でインジェストセッションの生存を最後に確認した時刻
    * （Unix エポックミリ秒）。このセッションでまだ確認がなければ null。
    */
   sessionSeenActiveAt: number | null;
   userId: string;
-  /** 現在の Calls インジェストセッション。再接続のたびに置き換わる。 */
+  /** 現在の SFU インジェストセッション。再接続のたびに置き換わる。 */
   sessionId: string;
   /** `sessionId` のトラック。再接続のたびに置き換わる。 */
   tracks: StoredTrack[];
@@ -384,7 +384,7 @@ export function setLiveNotificationMessageId(
 }
 
 /**
- * リクエストが Calls 上で配信中インジェストセッションの生存を確認したことを記録する。
+ * リクエストが SFU 上で配信中インジェストセッションの生存を確認したことを記録する。
  * 健全な配信の同時視聴者全員が毎回行を書き込まないよう、`minIntervalMs` ごとに
  * 最大 1 回のみ記録する。記録した場合は true、間隔内の記録がすでにあるか行がその
  * セッションを保持していない場合は false を返す。

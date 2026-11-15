@@ -90,10 +90,10 @@ function getRequestedTrackMids(requestUrl: string): string[] {
 }
 
 /**
- * Calls のセッション ID として妥当な URL セーフ文字列か。WHEP セッションルートはデコード済みの
- * パスパラメーターを Calls API の URL に埋め込むため、"/" や "?" など URL を書き換えうる値を拒否する。
+ * SFU のセッション ID として妥当な URL セーフ文字列か。WHEP セッションルートはデコード済みの
+ * パスパラメーターを SFU API の URL に埋め込むため、"/" や "?" など URL を書き換えうる値を拒否する。
  */
-function isCallsSessionId(sessionId: string): boolean {
+function isSfuSessionId(sessionId: string): boolean {
   return /^[0-9A-Za-z_-]+$/u.test(sessionId);
 }
 
@@ -362,7 +362,7 @@ app.post("/ingest/:userId", async (c) => {
     }
 
     if (isActive) {
-      // セッションを失ったばかりの OBS は Calls が GC するまで再試行を続けるため、
+      // セッションを失ったばかりの OBS は SFU が GC するまで再試行を続けるため、
       // GC 後の再試行で配信を再開できるよう生存を記録しておく。
       recordLiveSessionSeenActive(c, existingLive, now);
       return c.text("A live stream is already active for this user", 400);
@@ -436,7 +436,7 @@ app.post("/ingest/:userId", async (c) => {
   );
   if (broadcastId === null) {
     // 行を読み取った後で、競合する別のインジェストが先に行を作成または再開した。
-    // このインジェストの Calls セッションは誰も使わず、Calls が自動で片付ける。
+    // このインジェストの SFU セッションは誰も使わず、SFU が自動で片付ける。
     logWarn(c.env, "ingest.concurrent_ingest_rejected", {
       sessionId: result.sessionId,
       userId,
@@ -614,7 +614,7 @@ app.post("/play/:userId", async (c) => {
     if (error.isSessionNotFound()) {
       if (liveTrackRecord) {
         // 上で確認した時点ではインジェストセッションは生存していたため、
-        // Calls がたった今ガベージコレクションしたとみなせる。
+        // SFU がたった今ガベージコレクションしたとみなせる。
         await startLostSessionGrace(c, liveTrackRecord);
         return respondLiveReconnecting(c);
       }
@@ -661,7 +661,7 @@ app.get("/play/:userId/:sessionId", async () => {
 app
   .delete("/play/:userId/:sessionId", async (c) => {
     const { sessionId } = c.req.param();
-    if (!isCallsSessionId(sessionId)) {
+    if (!isSfuSessionId(sessionId)) {
       return c.text("Invalid WHEP session ID", 400);
     }
     const mids = getRequestedTrackMids(c.req.url);
@@ -682,7 +682,7 @@ app
   // この PATCH はトリクル ICE ではなく、406 カウンターオファーへのアンサーを送信する。
   .patch(async (c) => {
     const { sessionId } = c.req.param();
-    if (!isCallsSessionId(sessionId)) {
+    if (!isSfuSessionId(sessionId)) {
       return c.text("Invalid WHEP session ID", 400);
     }
 
@@ -810,7 +810,7 @@ app.get("/api/me/livetoken", async (c) => {
 });
 
 app.get("/api/lives", async (c) => {
-  // 一覧を軽量に保つため Calls には問い合わせない。古い行はインジェストや再生のときに整合をとる
+  // 一覧を軽量に保つため SFU には問い合わせない。古い行はインジェストや再生のときに整合をとる
   // （docs/architecture.md「配信行のセマンティクス」）。
   const lives = await getLiveState(c.env).getAllLives();
   return c.json(lives);

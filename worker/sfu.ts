@@ -316,7 +316,7 @@ function getErrorMessage(error: unknown): string {
 }
 
 /**
- * @throws {SfuApiError} Calls の応答前にリクエストが失敗またはタイムアウトした場合。
+ * @throws {SfuApiError} SFU の応答前にリクエストが失敗またはタイムアウトした場合。
  */
 async function fetchSfu(
   endpoint: string,
@@ -345,9 +345,9 @@ function normalizeTrackLocator(track: TrackLocator): TrackLocatorRequest {
 }
 
 /**
- * Calls API リクエストを 1 回送信し、JSON レスポンスボディを検証する。
+ * SFU API リクエストを 1 回送信し、JSON レスポンスボディを検証する。
  *
- * @throws {SfuApiError} リクエストに失敗したか、Calls が HTTP エラーを返したか、
+ * @throws {SfuApiError} リクエストに失敗したか、SFU が HTTP エラーを返したか、
  * レスポンスボディが `schema` に一致する JSON でない場合。
  */
 async function requestSfuJson<TOutput>(
@@ -389,12 +389,12 @@ async function requestSfuJson<TOutput>(
 }
 
 /**
- * Cloudflare Calls セッションを作成する。
+ * SFU セッションを作成する。
  *
  * インジェストセッションは後で LiveState に保存される。再生セッションは
  * 視聴者の接続試行ごとに作成され、返される WHEP セッション URL の中でのみ保持される。
  *
- * @throws {SfuApiError} Calls がセッションを作成できなかった場合。
+ * @throws {SfuApiError} SFU がセッションを作成できなかった場合。
  */
 async function createSession(env: SfuEnv): Promise<NewSessionResponse> {
   const endpoint = `https://rtc.live.cloudflare.com/v1/apps/${env.CALLS_APP_ID}/sessions/new`;
@@ -414,7 +414,7 @@ async function createSession(env: SfuEnv): Promise<NewSessionResponse> {
  * `autoDiscover` を使うことで、Worker 側で個別のトラック名を事前宣言しなくても
  * OBS が音声/映像トラックをオファーできるようになる。
  *
- * @throws {SfuApiError} Calls がトラックを作成できなかった場合。
+ * @throws {SfuApiError} SFU がトラックを作成できなかった場合。
  */
 async function createIngestTracks(
   env: SfuEnv,
@@ -447,11 +447,11 @@ async function createIngestTracks(
 /**
  * 保存されたインジェストトラックロケーターに再生セッションをアタッチする。
  *
- * SDP オファーを渡すと Calls が直接アンサーを返す場合があるほか、Calls が
+ * SDP オファーを渡すと SFU が直接アンサーを返す場合があるほか、SFU が
  * カウンターオファーを返す場合もあり、その際は WHEP ルートが `renegotiateSession`
  * を通じてアンサーを送信する。
  *
- * @throws {SfuApiError} トラックネゴシエーションエラーの報告を含め、Calls が
+ * @throws {SfuApiError} トラックネゴシエーションエラーの報告を含め、SFU が
  * トラックをアタッチできなかった場合。
  */
 async function connectToTracks(
@@ -502,12 +502,12 @@ async function connectToTracks(
 }
 
 /**
- * Calls のカウンターオファーに対するアンサーを送信する。
+ * SFU のカウンターオファーに対するアンサーを送信する。
  *
  * トリクル ICE 候補の PATCH には使用しない（フロントエンドは POST/PATCH 前に
  * 完全な SDP を収集する）。
  *
- * @throws {SfuApiError} リクエストに失敗したか、Calls がアンサーを拒否した場合。
+ * @throws {SfuApiError} リクエストに失敗したか、SFU がアンサーを拒否した場合。
  */
 export async function renegotiateSession(
   env: SfuEnv,
@@ -536,15 +536,15 @@ export async function renegotiateSession(
 }
 
 /**
- * 1 つの Calls セッションに属するトラックを mid 指定でクローズする。
+ * 1 つの SFU セッションに属するトラックを mid 指定でクローズする。
  *
  * トラックの mid は OBS の再接続や視聴者セッションをまたいで不変ではないため、
  * 呼び出し側はクローズ対象セッションそのものの mid を渡す必要がある。
  *
- * 成功レスポンス内でも Calls がトラックごとのエラーを返す場合があり、それを問題視するかは
+ * 成功レスポンス内でも SFU がトラックごとのエラーを返す場合があり、それを問題視するかは
  * 呼び出し側が判断する。
  *
- * @throws {SfuApiError} リクエストに失敗したか Calls に拒否された場合（すでに終了した
+ * @throws {SfuApiError} リクエストに失敗したか SFU に拒否された場合（すでに終了した
  * セッションに対する `session_not_found` や `session_gone` を含む）。
  */
 export async function closeTracks(
@@ -575,13 +575,13 @@ export async function closeTracks(
 }
 
 /**
- * 配信行の個別整合のため、1 つの Calls セッションをプローブする。
+ * 配信行の個別整合のため、1 つの SFU セッションをプローブする。
  *
  * 404/410 のみを「非アクティブ」とみなし、一時的な SFU 障害を配信行が古いことの
  * 証拠としては扱わない。
  *
- * @returns Calls がそのセッションを not found または gone と報告した場合にのみ `false`。
- * @throws {SfuApiError} リクエストに失敗したか、Calls がそれ以外の HTTP エラーを返した場合。
+ * @returns SFU がそのセッションを not found または gone と報告した場合にのみ `false`。
+ * @throws {SfuApiError} リクエストに失敗したか、SFU がそれ以外の HTTP エラーを返した場合。
  */
 export async function isSessionActive(
   env: SfuEnv,
@@ -606,7 +606,7 @@ export async function isSessionActive(
 /**
  * インジェストセッションを 1 つ開始し、SDP アンサーおよび永続化用トラックロケーターを返す。
  *
- * @throws {SfuApiError} Calls がセッションのネゴシエーションに失敗したか、
+ * @throws {SfuApiError} SFU がセッションのネゴシエーションに失敗したか、
  * 使用できないインジェストレスポンスを返した場合。
  */
 export async function startIngest(
@@ -667,7 +667,7 @@ export async function startIngest(
  * 保存済みのインジェストトラックに対して視聴者用再生セッションを 1 つ開始する。
  *
  * @throws {LiveNotFoundError} 配信に保存されたトラックが存在しない場合。
- * @throws {SfuApiError} Calls がセッションのネゴシエーションに失敗したか、
+ * @throws {SfuApiError} SFU がセッションのネゴシエーションに失敗したか、
  * 使用できない再生レスポンスを返した場合。
  */
 export async function startPlay(
