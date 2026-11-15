@@ -1,17 +1,11 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { NotificationDeleteJob } from "../state/live-state";
 import { createErrorLogFields, logWarn } from "../lib/logger";
 import {
   deleteLiveStartedNotification,
   DiscordWebhookError,
 } from "../clients/discord-webhook";
 import type { Bindings } from "../types";
-
-/**
- * インジェストの DELETE 後も配信を維持する再接続猶予期間。この期間内の新しいインジェストは
- * 開始通知を送らずに配信を再開する（docs/architecture.md「インジェストのライフサイクル」）。
- */
-export const LIVE_RECONNECT_GRACE_MS = 60_000;
+import type { NotificationDeleteJob } from "./types";
 
 type LiveEndEnv = Pick<
   Bindings,

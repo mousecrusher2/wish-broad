@@ -23,11 +23,8 @@ import {
 } from "./clients/discord-oauth";
 import { LiveEffects } from "./live/effects";
 import { getLiveState, LiveState } from "./state/live-state";
-import {
-  LiveNotFoundError,
-  SfuApiError,
-  type StoredTrack,
-} from "./clients/sfu";
+import { LiveNotFoundError, SfuApiError } from "./clients/sfu";
+import type { StoredTrack } from "./live/types";
 import { hashTokenWithPepper } from "./lib/token-hash";
 import { TurnApiError } from "./clients/turn";
 import type { Bindings } from "./types";

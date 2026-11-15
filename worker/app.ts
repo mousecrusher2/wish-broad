@@ -1,8 +1,13 @@
 import type { Context } from "hono";
 import { HonoBase } from "hono/hono-base";
 import { LinearRouter } from "hono/router/linear-router";
+import {
+  LIVE_RECONNECT_GRACE_MS,
+  LIVE_RECONNECTING_RETRY_AFTER_SECONDS,
+  LIVE_TRACK_COUNT_HEADER,
+} from "../shared/protocol";
 import { JWTPayload, Bindings } from "./types";
-import type { LiveRecord } from "./state/database";
+import type { LiveRecord, StoredTrack } from "./live/types";
 import {
   clearAuthCookie,
   completeDiscordLogin,
@@ -12,7 +17,6 @@ import {
   type IngestSession,
   type PlaybackSession,
   SfuApiError,
-  type StoredTrack,
   closeTracks,
   renegotiateSession,
   startIngest,
@@ -32,7 +36,6 @@ import {
   type TurnIceServer,
 } from "./clients/turn";
 import { createErrorLogFields, logError, logInfo, logWarn } from "./lib/logger";
-import { LIVE_RECONNECT_GRACE_MS } from "./live/effects";
 import { getLiveState } from "./state/live-state";
 import {
   checkLiveSession,
@@ -46,9 +49,6 @@ type AppEnv = {
     jwtPayload: JWTPayload;
   };
 };
-
-/** 再接続待ちの 409 に付ける Retry-After。プレーヤー側の固定リトライ間隔と一致させている。 */
-const LIVE_RECONNECTING_RETRY_AFTER_SECONDS = 2;
 
 const app = new HonoBase<AppEnv>({ router: new LinearRouter() });
 
@@ -572,7 +572,7 @@ app.post("/play/:userId", async (c) => {
 
   return c.body(result.sdpAnswer, status, {
     "content-type": "application/sdp",
-    "Wish-Live-Track-Count": String(expectedTrackCount),
+    [LIVE_TRACK_COUNT_HEADER]: String(expectedTrackCount),
     etag: `"${result.sessionId}"`,
     location: createPlaySessionLocation(
       c.req.url,

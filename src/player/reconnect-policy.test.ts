@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { LIVE_RECONNECT_GRACE_MS } from "../../shared/protocol";
 import { WHEPSessionError } from "./session";
 import {
   resolveReconnectDisposition,
   shouldReconnectForPlaybackStall,
   shouldReconnectForTrackDiscoveryTimeout,
   shouldRecoverEstablishedSession,
+  WHEP_RECONNECT_WINDOW_MS,
 } from "./reconnect-policy";
 
 describe("reconnect-policy", () => {
+  it("keeps waiting longer than the publisher's reconnect grace period", () => {
+    expect(WHEP_RECONNECT_WINDOW_MS).toBeGreaterThan(LIVE_RECONNECT_GRACE_MS);
+  });
+
   it("classifies reconnect outcomes", () => {
     expect(
       resolveReconnectDisposition(

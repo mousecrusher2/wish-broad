@@ -8,5 +8,5 @@
       "vite/client"
     ]
   },
-  "include": ["worker", "worker-configuration.d.ts"]
+  "include": ["worker", "shared", "worker-configuration.d.ts"]
 }

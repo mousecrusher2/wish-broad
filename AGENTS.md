@@ -28,6 +28,10 @@
 - `worker/clients/`: 外部 API（Realtime SFU、TURN、Discord OAuth、Discord Webhook）のクライアント
 - `worker/lib/`: ログ出力やトークン処理などのユーティリティ
 
+### Worker とクライアントの取り決め（`shared/`）
+
+- `shared/protocol.ts`: Worker とクライアントの両方が従う API 応答の型、ヘッダー名、時間の値。両方のビルドに含まれるため、型と定数だけを置いてください。
+
 ## ビルド・テスト・開発コマンド
 
 `.cmd` や `.ps1` のシムを含め、`node_modules/` 配下の実行ファイルを直接呼び出さないでください。package.json のスクリプトには常に `pnpm run <script>`、パッケージのバイナリには `pnpm exec <binary>` を使用してください。この環境ではサンドボックス制限により `pnpm exec ...` が失敗する場合がありますが、`node_modules/` 直下の実行ファイルへフォールバックせず、昇格権限（サンドボックス外）で再実行してください。

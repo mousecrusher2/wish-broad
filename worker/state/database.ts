@@ -1,34 +1,8 @@
 // LiveState Durable Object のストレージ用 SQL。ここにある関数はすべて
 // オブジェクト内で同期的に実行され、オブジェクトの外からは ./live-state の RPC メソッド経由で参照する。
-import type { StoredTrack } from "../clients/sfu";
 import * as v from "valibot";
-
-export type User = {
-  userId: string;
-  displayName: string;
-};
-
-type Live = {
-  owner: User;
-};
-
-/** 配信者ごとに 1 つ存在する配信（`lives` の 1 行）。 */
-export type LiveRecord = {
-  /** OBS の再接続をまたいで変わらない配信 ID。 */
-  broadcastId: string;
-  /** 再接続猶予期間の終了時刻（Unix エポックミリ秒）。インジェストセッションが配信中なら null。 */
-  graceExpiresAt: number | null;
-  /**
-   * リクエストが SFU 上でインジェストセッションの生存を最後に確認した時刻
-   * （Unix エポックミリ秒）。このセッションでまだ確認がなければ null。
-   */
-  sessionSeenActiveAt: number | null;
-  userId: string;
-  /** 現在の SFU インジェストセッション。再接続のたびに置き換わる。 */
-  sessionId: string;
-  /** `sessionId` のトラック。再接続のたびに置き換わる。 */
-  tracks: StoredTrack[];
-};
+import type { LiveSummary, User } from "../../shared/protocol";
+import type { LiveRecord, StoredTrack } from "../live/types";
 
 /** 行が削除された直後の配信。 */
 export type EndedLive = {
@@ -579,7 +553,7 @@ export function setUser(sql: SqlStorage, user: User): void {
  *
  * @throws {Error} 保存されている行の形式が本モジュールの書き込む形式と一致しない場合。
  */
-export function getAllLives(sql: SqlStorage): Live[] {
+export function getAllLives(sql: SqlStorage): LiveSummary[] {
   return sql
     .exec(
       "SELECT users.user_id, display_name FROM lives JOIN users ON lives.user_id = users.user_id ORDER BY users.user_id",

@@ -1,13 +1,15 @@
+import { LIVE_RECONNECTING_RETRY_AFTER_SECONDS } from "../../shared/protocol";
 import { WHEPSessionError, type WHEPSessionSnapshot } from "./session";
 
 // 以下の値の根拠は docs/architecture.md の「フロントエンドのリカバリー」を参照。
 
-/** 再接続のリトライ間隔。Worker の `Retry-After` と同じ固定値で、バックオフしない。 */
-export const WHEP_RECONNECT_DELAY_MS = 2_000;
+/** 再接続のリトライ間隔。Worker が返す `Retry-After` と同じ固定値で、バックオフしない。 */
+export const WHEP_RECONNECT_DELAY_MS =
+  LIVE_RECONNECTING_RETRY_AFTER_SECONDS * 1_000;
 
 /**
- * 再接続を諦めるまでの時間。Worker の配信者再接続猶予期間
- * （`LIVE_RECONNECT_GRACE_MS`、worker/live/effects.ts）より長くなければならない。
+ * 再接続を諦めるまでの時間。Worker の配信者再接続猶予期間（`LIVE_RECONNECT_GRACE_MS`）より
+ * 長くなければならない。
  */
 export const WHEP_RECONNECT_WINDOW_MS = 75_000;
 

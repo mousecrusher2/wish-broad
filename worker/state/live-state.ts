@@ -2,23 +2,21 @@
 // 外部 API は Worker と LiveEffects（../live/effects）が呼び出す。理由は docs/architecture.md の
 // 「ランタイムモデル」を参照。
 import { DurableObject } from "cloudflare:workers";
-import * as db from "./database";
+import type { LiveSummary, User } from "../../shared/protocol";
 import { createErrorLogFields, logInfo, logWarn } from "../lib/logger";
-import type { StoredTrack } from "../clients/sfu";
+import type {
+  LiveRecord,
+  NotificationDeleteJob,
+  StoredTrack,
+} from "../live/types";
 import type { Bindings } from "../types";
+import * as db from "./database";
 
 /**
  * すべての状態を保持する唯一のオブジェクトの名前。1 つにまとめている理由は
  * docs/architecture.md の「ランタイムモデル」を参照。
  */
 const LIVE_STATE_NAME = "global";
-
-/** Worker が Discord から削除すべき開始通知。 */
-export type NotificationDeleteJob = {
-  /** Discord snowflake（10 進数文字列）。 */
-  messageId: string;
-  userId: string;
-};
 
 type LiveEndReason = "reconnect_grace_expired" | "session_inactive";
 
@@ -65,11 +63,11 @@ export class LiveState extends DurableObject<Bindings> {
     await this.#run(() => undefined);
   }
 
-  async getLive(userId: string): Promise<db.LiveRecord | null> {
+  async getLive(userId: string): Promise<LiveRecord | null> {
     return this.#run(() => db.getLive(this.ctx.storage.sql, userId));
   }
 
-  async getAllLives(): Promise<{ owner: db.User }[]> {
+  async getAllLives(): Promise<LiveSummary[]> {
     return this.#run(() => db.getAllLives(this.ctx.storage.sql));
   }
 
@@ -217,7 +215,7 @@ export class LiveState extends DurableObject<Bindings> {
     return this.#run(() => db.hasLiveToken(this.ctx.storage.sql, userId));
   }
 
-  async setUser(user: db.User): Promise<void> {
+  async setUser(user: User): Promise<void> {
     await this.#run(() => {
       db.setUser(this.ctx.storage.sql, user);
     });

@@ -1,6 +1,6 @@
 // 配信行が保持するインジェストセッションの生死の判定と、DELETE なしで失われたセッションの扱い。
 // 判定の各分岐と以下の値の根拠は docs/architecture.md の「インジェストのライフサイクル」を参照。
-import type { LiveRecord } from "../state/database";
+import type { LiveRecord } from "./types";
 import { getLiveState } from "../state/live-state";
 import { createErrorLogFields, logInfo, logWarn } from "../lib/logger";
 import { isSessionActive } from "../clients/sfu";

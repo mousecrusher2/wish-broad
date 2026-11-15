@@ -33,21 +33,22 @@ type TrackLocator = {
   trackName: string;
 };
 
-export type StoredTrack = TrackLocator & {
+/** SFU セッション上のトラック。mid はそのセッションの中でだけ有効。 */
+export type SfuTrack = TrackLocator & {
   mid: string;
 };
 
 export type IngestSession = {
   sessionId: string;
   sdpAnswer: string;
-  tracks: StoredTrack[];
+  tracks: SfuTrack[];
 };
 
 export type PlaybackSession = {
   sessionId: string;
   sdpAnswer: string;
   sdpType: "answer" | "offer";
-  tracks: StoredTrack[];
+  tracks: SfuTrack[];
 };
 
 type ClosedTrack = {
@@ -550,7 +551,7 @@ export async function renegotiateSession(
 export async function closeTracks(
   env: SfuEnv,
   sessionId: string,
-  tracks: StoredTrack[],
+  tracks: SfuTrack[],
 ): Promise<CloseTracksResponse> {
   const body = {
     force: true,

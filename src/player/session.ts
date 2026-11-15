@@ -1,3 +1,4 @@
+import { LIVE_TRACK_COUNT_HEADER } from "../../shared/protocol";
 import { fetchTurnIceServers } from "./turn-credentials";
 
 export type WHEPConnectionStatus =
@@ -225,7 +226,7 @@ async function parseWhepSessionResponse(
 
   const sessionUrl = new URL(sessionLocation, resourceUrl);
   const expectedRemoteTrackCountHeader = response.headers.get(
-    "Wish-Live-Track-Count",
+    LIVE_TRACK_COUNT_HEADER,
   );
   let expectedRemoteTrackCount: number | null = null;
   if (expectedRemoteTrackCountHeader !== null) {
@@ -237,7 +238,7 @@ async function parseWhepSessionResponse(
       !Number.isInteger(parsedExpectedRemoteTrackCount) ||
       parsedExpectedRemoteTrackCount < 1
     ) {
-      throw new WHEPSessionError("Invalid Wish-Live-Track-Count header", {
+      throw new WHEPSessionError(`Invalid ${LIVE_TRACK_COUNT_HEADER} header`, {
         kind: "unexpected_response",
         responseText: expectedRemoteTrackCountHeader,
         retryable: false,
@@ -796,8 +797,6 @@ export class WHEPSession {
         offerResponse,
         resourceUrl,
       );
-      // Worker 独自の Wish-Live-Track-Count ヘッダー。一部のトラックしか得られなかった
-      // 再生をコントローラーが不完全とみなすために使う。
       this.expectedRemoteTrackCount =
         sessionResponse.expectedRemoteTrackCount ?? 0;
       this.serverSessionLocation = sessionResponse.sessionUrl.toString();

@@ -1,27 +1,33 @@
 import { useRef, useState } from "react";
 import useSWR, { mutate as mutateGlobal, preload } from "swr";
 import * as v from "valibot";
-import type { Live, User } from "../types";
+import type {
+  CreatedLiveToken,
+  LiveSummary,
+  LiveTokenStatus,
+  User,
+} from "../../shared/protocol";
 
 const currentUserKey = "current-user";
 const liveStreamsKey = "live-streams";
 const liveTokenStateKey = "live-token-state";
 
+// 各スキーマの出力が Worker との取り決めの型に代入できることを satisfies で確かめる。
 const userSchema = v.object({
   userId: v.string(),
   displayName: v.string(),
-});
+}) satisfies v.GenericSchema<unknown, User>;
 const liveSchema = v.object({
   owner: userSchema,
-});
+}) satisfies v.GenericSchema<unknown, LiveSummary>;
 const liveListSchema = v.array(liveSchema);
 const liveTokenResponseSchema = v.object({
   hasToken: v.boolean(),
-});
+}) satisfies v.GenericSchema<unknown, LiveTokenStatus>;
 const createTokenResponseSchema = v.object({
   success: v.literal(true),
   token: v.string(),
-});
+}) satisfies v.GenericSchema<unknown, CreatedLiveToken>;
 
 const swrOptions = {
   revalidateIfStale: false,
@@ -61,8 +67,8 @@ type UseLiveStreamsState =
   | { status: "loading"; refresh: () => void }
   | { status: "error"; error: string; refresh: () => void }
   | { status: "retrying"; error: string; refresh: () => void }
-  | { status: "ready"; refresh: () => void; streams: Live[] }
-  | { status: "refreshing"; refresh: () => void; streams: Live[] };
+  | { status: "ready"; refresh: () => void; streams: LiveSummary[] }
+  | { status: "refreshing"; refresh: () => void; streams: LiveSummary[] };
 
 export class UnauthorizedError extends Error {
   constructor() {
@@ -129,7 +135,7 @@ export async function fetchCurrentUser(): Promise<User> {
  * @throws {UnauthorizedError} セッション Cookie が未設定または期限切れの場合。
  * @throws {Error} リクエストに失敗したか、レスポンスが配信一覧でない場合。
  */
-export async function fetchLiveStreams(): Promise<Live[]> {
+export async function fetchLiveStreams(): Promise<LiveSummary[]> {
   const response = await apiFetch("/api/lives");
   if (!response.ok) {
     throw new Error("配信リストの取得に失敗しました");
@@ -245,7 +251,7 @@ export function useBootstrapAuthState(): BootstrapAuthState {
     loadCurrentUser,
     swrOptions,
   );
-  const { data: liveStreams } = useSWR<Settled<Live[]>>(
+  const { data: liveStreams } = useSWR<Settled<LiveSummary[]>>(
     liveStreamsKey,
     loadLiveStreams,
     swrOptions,
@@ -282,7 +288,7 @@ export function useCurrentUser(): CurrentUserState {
 }
 
 export function useLiveStreams(): UseLiveStreamsState {
-  const { data, isValidating, mutate } = useSWR<Settled<Live[]>>(
+  const { data, isValidating, mutate } = useSWR<Settled<LiveSummary[]>>(
     liveStreamsKey,
     loadLiveStreams,
     swrOptions,

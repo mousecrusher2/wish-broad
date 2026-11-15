@@ -1,4 +1,4 @@
-import type { Live } from "../../types";
+import type { LiveSummary } from "../../../shared/protocol";
 import { ConnectionControls } from "./ConnectionControls";
 import { WHEPPlaybackState } from "../../player/playback-state";
 import {
@@ -22,7 +22,7 @@ export function StreamSelection({
 }: Readonly<{
   resource: string;
   onResourceChange: (resource: string) => void;
-  streams: Live[];
+  streams: LiveSummary[];
   isLoading: boolean;
   error: string | null;
   onRefresh: () => void;
