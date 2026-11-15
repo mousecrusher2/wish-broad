@@ -75,6 +75,8 @@ export class LiveState extends DurableObject<Bindings> {
 
   /**
    * 新しい配信を開始してその ID を返す。配信者がすでに配信を持っている場合は null を返す。
+   *
+   * @throws {Error} `tracks` が getLive で読み戻せない形式の場合。
    */
   async insertLive(
     userId: string,
@@ -90,6 +92,8 @@ export class LiveState extends DurableObject<Bindings> {
    * `previousSessionId` を保持している配信を新しいインジェストセッションで継続し、
    * 猶予期間を終了させる。配信がすでに終了したか別のインジェストが先に再開していた場合は
    * false を返す。
+   *
+   * @throws {Error} `tracks` が getLive で読み戻せない形式の場合。
    */
   async resumeLive(
     userId: string,

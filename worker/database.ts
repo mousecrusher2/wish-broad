@@ -68,9 +68,9 @@ const SCHEMA_MIGRATIONS: readonly (readonly string[])[] = [
   ],
 ];
 
-// 以下の 2 種類の値は、期限切れの配信の終了や次のアラームの計算のために、オブジェクトの
-// すべてのメソッドが読み取る。読み戻せない値が 1 つでも保存されると後続のすべての呼び出しが
-// 失敗するため、書き込み時にも読み取りと同じスキーマで検証して保存前に拒否する。
+// 以下の値は、書き込み時にも読み取りと同じスキーマで検証して保存前に拒否する。読み戻せない値が
+// 1 つでも保存されると、通知 ID と時刻なら期限切れの配信の終了や次のアラームの計算を行う
+// すべてのメソッドが、トラックならその配信者の getLive が以降ずっと失敗するため。
 
 /** 10 進数文字列として表現された Discord snowflake。 */
 function createNotificationMessageIdSchema() {
@@ -99,6 +99,35 @@ function getTimestampSchema() {
   return timestampSchema;
 }
 
+function createStoredTrackSchema() {
+  return v.object({
+    location: v.literal("remote"),
+    sessionId: v.string(),
+    trackName: v.string(),
+    mid: v.string(),
+  });
+}
+
+let storedTrackSchema: ReturnType<typeof createStoredTrackSchema> | undefined;
+
+function getStoredTrackSchema() {
+  storedTrackSchema ??= createStoredTrackSchema();
+
+  return storedTrackSchema;
+}
+
+function createStoredTracksSchema() {
+  return v.array(getStoredTrackSchema());
+}
+
+let storedTracksSchema: ReturnType<typeof createStoredTracksSchema> | undefined;
+
+function getStoredTracksSchema() {
+  storedTracksSchema ??= createStoredTracksSchema();
+
+  return storedTracksSchema;
+}
+
 /** @throws {Error} `value` が 10 進数文字列の Discord snowflake でない場合。 */
 function assertNotificationMessageId(value: string, column: string): void {
   if (!v.is(getNotificationMessageIdSchema(), value)) {
@@ -110,6 +139,13 @@ function assertNotificationMessageId(value: string, column: string): void {
 function assertTimestamp(value: number, column: string): void {
   if (!v.is(getTimestampSchema(), value)) {
     throw new Error(`Invalid ${column}`);
+  }
+}
+
+/** @throws {Error} `tracks` が getLive で読み戻せない形式の場合。 */
+function assertStoredTracks(tracks: StoredTrack[]): void {
+  if (!v.is(getStoredTracksSchema(), tracks)) {
+    throw new Error("Invalid lives.tracks_json");
   }
 }
 
@@ -145,35 +181,6 @@ function getLiveRowSchema() {
   liveRowSchema ??= createLiveRowSchema();
 
   return liveRowSchema;
-}
-
-function createStoredTrackSchema() {
-  return v.object({
-    location: v.literal("remote"),
-    sessionId: v.string(),
-    trackName: v.string(),
-    mid: v.string(),
-  });
-}
-
-let storedTrackSchema: ReturnType<typeof createStoredTrackSchema> | undefined;
-
-function getStoredTrackSchema() {
-  storedTrackSchema ??= createStoredTrackSchema();
-
-  return storedTrackSchema;
-}
-
-function createStoredTracksSchema() {
-  return v.array(getStoredTrackSchema());
-}
-
-let storedTracksSchema: ReturnType<typeof createStoredTracksSchema> | undefined;
-
-function getStoredTracksSchema() {
-  storedTracksSchema ??= createStoredTracksSchema();
-
-  return storedTracksSchema;
 }
 
 function createLiveTokenRowSchema() {
@@ -284,6 +291,8 @@ export function migrateSchema(sql: SqlStorage): void {
 /**
  * 新しい配信を開始してその ID を返す。競合する別のインジェストが先に作成または
  * 再開したなどの理由で配信者（owner）がすでに live 行を持っている場合は null を返す。
+ *
+ * @throws {Error} `tracks` が getLive で読み戻せない形式の場合。この場合、何も保存されない。
  */
 export function insertLive(
   sql: SqlStorage,
@@ -291,6 +300,7 @@ export function insertLive(
   sessionId: string,
   tracks: StoredTrack[],
 ): string | null {
+  assertStoredTracks(tracks);
   const broadcastId = crypto.randomUUID();
   // ここでは upsert を行わない。競合する 2 つ目のインジェストは既存の live 行を
   // 後続セッションで上書きして再通知するのではなく、フェイルクローズで拒否すべきである。
@@ -431,6 +441,8 @@ export function startLiveReconnectGrace(
  * 猶予期間中、または前回のセッションが DELETE なしで失われた直後に、新しい
  * インジェストセッションで配信を継続する。直前の session_id の一致を条件とするため
  * Compare-And-Set となり、すでに配信終了したか別のインジェストが再開した後では失敗する。
+ *
+ * @throws {Error} `tracks` が getLive で読み戻せない形式の場合。この場合、何も保存されない。
  */
 export function resumeLive(
   sql: SqlStorage,
@@ -439,6 +451,7 @@ export function resumeLive(
   sessionId: string,
   tracks: StoredTrack[],
 ): boolean {
+  assertStoredTracks(tracks);
   const updated = sql
     .exec(
       "UPDATE lives SET session_id = ?, tracks_json = ?, grace_expires_at = NULL, session_seen_active_at = NULL WHERE user_id = ? AND session_id = ? RETURNING user_id",

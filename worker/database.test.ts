@@ -190,6 +190,34 @@ describe("live state SQL", () => {
     });
   });
 
+  it("rejects tracks that getLive could not read back", async () => {
+    await withSql((sql) => {
+      const localTracks = [
+        {
+          location: "local",
+          mid: "0",
+          sessionId: "session-2",
+          trackName: "camera",
+        },
+      ];
+
+      expect(() => insertLive(sql, "user-1", "session-1", localTracks)).toThrow(
+        "Invalid lives.tracks_json",
+      );
+      expect(getLive(sql, "user-1")).toBeNull();
+
+      const tracks = createTracks("session-1");
+      insertLive(sql, "user-1", "session-1", tracks);
+      expect(() =>
+        resumeLive(sql, "user-1", "session-1", "session-2", localTracks),
+      ).toThrow("Invalid lives.tracks_json");
+      expect(getLive(sql, "user-1")).toMatchObject({
+        sessionId: "session-1",
+        tracks,
+      });
+    });
+  });
+
   it("starts a grace period only for the live session that is stored", async () => {
     await withSql((sql) => {
       insertLive(sql, "user-1", "session-1", []);
