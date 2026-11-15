@@ -15,6 +15,7 @@ import {
   vi,
 } from "vitest";
 import { LiveEffects } from "../live/effects";
+import type { StoredTrack } from "../live/types";
 import type { LiveState } from "./live-state";
 
 /** 実際のアラームが自動発火しないよう、テストの時計は遠い未来に置く。 */
@@ -58,6 +59,32 @@ async function startNotifiedLive(stub: LiveStateStub): Promise<void> {
   await stub.setLiveNotificationMessageId("user-1", broadcastId, "9");
 }
 
+function createTracks(sessionId: string): StoredTrack[] {
+  return [{ location: "remote", mid: "0", sessionId, trackName: "camera" }];
+}
+
+/** LiveState のメソッドでは決して書き込まない形式の行を user-1 / session-1 で保存する。 */
+async function insertRawLive(
+  stub: LiveStateStub,
+  overrides: Record<string, string>,
+): Promise<void> {
+  const columns = {
+    broadcast_id: "'broadcast-1'",
+    grace_expires_at: "NULL",
+    notification_message_id: "NULL",
+    session_id: "'session-1'",
+    session_seen_active_at: "NULL",
+    tracks_json: "'[]'",
+    user_id: "'user-1'",
+    ...overrides,
+  };
+  await runInDurableObject(stub, (_instance, state) => {
+    state.storage.sql.exec(
+      `INSERT OR REPLACE INTO lives (${Object.keys(columns).join(", ")}) VALUES (${Object.values(columns).join(", ")})`,
+    );
+  });
+}
+
 describe("live state", () => {
   /**
    * オブジェクトが開始通知の削除を引き渡す LiveEffects エントリーポイント。実際の削除処理は
@@ -79,6 +106,97 @@ describe("live state", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("starts a broadcast with a fresh broadcast id", async () => {
+    const stub = createLiveState();
+    await expect(stub.getLive("user-1")).resolves.toBeNull();
+    const tracks = createTracks("session-1");
+
+    const broadcastId = await stub.insertLive("user-1", "session-1", tracks);
+
+    expect(broadcastId).toMatch(/^[0-9a-f-]{36}$/u);
+    await expect(stub.getLive("user-1")).resolves.toEqual({
+      broadcastId,
+      graceExpiresAt: null,
+      sessionSeenActiveAt: null,
+      sessionId: "session-1",
+      tracks,
+      userId: "user-1",
+    });
+  });
+
+  it("does not replace the live row of an owner who already has one", async () => {
+    const stub = createLiveState();
+    const broadcastId = await stub.insertLive("user-1", "session-1", []);
+
+    await expect(
+      stub.insertLive("user-1", "session-2", []),
+    ).resolves.toBeNull();
+    await expect(stub.getLive("user-1")).resolves.toMatchObject({
+      broadcastId,
+      sessionId: "session-1",
+    });
+  });
+
+  it("rejects tracks that getLive could not read back", async () => {
+    const stub = createLiveState();
+    const localTracks = [
+      {
+        location: "local",
+        mid: "0",
+        sessionId: "session-2",
+        trackName: "camera",
+      },
+    ];
+
+    await expect(
+      asPromise(stub.insertLive("user-1", "session-1", localTracks)),
+    ).rejects.toThrow("Invalid lives.tracks_json");
+    await expect(stub.getLive("user-1")).resolves.toBeNull();
+
+    const tracks = createTracks("session-1");
+    await stub.insertLive("user-1", "session-1", tracks);
+    await expect(
+      asPromise(
+        stub.resumeLive("user-1", "session-1", "session-2", localTracks),
+      ),
+    ).rejects.toThrow("Invalid lives.tracks_json");
+    await expect(stub.getLive("user-1")).resolves.toMatchObject({
+      sessionId: "session-1",
+      tracks,
+    });
+  });
+
+  it("rejects malformed live rows, track JSON, and invalid track records", async () => {
+    const stub = createLiveState();
+
+    // 期限切れの配信として先に終了されないよう、猶予期限は現在時刻より後に置く。
+    await insertRawLive(stub, {
+      grace_expires_at: String(NOW + GRACE_MS + 0.5),
+    });
+    await expect(asPromise(stub.getLive("user-1"))).rejects.toThrow(
+      "Invalid lives row",
+    );
+
+    await insertRawLive(stub, { session_seen_active_at: "'recent'" });
+    await expect(asPromise(stub.getLive("user-1"))).rejects.toThrow(
+      "Invalid lives row",
+    );
+
+    await insertRawLive(stub, { tracks_json: "'not-json'" });
+    await expect(asPromise(stub.getLive("user-1"))).rejects.toThrow(
+      SyntaxError,
+    );
+
+    await insertRawLive(stub, {
+      tracks_json: `'${JSON.stringify([
+        { ...createTracks("session-1")[0], location: "local" },
+      ])}'`,
+    });
+    await expect(asPromise(stub.getLive("user-1"))).rejects.toThrow(
+      "Invalid lives.tracks_json",
+    );
   });
 
   it("sets the alarm to the deadline of a new grace period", async () => {
@@ -137,6 +255,33 @@ describe("live state", () => {
     );
     await expect(stub.getLive("user-1")).resolves.not.toBeNull();
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("resumes a broadcast with a new session and clears its grace state", async () => {
+    const stub = createLiveState();
+    const broadcastId = await stub.insertLive("user-1", "session-1", []);
+    await stub.markLiveSessionSeenActive("user-1", "session-1", 10_000);
+    await stub.startLiveReconnectGrace("user-1", "session-1", GRACE_MS);
+    await expect(stub.getLive("user-1")).resolves.toMatchObject({
+      graceExpiresAt: NOW + GRACE_MS,
+      sessionSeenActiveAt: NOW,
+    });
+    const tracks = createTracks("session-2");
+
+    await expect(
+      stub.resumeLive("user-1", "other-session", "session-2", tracks),
+    ).resolves.toBe(false);
+    await expect(
+      stub.resumeLive("user-1", "session-1", "session-2", tracks),
+    ).resolves.toBe(true);
+    await expect(stub.getLive("user-1")).resolves.toEqual({
+      broadcastId,
+      graceExpiresAt: null,
+      sessionSeenActiveAt: null,
+      sessionId: "session-2",
+      tracks,
+      userId: "user-1",
+    });
   });
 
   it("ends the broadcast at its deadline and hands its notification to the Worker", async () => {
@@ -202,6 +347,22 @@ describe("live state", () => {
     await expect(getAlarm(stub)).resolves.toBeNull();
   });
 
+  it("lists lives with their owners' names, including ones waiting for OBS", async () => {
+    const stub = createLiveState();
+    await stub.setUser({ userId: "user-1", displayName: "Old name" });
+    await stub.setUser({ userId: "user-1", displayName: "Streamer" });
+    await stub.setUser({ userId: "user-2", displayName: "Reconnecting" });
+    await stub.setUser({ userId: "user-3", displayName: "Offline" });
+    await stub.insertLive("user-1", "session-1", []);
+    await stub.insertLive("user-2", "session-2", []);
+    await stub.startLiveReconnectGrace("user-2", "session-2", GRACE_MS);
+
+    await expect(stub.getAllLives()).resolves.toEqual([
+      { owner: { userId: "user-1", displayName: "Streamer" } },
+      { owner: { userId: "user-2", displayName: "Reconnecting" } },
+    ]);
+  });
+
   it("ends a broadcast whose session was found inactive", async () => {
     const stub = createLiveState();
     await startNotifiedLive(stub);
@@ -246,6 +407,30 @@ describe("live state", () => {
     await expect(getAlarm(stub)).resolves.toBeNull();
   });
 
+  it("stores a notification only on the broadcast it was sent for", async () => {
+    const stub = createLiveState();
+    const broadcastId = await stub.insertLive("user-1", "session-1", []);
+    assert.isNotNull(broadcastId, "Expected a new broadcast");
+
+    await expect(
+      stub.setLiveNotificationMessageId("user-1", "other-broadcast", "45"),
+    ).resolves.toBe(false);
+    await expect(
+      stub.setLiveNotificationMessageId("user-2", broadcastId, "46"),
+    ).resolves.toBe(false);
+    await expect(
+      stub.setLiveNotificationMessageId("user-1", broadcastId, "47"),
+    ).resolves.toBe(true);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    dispatch.mockClear();
+
+    await stub.endLive("user-1", "session-1");
+
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith([
+      { messageId: "47", userId: "user-1" },
+    ]);
+  });
+
   it("ends the broadcast and gives up on its notification when the Worker cannot be reached", async () => {
     const stub = createLiveState();
     await startNotifiedLive(stub);
@@ -281,6 +466,43 @@ describe("live state", () => {
     await expect(stub.getLive("user-2")).resolves.toBeNull();
     await expect(stub.getLive("user-1")).resolves.not.toBeNull();
     await expect(getAlarm(stub)).resolves.toBe(NOW + GRACE_MS);
+  });
+
+  it("ends exactly the broadcasts whose grace period has passed", async () => {
+    const stub = createLiveState();
+    await stub.insertLive("live-user", "live-session", []);
+    await stub.insertLive("waiting-user", "waiting-session", []);
+    await stub.startLiveReconnectGrace(
+      "waiting-user",
+      "waiting-session",
+      GRACE_MS,
+    );
+    const broadcastId = await stub.insertLive(
+      "overdue-user",
+      "overdue-session",
+      [],
+    );
+    assert.isNotNull(broadcastId, "Expected a new broadcast");
+    // 実際の Discord snowflake と同様、Number.MAX_SAFE_INTEGER より大きい値。
+    await stub.setLiveNotificationMessageId(
+      "overdue-user",
+      broadcastId,
+      "1300000000000000123",
+    );
+    await stub.startLiveReconnectGrace(
+      "overdue-user",
+      "overdue-session",
+      30_000,
+    );
+
+    vi.setSystemTime(NOW + 30_000);
+    await expect(stub.getLive("overdue-user")).resolves.toBeNull();
+
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith([
+      { messageId: "1300000000000000123", userId: "overdue-user" },
+    ]);
+    await expect(stub.getLive("waiting-user")).resolves.not.toBeNull();
+    await expect(stub.getLive("live-user")).resolves.not.toBeNull();
   });
 
   it("does not store a deadline whose alarm could not be set", async () => {
@@ -333,7 +555,7 @@ describe("live state", () => {
     expect(dispatch).toHaveBeenCalledOnce();
   });
 
-  it("rejects an invalid notification id without poisoning later calls", async () => {
+  it("rejects values that later reads could not parse, without poisoning later calls", async () => {
     const stub = createLiveState();
     const broadcastId = await stub.insertLive("user-1", "session-1", []);
     assert.isNotNull(broadcastId, "Expected a new broadcast");
@@ -343,12 +565,20 @@ describe("live state", () => {
         stub.setLiveNotificationMessageId("user-1", broadcastId, "bad-id"),
       ),
     ).rejects.toThrow("Invalid lives.notification_message_id");
+    await expect(
+      asPromise(stub.startLiveReconnectGrace("user-1", "session-1", 0.5)),
+    ).rejects.toThrow("Invalid lives.grace_expires_at");
 
-    await expect(stub.getLive("user-1")).resolves.not.toBeNull();
+    await expect(stub.getLive("user-1")).resolves.toMatchObject({
+      graceExpiresAt: null,
+    });
     await expect(
       stub.setLiveToken("user-1", "token-hash"),
     ).resolves.toBeUndefined();
     await expect(getAlarm(stub)).resolves.toBeNull();
+    // 拒否された通知 ID は保存されていないため、終了時に削除も引き渡されない。
+    await expect(stub.endLive("user-1", "session-1")).resolves.toBe(true);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("leaves nothing behind when a command fails halfway", async () => {
@@ -423,15 +653,25 @@ describe("live state", () => {
     await stub.insertLive("user-1", "session-1", []);
 
     await expect(
+      stub.markLiveSessionSeenActive("user-1", "other-session", 10_000),
+    ).resolves.toBe(false);
+    await expect(
       stub.markLiveSessionSeenActive("user-1", "session-1", 10_000),
     ).resolves.toBe(true);
     vi.setSystemTime(NOW + 9999);
     await expect(
       stub.markLiveSessionSeenActive("user-1", "session-1", 10_000),
     ).resolves.toBe(false);
-
     await expect(stub.getLive("user-1")).resolves.toMatchObject({
       sessionSeenActiveAt: NOW,
+    });
+
+    vi.setSystemTime(NOW + 10_000);
+    await expect(
+      stub.markLiveSessionSeenActive("user-1", "session-1", 10_000),
+    ).resolves.toBe(true);
+    await expect(stub.getLive("user-1")).resolves.toMatchObject({
+      sessionSeenActiveAt: NOW + 10_000,
     });
   });
 
@@ -445,5 +685,19 @@ describe("live state", () => {
 
     await expect(stub.getLiveTokenHash("user-1")).resolves.toBe("second-hash");
     await expect(stub.hasLiveToken("user-1")).resolves.toBe(true);
+    await expect(stub.hasLiveToken("user-2")).resolves.toBe(false);
+  });
+
+  it("rejects a stored token hash that is not text", async () => {
+    const stub = createLiveState();
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO live_tokens (user_id, token_hash) VALUES ('user-1', x'00')",
+      );
+    });
+
+    await expect(asPromise(stub.getLiveTokenHash("user-1"))).rejects.toThrow(
+      "Invalid live_tokens row",
+    );
   });
 });

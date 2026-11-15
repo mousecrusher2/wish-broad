@@ -35,7 +35,7 @@
   - `worker/live/tracks.ts`: SFU のトラックを `waitUntil` 内で閉じる処理
   - `worker/live/effects.ts`: Durable Object からの依頼で Worker が実行する処理（`LiveEffects`）
   - `worker/live/types.ts`: Worker と `LiveState` の間で受け渡す型
-- `worker/state/`: `LiveState` Durable Object（`live-state.ts`: トランザクション、再接続猶予アラーム、開始通知の削除の引き渡し）と、そのストレージ用 SQL（`database.ts`）
+- `worker/state/`: `LiveState` Durable Object（`live-state.ts`: 各メソッドの SQL、トランザクション、再接続猶予アラーム、開始通知の削除の引き渡し）と、そのストレージのテーブル定義（`migrations.ts`）
 - `worker/clients/`: 外部 API（Realtime SFU、TURN、Discord OAuth、Discord Webhook）のクライアント。配信のライフサイクルを知らず、API が必要とする値だけを受け取ります。
 - `worker/lib/`: ログ出力やトークン処理などのユーティリティ
 - `worker/testing/`: Worker テストの共有ヘルパー（Worker のビルドには含めません）

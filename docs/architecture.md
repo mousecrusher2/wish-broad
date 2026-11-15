@@ -22,7 +22,7 @@ Cloudflare Workers の呼び出しログがすでに記録されているため�
 
 ## ストレージスキーマ
 
-テーブルは `LiveState` の SQLite ストレージ上に置かれ、その構造は `worker/state/database.ts` の `SCHEMA_MIGRATIONS` のみによって定義されます。各エントリが 1 つのスキーマバージョンを表します。`LiveState` は起動時に、`schema_migrations` に未記録のバージョンを順次適用します。
+テーブルは `LiveState` の SQLite ストレージ上に置かれ、その構造は `worker/state/migrations.ts` の `SCHEMA_MIGRATIONS` のみによって定義されます。各エントリが 1 つのスキーマバージョンを表します。`LiveState` は起動時に、`schema_migrations` に未記録のバージョンを順次適用します。
 
 ## 認証とトークン
 
