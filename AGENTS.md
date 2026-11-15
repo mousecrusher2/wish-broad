@@ -20,6 +20,7 @@
 - `worker/index.ts`: ルート構成層
 - `worker/live-state.ts`: Durable Object の挙動（`LiveState`: トランザクション、再接続猶予アラーム、開始通知の削除の引き渡し）
 - `worker/live-end.ts`: Durable Object からの依頼で Worker が実行する処理
+- `worker/live-session.ts`: 配信行が保持するインジェストセッションの生死の判定と、`DELETE` なしで失われたセッションの扱い
 
 ## ビルド・テスト・開発コマンド
 

@@ -14,7 +14,6 @@ import {
   SfuApiError,
   type StoredTrack,
   closeTracks,
-  isSessionActive,
   renegotiateSession,
   startIngest,
   startPlay,
@@ -35,6 +34,11 @@ import {
 import { createErrorLogFields, logError, logInfo, logWarn } from "./logger";
 import { LIVE_RECONNECT_GRACE_MS } from "./live-end";
 import { getLiveState } from "./live-state";
+import {
+  checkLiveSession,
+  type LiveSessionStatus,
+  startLostSessionGrace,
+} from "./live-session";
 
 type AppEnv = {
   Bindings: Bindings;
@@ -45,15 +49,6 @@ type AppEnv = {
 
 /** 再接続待ちの 409 に付ける Retry-After。プレーヤー側の固定リトライ間隔と一致させている。 */
 const LIVE_RECONNECTING_RETRY_AFTER_SECONDS = 2;
-
-// DELETE なしで失われたインジェストセッションの扱いに使う値。それぞれの根拠は
-// docs/architecture.md の「インジェストのライフサイクル」を参照。
-/** リクエストがセッションの生存確認時刻を記録する最小間隔。 */
-const LIVE_SESSION_SEEN_ACTIVE_WRITE_INTERVAL_MS = 10_000;
-/** 最後の生存確認からこの時間以内に失われたセッションは、たった今失われたとみなす。 */
-const LIVE_SESSION_RECENTLY_ACTIVE_MS = 60_000;
-/** たった今失われたセッションの配信に与える再接続猶予期間。 */
-const LIVE_LOST_SESSION_GRACE_MS = 30_000;
 
 const app = new HonoBase<AppEnv>({ router: new LinearRouter() });
 
@@ -191,72 +186,6 @@ async function sendLiveStartNotification(
   }
 }
 
-function wasSessionSeenActiveRecently(live: LiveRecord, now: number): boolean {
-  return (
-    live.sessionSeenActiveAt !== null &&
-    now - live.sessionSeenActiveAt <= LIVE_SESSION_RECENTLY_ACTIVE_MS
-  );
-}
-
-/**
- * リクエストがセッションの生存を確認したことを waitUntil 内で LiveState に記録する。
- * ベストエフォートであり、失敗はログ出力する。
- */
-function recordLiveSessionSeenActive(
-  c: Context<AppEnv>,
-  live: LiveRecord,
-  now: number,
-): void {
-  // 記録が新しければ LiveState の呼び出し自体を省き、健全な配信の視聴者が
-  // オブジェクトを起こさないようにする。
-  if (
-    live.sessionSeenActiveAt !== null &&
-    now - live.sessionSeenActiveAt < LIVE_SESSION_SEEN_ACTIVE_WRITE_INTERVAL_MS
-  ) {
-    return;
-  }
-
-  c.executionCtx.waitUntil(
-    getLiveState(c.env)
-      .markLiveSessionSeenActive(
-        live.userId,
-        live.sessionId,
-        LIVE_SESSION_SEEN_ACTIVE_WRITE_INTERVAL_MS,
-      )
-      .catch((error: unknown) => {
-        logWarn(c.env, "live.session_activity_record_failed", {
-          ...createErrorLogFields(error),
-          sessionId: live.sessionId,
-          userId: live.userId,
-        });
-      }),
-  );
-}
-
-/**
- * DELETE なしでたった今失われたセッションの配信に、遅延した DELETE と同様の短い再接続猶予を与える。
- * その間に行が更新されていた（DELETE や再開があった）場合は何もしない。
- */
-async function startLostSessionGrace(
-  c: Context<AppEnv>,
-  live: LiveRecord,
-): Promise<void> {
-  const graceExpiresAt = await getLiveState(c.env).startLiveReconnectGrace(
-    live.userId,
-    live.sessionId,
-    LIVE_LOST_SESSION_GRACE_MS,
-  );
-  if (graceExpiresAt === null) {
-    return;
-  }
-
-  logInfo(c.env, "live.session_lost", {
-    graceExpiresAt,
-    sessionId: live.sessionId,
-    userId: live.userId,
-  });
-}
-
 /** 配信者の再接続待ちを示す 409。視聴者はこれを受けてリトライを続け、404 は配信終了を表す。 */
 function respondLiveReconnecting(c: Context<AppEnv>): Response {
   return c.text("Live stream is waiting for the publisher to reconnect", 409, {
@@ -339,16 +268,15 @@ app.post("/ingest/:userId", async (c) => {
 
   const liveState = getLiveState(c.env);
   let resumableLive: LiveRecord | null = null;
-  const now = Date.now();
-  // 猶予期間が過ぎた配信は LiveState によってすでに終了されているため、
-  // 猶予期限が保存されている場合は OBS がまだ再開できる状態にあることを必ず意味する。
   const existingLive = await liveState.getLive(userId);
-  if (existingLive && existingLive.graceExpiresAt !== null) {
-    resumableLive = existingLive;
-  } else if (existingLive) {
-    let isActive: boolean;
+  if (existingLive) {
+    let sessionStatus: LiveSessionStatus;
     try {
-      isActive = await isSessionActive(c.env, existingLive.sessionId);
+      sessionStatus = await checkLiveSession(
+        c.env,
+        c.executionCtx,
+        existingLive,
+      );
     } catch (error: unknown) {
       if (!(error instanceof SfuApiError)) {
         throw error;
@@ -361,20 +289,19 @@ app.post("/ingest/:userId", async (c) => {
       return c.text("Failed to verify ingest session status", 502);
     }
 
-    if (isActive) {
-      // セッションを失ったばかりの OBS は SFU が GC するまで再試行を続けるため、
-      // GC 後の再試行で配信を再開できるよう生存を記録しておく。
-      recordLiveSessionSeenActive(c, existingLive, now);
-      return c.text("A live stream is already active for this user", 400);
-    }
-
-    if (wasSessionSeenActiveRecently(existingLive, now)) {
-      // セッションはたった今失われたばかりなので、これは OBS の再接続とみなす。
-      resumableLive = existingLive;
-    } else {
-      // ずっと前に失われたセッションかもしれないため、新しい配信として開始して通知する。
-      // その間に行が更新されていた場合は、後続の insertLive がこのインジェストを拒否する。
-      await liveState.endLive(userId, existingLive.sessionId);
+    switch (sessionStatus) {
+      case "active":
+        return c.text("A live stream is already active for this user", 400);
+      case "reconnect_grace":
+      case "recently_lost":
+        // OBS の再接続とみなし、通知せずに配信を再開する。
+        resumableLive = existingLive;
+        break;
+      case "lost":
+        // ずっと前に失われたセッションかもしれないため、新しい配信として開始して通知する。
+        // その間に行が更新されていた場合は、後続の insertLive がこのインジェストを拒否する。
+        await liveState.endLive(userId, existingLive.sessionId);
+        break;
     }
   }
 
@@ -554,18 +481,17 @@ app.post("/play/:userId", async (c) => {
 
   const jwtPayload = c.get("jwtPayload");
 
-  const now = Date.now();
   const liveState = getLiveState(c.env);
   const liveTrackRecord = await liveState.getLive(userId);
   const tracks = liveTrackRecord?.tracks ?? [];
-  if (liveTrackRecord && liveTrackRecord.graceExpiresAt !== null) {
-    // 保存済みトラックは DELETE 時に閉じられているため、再開か配信終了まで視聴者にリトライさせる。
-    return respondLiveReconnecting(c);
-  }
   if (liveTrackRecord) {
-    let isActive: boolean;
+    let sessionStatus: LiveSessionStatus;
     try {
-      isActive = await isSessionActive(c.env, liveTrackRecord.sessionId);
+      sessionStatus = await checkLiveSession(
+        c.env,
+        c.executionCtx,
+        liveTrackRecord,
+      );
     } catch (error: unknown) {
       if (!(error instanceof SfuApiError)) {
         throw error;
@@ -577,19 +503,23 @@ app.post("/play/:userId", async (c) => {
       });
       return c.text("Failed to verify live stream status", 502);
     }
-    if (!isActive) {
-      if (wasSessionSeenActiveRecently(liveTrackRecord, now)) {
-        await startLostSessionGrace(c, liveTrackRecord);
+
+    switch (sessionStatus) {
+      case "active":
+        break;
+      case "reconnect_grace":
+        // 保存済みトラックは DELETE 時に閉じられているため、再開か配信終了まで視聴者にリトライさせる。
         return respondLiveReconnecting(c);
-      }
-      // その間に行が更新されていた場合（OBS が DELETE を送信または再開済み）、
-      // 終了を報告するのではなく新しい状態に対して視聴者にリトライさせる。
-      return (await liveState.endLive(userId, liveTrackRecord.sessionId))
-        ? c.text(`Live stream not found: ${userId}`, 404)
-        : respondLiveReconnecting(c);
+      case "recently_lost":
+        await startLostSessionGrace(c.env, liveTrackRecord);
+        return respondLiveReconnecting(c);
+      case "lost":
+        // その間に行が更新されていた場合（OBS が DELETE を送信または再開済み）、
+        // 終了を報告するのではなく新しい状態に対して視聴者にリトライさせる。
+        return (await liveState.endLive(userId, liveTrackRecord.sessionId))
+          ? c.text(`Live stream not found: ${userId}`, 404)
+          : respondLiveReconnecting(c);
     }
-    // 視聴者はメディアが止まっても再生リクエストを送り続けるため、ここでも生存を記録する。
-    recordLiveSessionSeenActive(c, liveTrackRecord, now);
   }
 
   if (!isSdpContentType(c.req.header("content-type"))) {
@@ -615,7 +545,7 @@ app.post("/play/:userId", async (c) => {
       if (liveTrackRecord) {
         // 上で確認した時点ではインジェストセッションは生存していたため、
         // SFU がたった今ガベージコレクションしたとみなせる。
-        await startLostSessionGrace(c, liveTrackRecord);
+        await startLostSessionGrace(c.env, liveTrackRecord);
         return respondLiveReconnecting(c);
       }
       return c.text(`Live stream not found: ${userId}`, 404);
