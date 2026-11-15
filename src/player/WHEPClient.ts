@@ -123,7 +123,7 @@ export class WHEPSessionError extends Error {
     return this.kind === "resource_not_found";
   }
 
-  // Worker は配信者の再接続待ちの間は 409 を返し、配信終了時は 404 を返す。
+  /** 配信者の再接続待ちで再生できない（Worker が 409 を返した）場合に true を返す。 */
   isUnavailable(): boolean {
     return this.kind === "resource_unavailable";
   }

@@ -309,10 +309,6 @@ export class LiveState extends DurableObject<Bindings> {
 
   /**
    * 次の猶予期限へアラームを移動する。状態を変更した同じトランザクション内で呼び出すこと。
-   *
-   * 現在設定されているアラームは毎回ストレージから読み取る。インスタンス内にキャッシュを持つと
-   * ロールバック・再起動・アラーム実行のたびに整合をとり直す必要が生じ、1 つでも見落とすと
-   * アラームが設定されていない期限を取り残してしまう。
    */
   async #moveAlarm(): Promise<void> {
     const { storage } = this.ctx;

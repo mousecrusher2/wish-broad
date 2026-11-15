@@ -355,9 +355,8 @@ export function getLive(sql: SqlStorage, userId: string): LiveRecord | null {
 }
 
 /**
- * 開始通知をインジェストセッションではなく配信本体に保存することで、通知送信中に
- * 再接続が発生しても情報が引き継がれるようにする。該当する配信がすでに存在しない場合は
- * false を返す。
+ * 開始通知のメッセージ ID を `broadcastId` の配信に保存する。該当する配信がすでに存在しない
+ * 場合は false を返す。
  *
  * @throws {Error} `notificationMessageId` が 10 進数文字列の Discord snowflake でない場合。
  * この場合、何も保存されない。
