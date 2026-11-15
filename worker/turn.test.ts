@@ -1,18 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { TurnApiError, generateTurnIceServers } from "./turn";
 
 async function catchTurnError(
   promise: Promise<unknown>,
 ): Promise<TurnApiError> {
-  try {
-    await promise;
-  } catch (error: unknown) {
-    if (error instanceof TurnApiError) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error("Expected a TurnApiError");
+  const error = await promise.then(
+    () => undefined,
+    (rejection: unknown) => rejection,
+  );
+  assert.instanceOf(error, TurnApiError);
+  return error;
 }
 
 async function expectNoUsableIceServers(
@@ -96,10 +93,10 @@ describe("worker turn credentials", () => {
       Authorization: "Bearer turn-key-api-token",
       "Content-Type": "application/json",
     });
-    expect(typeof init?.body).toBe("string");
-    if (typeof init?.body !== "string") {
-      throw new TypeError("Expected TURN credential request body to be JSON");
-    }
+    assert(
+      typeof init?.body === "string",
+      "Expected TURN credential request body to be JSON",
+    );
     expect(JSON.parse(init.body)).toEqual({
       customIdentifier: "viewer-1",
       ttl: 86_400,

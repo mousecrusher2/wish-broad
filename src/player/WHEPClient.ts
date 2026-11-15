@@ -42,8 +42,7 @@ type WHEPSessionLifecycle =
   | { cleanupPromise: Promise<void>; kind: "closingServerSession" }
   | { kind: "disposed" };
 
-// The session only swaps the playback source and starts playback, so it does
-// not need the rest of HTMLVideoElement.
+/** セッションが使うのは再生ソースの差し替えと再生開始だけで、HTMLVideoElement の他の機能は不要。 */
 type WHEPVideoElement = Pick<HTMLVideoElement, "srcObject" | "play">;
 
 type WHEPSessionOptions = {
@@ -124,8 +123,7 @@ export class WHEPSessionError extends Error {
     return this.kind === "resource_not_found";
   }
 
-  // The Worker answers 503 while the broadcast waits for its publisher to
-  // reconnect; 404 means the broadcast ended.
+  /** 配信者の再接続待ちで再生できない（Worker が 409 を返した）場合に true を返す。 */
   isUnavailable(): boolean {
     return this.kind === "resource_unavailable";
   }
@@ -157,7 +155,7 @@ async function createResponseError(
   let kind: WHEPSessionErrorKind = "unexpected_response";
   if (response.status === 404) {
     kind = "resource_not_found";
-  } else if (response.status === 503) {
+  } else if (response.status === 409) {
     kind = "resource_unavailable";
   } else if (response.status >= 400 && response.status < 500) {
     kind = "client_request_error";
@@ -173,7 +171,7 @@ async function createResponseError(
 }
 
 /**
- * @throws {WHEPSessionError} When the response is not a non-empty SDP body.
+ * @throws {WHEPSessionError} レスポンスが空でない SDP ボディでない場合。
  */
 async function readSdpResponse(response: Response): Promise<string> {
   const contentType = response.headers.get("content-type");
@@ -200,8 +198,8 @@ async function readSdpResponse(response: Response): Promise<string> {
 }
 
 /**
- * @throws {WHEPSessionError} When the response is not a 201 or 406 session
- * with a location header, a valid track count header, and an SDP body.
+ * @throws {WHEPSessionError} location ヘッダー、有効なトラック数ヘッダー、および
+ * SDP ボディを備えた 201 または 406 セッションレスポンスでない場合。
  */
 async function parseWhepSessionResponse(
   response: Response,
@@ -279,6 +277,7 @@ function isIceGatheringFinished(pc: RTCPeerConnection): boolean {
   return pc.signalingState === "closed" || pc.connectionState === "closed";
 }
 
+/** @throws {WHEPSessionError} 収集の完了前に `signal` が中断された場合。 */
 async function waitForIceGatheringComplete(
   pc: RTCPeerConnection,
   signal: AbortSignal,
@@ -343,9 +342,10 @@ export class WHEPSession {
   private maxRemoteTrackCount = 0;
   private runtimeState: WHEPSessionRuntimeState =
     createRuntimeState("disconnected");
-  // The WHEP session URL the Worker returned, once POST /play succeeded.
+  /** POST /play 成功後に Worker が返した WHEP セッション URL。 */
   private serverSessionLocation: string | null = null;
 
+  /** @throws {Error} `resourceUserId` が空白だけの場合。 */
   constructor({
     callbacks = {},
     resourceUserId,
@@ -626,6 +626,7 @@ export class WHEPSession {
 
       this.remoteStream.addTrack(event.track);
       this.attachRemoteTrackListeners(event.track);
+      // MediaStream.addTrack() は "addtrack" イベントを発火しないため、ここで直接更新する。
       this.refreshStreamState();
       void this.videoElement.play().catch((error: Error) => {
         console.warn("Autoplay failed:", error);
@@ -734,16 +735,15 @@ export class WHEPSession {
   }
 
   /**
-   * Negotiate playback for this session.
+   * このセッションの再生ネゴシエーションを行う。
    *
-   * Resolves quietly when `attemptSignal` aborts or the session is disposed
-   * meanwhile. On any other failure the session disposes itself and reports
-   * `failed` before rethrowing.
+   * 処理中に `attemptSignal` が中断されるかセッションが破棄された場合は静かに
+   * 解決する。それ以外の失敗では、エラーを再スローする前にセッション自身を破棄して
+   * `failed` を報告する。
    *
-   * @throws {WHEPSessionError} When the WHEP resource rejects the session or
-   * answers unexpectedly; its `kind` tells whether the live ended or is
-   * waiting for the publisher.
-   * @throws {Error} When the local SDP negotiation or a request fails.
+   * @throws {WHEPSessionError} WHEP リソースがセッションを拒否したか予期しない応答を
+   * 返した場合。配信終了か配信者の再接続待ちかは `kind` で判別できる。
+   * @throws {Error} ローカル SDP ネゴシエーションまたはリクエストが失敗した場合。
    */
   async start(attemptSignal: AbortSignal): Promise<void> {
     const signal = AbortSignal.any([
@@ -772,8 +772,8 @@ export class WHEPSession {
 
       const localOffer = await this.pc.createOffer();
       await this.pc.setLocalDescription(localOffer);
-      // The current Calls-backed Worker path is effectively non-trickle. Send a
-      // complete local offer instead of relying on later trickle ICE PATCHes.
+      // Worker 経路はトリクル ICE を扱わないため、ICE 収集を終えた完全なオファーを送る
+      // （docs/architecture.md「WHEPクライアントの設計判断」）。
       await waitForIceGatheringComplete(this.pc, signal);
 
       const localOfferSdp = this.pc.localDescription?.sdp;
@@ -781,9 +781,8 @@ export class WHEPSession {
         throw new Error("Failed to create local SDP offer");
       }
 
-      // Disposing aborts this POST. If the Worker already created a Calls
-      // playback session by then, nothing DELETEs it; nobody connects to it,
-      // so it carries no media until Calls cleans it up.
+      // 破棄時はこの POST を中断する。作成済みの SFU 再生セッションには DELETE を送らないが、
+      // 誰も接続しないまま SFU が片付ける。
       const offerResponse = await fetch(resourceUrl, {
         method: "POST",
         headers: {
@@ -797,8 +796,8 @@ export class WHEPSession {
         offerResponse,
         resourceUrl,
       );
-      // Custom Worker header: expected ingest track count. It lets the
-      // controller reject degraded playback that negotiates only a subset.
+      // Worker 独自の Wish-Live-Track-Count ヘッダー。一部のトラックしか得られなかった
+      // 再生をコントローラーが不完全とみなすために使う。
       this.expectedRemoteTrackCount =
         sessionResponse.expectedRemoteTrackCount ?? 0;
       this.serverSessionLocation = sessionResponse.sessionUrl.toString();
@@ -819,8 +818,8 @@ export class WHEPSession {
 
           const localAnswer = await this.pc.createAnswer();
           await this.pc.setLocalDescription(localAnswer);
-          // This PATCH answers a WHEP 406 counter-offer. It is not a trickle ICE
-          // candidate PATCH, so gather the full answer before sending.
+          // この PATCH は 406 カウンターオファーへのアンサーであり、トリクル ICE ではないため
+          // 完全なアンサーを送る。
           await waitForIceGatheringComplete(this.pc, signal);
 
           const localAnswerSdp = this.pc.localDescription.sdp;

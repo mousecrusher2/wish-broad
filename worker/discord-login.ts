@@ -1,7 +1,6 @@
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { sign } from "hono/jwt";
 import { Context } from "hono";
-import * as db from "./database";
 import {
   buildDiscordAuthorizationUrl,
   createOAuthState,
@@ -15,6 +14,7 @@ import {
   revokeAccessToken,
 } from "./discord";
 import { calcJwtTimestamps, JWT_DURATION_SECONDS } from "./jwt-utils";
+import { getLiveState } from "./live-state";
 import { Bindings, JWTPayload } from "./types";
 import { createErrorLogFields, logError, logWarn } from "./logger";
 
@@ -69,7 +69,7 @@ async function issueDiscordLoginJwt<E extends ContextWithBindings>(
   const displayName =
     member.nick ?? member.user.global_name ?? member.user.username;
 
-  await db.setUser(c.env.LIVE_DB, {
+  await getLiveState(c.env).setUser({
     userId: member.user.id,
     displayName,
   });
@@ -166,9 +166,8 @@ export async function completeDiscordLogin<E extends ContextWithBindings>(
     );
   }
 
-  // Discord OAuth is used only to prove membership in the authorized guild.
-  // The app session is our own JWT cookie, so revoke the Discord access token
-  // after the membership check regardless of login success.
+  // Discord のアクセストークンはサーバーへの所属確認にしか使わないため、ログインの成否に
+  // かかわらず確認後に失効させる（docs/architecture.md「認証とトークン」）。
   try {
     let member: DiscordGuildMember;
     try {
@@ -195,8 +194,10 @@ export async function completeDiscordLogin<E extends ContextWithBindings>(
   }
 }
 
-// Revocation runs in a `finally`, so it must not throw: an error there would
-// replace the login response. A failed revocation is only logged.
+/**
+ * アクセストークンを失効させ、失敗はログ出力だけで済ませる。`finally` 内で呼ぶため、
+ * スローするとログインのレスポンスがエラーで置き換わってしまう。
+ */
 async function revokeAccessTokenQuietly(
   env: Bindings,
   accessToken: string,

@@ -1,11 +1,9 @@
-// JWT関連のユーティリティ関数
-
-// 現在のUnixタイムスタンプを取得
+/** 現在時刻の Unix 秒（JWT の数値日時は秒単位）。 */
 function getCurrentTimestamp(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-// JWT用のiat（issued at）とexp（expiration）を計算
+/** 現在時刻に発行され `durationInSeconds` 秒後に失効する JWT の `iat` と `exp`。 */
 export function calcJwtTimestamps(durationInSeconds: number = 60 * 60 * 24): {
   iat: number;
   exp: number;
@@ -15,7 +13,6 @@ export function calcJwtTimestamps(durationInSeconds: number = 60 * 60 * 24): {
   return { iat, exp };
 }
 
-// よく使用される期間の定数
 export const JWT_DURATION_SECONDS = {
   ONE_HOUR: 60 * 60,
   ONE_DAY: 60 * 60 * 24,

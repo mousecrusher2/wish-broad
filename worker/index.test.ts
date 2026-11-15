@@ -1,51 +1,45 @@
+import {
+  createExecutionContext,
+  reset,
+  runInDurableObject,
+  waitOnExecutionContext,
+} from "cloudflare:test";
+import { env } from "cloudflare:workers";
 import { sign, verify } from "hono/jwt";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Bindings } from "./types";
-import type { LiveRecord } from "./database";
-import type { LiveEndParams } from "./live-end";
-import type { DiscordGuildMember, DiscordOAuthToken } from "./discord";
-import type { StoredTrack } from "./sfu";
-import { LiveNotFoundError, SfuApiError } from "./sfu";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
+import {
+  DiscordApiError,
+  type DiscordGuildMember,
+  type DiscordOAuthToken,
+} from "./discord";
+import { LiveEffects } from "./live-end";
+import { getLiveState, LiveState } from "./live-state";
+import { LiveNotFoundError, SfuApiError, type StoredTrack } from "./sfu";
 import { hashTokenWithPepper } from "./token-hash";
 import { TurnApiError } from "./turn";
+import type { Bindings } from "./types";
 
-const dbMocks = vi.hoisted(() => ({
-  endLive:
-    vi.fn<() => Promise<{ notificationMessageId: bigint | null } | null>>(),
-  getAllLives: vi.fn<() => Promise<unknown[]>>(),
-  getLiveTokenHash: vi.fn<() => Promise<string | null>>(),
-  getLive: vi.fn<() => Promise<LiveRecord | null>>(),
-  hasLiveToken: vi.fn<() => Promise<boolean>>(),
-  insertLive: vi.fn<() => Promise<string | null>>(),
-  markLiveSessionSeenActive: vi.fn<() => Promise<boolean>>(),
-  resumeLive: vi.fn<() => Promise<boolean>>(),
-  setLiveNotificationMessageId: vi.fn<() => Promise<boolean>>(),
-  setLiveToken: vi.fn<() => Promise<void>>(),
-  setUser: vi.fn<() => Promise<void>>(),
-  startLiveReconnectGrace: vi.fn<() => Promise<boolean>>(),
+// 外部 API ラッパー（SFU、Discord OAuth、Discord Webhook、TURN）は各モジュールのテストで
+// HTTP レベルまで検証しているため、ここではルートとの境界で差し替える。LiveState は
+// 実際の Durable Object をそのまま使う。
+const sfuMocks = vi.hoisted(() => ({
+  closeTracks: vi.fn<() => Promise<unknown>>(),
+  isSessionActive: vi.fn<() => Promise<boolean>>(),
+  renegotiateSession: vi.fn<() => Promise<unknown>>(),
+  startIngest: vi.fn<() => Promise<unknown>>(),
+  startPlay: vi.fn<() => Promise<unknown>>(),
 }));
-
-const workflowMocks = vi.hoisted(() => ({
-  create:
-    vi.fn<
-      (
-        options?: WorkflowInstanceCreateOptions<LiveEndParams>,
-      ) => Promise<WorkflowInstance>
-    >(),
-}));
-
-const callsMocks = vi.hoisted(() => {
-  return {
-    closeTracks: vi.fn<() => Promise<unknown>>(),
-    isSessionActive: vi.fn<() => Promise<unknown>>(),
-    renegotiateSession: vi.fn<() => Promise<unknown>>(),
-    startIngest: vi.fn<() => Promise<unknown>>(),
-    startPlay: vi.fn<() => Promise<unknown>>(),
-  };
-});
 
 const notificationsMocks = vi.hoisted(() => ({
-  deleteLiveStartedNotification: vi.fn<() => Promise<unknown>>(),
   sendLiveStartedNotification: vi.fn<() => Promise<unknown>>(),
 }));
 
@@ -53,342 +47,77 @@ const turnMocks = vi.hoisted(() => ({
   generateTurnIceServers: vi.fn<() => Promise<unknown>>(),
 }));
 
-const discordMocks = vi.hoisted(() => {
-  class MockDiscordApiError extends Error {
-    readonly endpoint: string;
-    readonly kind:
-      | "request_failed"
-      | "unauthorized"
-      | "forbidden"
-      | "not_found"
-      | "rate_limited"
-      | "http_error"
-      | "non_json_response"
-      | "unexpected_json_response";
-    readonly responseBodyJson: unknown;
-    readonly responseBodyText: string | undefined;
-    readonly statusText: string | undefined;
-
-    constructor(
-      message: string,
-      options: {
-        endpoint: string;
-        kind:
-          | "request_failed"
-          | "unauthorized"
-          | "forbidden"
-          | "not_found"
-          | "rate_limited"
-          | "http_error"
-          | "non_json_response"
-          | "unexpected_json_response";
-        statusText?: string;
-        responseBodyText?: string;
-        responseBodyJson?: unknown;
-      },
-    ) {
-      super(message);
-      this.name = "DiscordApiError";
-      ({
-        endpoint: this.endpoint,
-        kind: this.kind,
-        statusText: this.statusText,
-        responseBodyText: this.responseBodyText,
-        responseBodyJson: this.responseBodyJson,
-      } = options);
-    }
-  }
-
-  return {
-    DiscordApiError: MockDiscordApiError,
-    DISCORD_STATE_COOKIE_NAME: "discord_oauth_state",
-    buildDiscordAuthorizationUrl:
-      vi.fn<
-        (
-          env: Pick<Bindings, "DISCORD_CLIENT_ID">,
-          redirectUri: string,
-          state: string,
-        ) => string
-      >(),
-    createOAuthState: vi.fn<() => string>(),
-    exchangeCodeForToken:
-      vi.fn<
-        (
-          env: Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">,
-          code: string,
-          redirectUri: string,
-        ) => Promise<unknown>
-      >(),
-    getDiscordErrorMessage: vi.fn<(error: unknown) => string>(),
-    getGuildMember:
-      vi.fn<(accessToken: string, guildId: string) => Promise<unknown>>(),
-    revokeAccessToken:
-      vi.fn<
-        (
-          env: Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">,
-          accessToken: string,
-        ) => Promise<unknown>
-      >(),
-  };
-});
-
-vi.mock("./database", () => dbMocks);
-vi.mock("./sfu", async () => {
-  const actual = await vi.importActual<typeof import("./sfu")>("./sfu");
-  return {
-    ...actual,
-    closeTracks: callsMocks.closeTracks,
-    isSessionActive: callsMocks.isSessionActive,
-    renegotiateSession: callsMocks.renegotiateSession,
-    startIngest: callsMocks.startIngest,
-    startPlay: callsMocks.startPlay,
-  };
-});
-vi.mock("./discord", () => ({
-  DISCORD_STATE_COOKIE_NAME: discordMocks.DISCORD_STATE_COOKIE_NAME,
-  DISCORD_STATE_MAX_AGE_SECONDS: 600,
-  DiscordApiError: discordMocks.DiscordApiError,
-  buildDiscordAuthorizationUrl: discordMocks.buildDiscordAuthorizationUrl,
-  createOAuthState: discordMocks.createOAuthState,
-  exchangeCodeForToken: discordMocks.exchangeCodeForToken,
-  getDiscordErrorMessage: discordMocks.getDiscordErrorMessage,
-  getGuildMember: discordMocks.getGuildMember,
-  revokeAccessToken: discordMocks.revokeAccessToken,
+const discordMocks = vi.hoisted(() => ({
+  buildDiscordAuthorizationUrl:
+    vi.fn<
+      (
+        env: Pick<Bindings, "DISCORD_CLIENT_ID">,
+        redirectUri: string,
+        state: string,
+      ) => string
+    >(),
+  createOAuthState: vi.fn<() => string>(),
+  exchangeCodeForToken:
+    vi.fn<
+      (
+        env: Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">,
+        code: string,
+        redirectUri: string,
+      ) => Promise<unknown>
+    >(),
+  getGuildMember:
+    vi.fn<(accessToken: string, guildId: string) => Promise<unknown>>(),
+  revokeAccessToken:
+    vi.fn<
+      (
+        env: Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">,
+        accessToken: string,
+      ) => Promise<unknown>
+    >(),
 }));
-vi.mock("./notifications", () => ({
-  deleteLiveStartedNotification:
-    notificationsMocks.deleteLiveStartedNotification,
-  sendLiveStartedNotification: notificationsMocks.sendLiveStartedNotification,
+
+vi.mock("./sfu", async () => ({
+  ...(await vi.importActual<typeof import("./sfu")>("./sfu")),
+  ...sfuMocks,
+}));
+vi.mock("./discord", async () => ({
+  ...(await vi.importActual<typeof import("./discord")>("./discord")),
+  ...discordMocks,
+}));
+vi.mock("./notifications", async () => ({
+  ...(await vi.importActual<typeof import("./notifications")>(
+    "./notifications",
+  )),
+  ...notificationsMocks,
 }));
 vi.mock("./turn", async () => ({
   ...(await vi.importActual<typeof import("./turn")>("./turn")),
-  generateTurnIceServers: turnMocks.generateTurnIceServers,
+  ...turnMocks,
 }));
 
 import app from "./index";
 
-function createUnusedD1PreparedStatement(): D1PreparedStatement {
-  return {
-    bind() {
-      throw new Error("Unexpected D1 access in tests");
+/** 実際のアラームが自動発火しないよう、テストの時計は遠い未来に置く。 */
+const NOW = Date.UTC(2100, 0, 1);
+
+function createTracks(sessionId: string): StoredTrack[] {
+  return [
+    {
+      location: "remote",
+      mid: "0",
+      sessionId,
+      trackName: "video",
     },
-    first() {
-      throw new Error("Unexpected D1 access in tests");
-    },
-    run() {
-      throw new Error("Unexpected D1 access in tests");
-    },
-    all() {
-      throw new Error("Unexpected D1 access in tests");
-    },
-    raw() {
-      throw new Error("Unexpected D1 access in tests");
-    },
-  };
+  ];
 }
 
-function createUnusedD1DatabaseSession(): D1DatabaseSession {
-  return {
-    prepare() {
-      throw new Error("Unexpected D1 session access in tests");
-    },
-    batch() {
-      throw new Error("Unexpected D1 session access in tests");
-    },
-    getBookmark() {
-      throw new Error("Unexpected D1 session access in tests");
-    },
-  };
-}
-
-function createUnusedD1Database(): D1Database {
-  return {
-    prepare() {
-      return createUnusedD1PreparedStatement();
-    },
-    batch() {
-      throw new Error("Unexpected D1 access in tests");
-    },
-    exec() {
-      throw new Error("Unexpected D1 access in tests");
-    },
-    withSession() {
-      return createUnusedD1DatabaseSession();
-    },
-    // oxlint-disable-next-line typescript/no-deprecated -- The deprecated method remains required by the D1Database test double type.
-    ["dump"]() {
-      throw new Error("Unexpected D1 access in tests");
-    },
-  };
-}
-
-class UnusedTracingSpan {
-  get isTraced(): boolean {
-    return false;
-  }
-
-  spanContext(): TracingSpanContext {
-    return {
-      traceId: "unused-trace-id",
-      spanId: "unused-span-id",
-      traceFlags: 0,
-    };
-  }
-
-  setAttribute(
-    _key: string,
-    _value: boolean | number | string,
-  ): UnusedTracingSpan {
-    return this;
-  }
-
-  setAttributes(
-    _attributes: Record<string, boolean | number | string | undefined>,
-  ): UnusedTracingSpan {
-    return this;
-  }
-
-  recordException(
-    _exception:
-      | string
-      | {
-          code: string | number;
-          name?: string;
-          message?: string;
-          stack?: string;
-        }
-      | {
-          code?: string | number;
-          name: string;
-          message?: string;
-          stack?: string;
-        }
-      | {
-          code?: string | number;
-          name?: string;
-          message: string;
-          stack?: string;
-        },
-  ): void {}
-
-  updateName(_name: string): UnusedTracingSpan {
-    return this;
-  }
-
-  setStatus(_status: TracingSpanStatus): UnusedTracingSpan {
-    return this;
-  }
-
-  end(): void {}
-}
-
-function failUnusedTracingAccess(): never {
-  throw new Error("Unexpected tracing access in tests");
-}
-
-function failUnusedWorkflowAccess(): never {
-  throw new Error("Unexpected Workflow access in tests");
-}
-
-function createUnusedWorkflowInstance(): WorkflowInstance {
-  return {
-    delete: failUnusedWorkflowAccess,
-    id: "live-end-instance",
-    pause: failUnusedWorkflowAccess,
-    restart: failUnusedWorkflowAccess,
-    resume: failUnusedWorkflowAccess,
-    sendEvent: failUnusedWorkflowAccess,
-    status: failUnusedWorkflowAccess,
-    subscribe: failUnusedWorkflowAccess,
-    terminate: failUnusedWorkflowAccess,
-  };
-}
-
-function createUnusedTracing(): Tracing {
-  return {
-    enterSpan: failUnusedTracingAccess,
-    getActiveSpan: failUnusedTracingAccess,
-    startActiveSpan: failUnusedTracingAccess,
-    startSpan: failUnusedTracingAccess,
-    withActiveSpan: failUnusedTracingAccess,
-    Span: UnusedTracingSpan,
-  };
-}
-
-function createExecutionContext(): ExecutionContext {
-  return {
-    get exports(): never {
-      throw new Error("Unexpected execution context exports access in tests");
-    },
-    passThroughOnException() {},
-    waitUntil(promise: Promise<unknown>) {
-      void promise;
-    },
-    abort() {
-      throw new Error("Unexpected execution context abort in tests");
-    },
-    mapVirtualHost() {
-      throw new Error("Unexpected execution context mapVirtualHost in tests");
-    },
-    props: undefined,
-    tracing: createUnusedTracing(),
-  };
-}
-
-function createObservedExecutionContext(): {
-  context: ExecutionContext;
-  waitUntilPromises: Promise<unknown>[];
-} {
-  const waitUntilPromises: Promise<unknown>[] = [];
-  return {
-    context: {
-      get exports(): never {
-        throw new Error("Unexpected execution context exports access in tests");
-      },
-      passThroughOnException() {},
-      waitUntil(promise: Promise<unknown>) {
-        waitUntilPromises.push(promise);
-      },
-      abort() {
-        throw new Error("Unexpected execution context abort in tests");
-      },
-      mapVirtualHost() {
-        throw new Error("Unexpected execution context mapVirtualHost in tests");
-      },
-      props: undefined,
-      tracing: createUnusedTracing(),
-    },
-    waitUntilPromises,
-  };
-}
-
-function createBindings(): Bindings {
-  return {
-    AUTHORIZED_GUILD_ID: "guild-1",
-    CALLS_APP_ID: "calls-app-id",
-    CALLS_APP_SECRET: "calls-app-secret",
-    DISCORD_CLIENT_ID: "discord-client-id",
-    DISCORD_CLIENT_SECRET: "discord-client-secret",
-    ENVIRONMENT: "production",
-    JWT_SECRET: "test-jwt-secret",
-    LIVE_DB: createUnusedD1Database(),
-    LIVE_END_WORKFLOW: {
-      create: workflowMocks.create,
-      createBatch: failUnusedWorkflowAccess,
-      deleteBatch: failUnusedWorkflowAccess,
-      get: failUnusedWorkflowAccess,
-    },
-    LIVE_TOKEN_PEPPER: "test-live-token-pepper",
-    LOG_LEVEL: "info",
-    NOTIFICATIONS_DISCORD_WEBHOOK_URL:
-      "https://discord.com/api/webhooks/123/token",
-    TURN_KEY_API_TOKEN: "turn-key-api-token",
-    TURN_KEY_ID: "turn-key-id",
-  };
-}
+const INGEST_SESSION = {
+  sdpAnswer: "answer-sdp",
+  sessionId: "new-session",
+  tracks: createTracks("new-session"),
+};
 
 async function createAuthCookie(
-  env: Bindings,
   overrides?: Partial<{
     displayName: string;
     userId: string;
@@ -409,28 +138,42 @@ async function createAuthCookie(
   return `authtoken=${token}`;
 }
 
-async function requestPlayOffer(
-  env: Bindings,
-  executionContext: ExecutionContext = createExecutionContext(),
+async function fetchApp(
+  request: Request,
+  executionContext = createExecutionContext(),
+  bindings: Bindings = env,
 ): Promise<Response> {
-  return app.fetch(
+  return app.fetch(request, bindings, executionContext);
+}
+
+async function requestPlayOffer(
+  executionContext = createExecutionContext(),
+): Promise<Response> {
+  return fetchApp(
     new Request("http://localhost/play/streamer-1", {
       body: "viewer-offer",
       headers: {
-        Cookie: await createAuthCookie(env),
+        Cookie: await createAuthCookie(),
         "Content-Type": "application/sdp",
       },
       method: "POST",
     }),
-    env,
     executionContext,
   );
 }
 
+async function requestLiveTokenStatus(userId: string): Promise<Response> {
+  return fetchApp(
+    new Request("http://localhost/api/me/livetoken", {
+      headers: { Cookie: await createAuthCookie({ userId }) },
+    }),
+  );
+}
+
 async function requestLoginCallback(
-  env: Bindings,
   query: Record<string, string>,
   stateCookie: string | null = "oauth-state",
+  bindings: Bindings = env,
 ): Promise<Response> {
   const headers = new Headers();
   if (stateCookie !== null) {
@@ -438,11 +181,7 @@ async function requestLoginCallback(
   }
   const url = new URL("http://localhost/login/callback");
   url.search = new URLSearchParams(query).toString();
-  return app.fetch(
-    new Request(url, { headers }),
-    env,
-    createExecutionContext(),
-  );
+  return fetchApp(new Request(url, { headers }), undefined, bindings);
 }
 
 function getSetCookieValue(response: Response, name: string): string {
@@ -450,39 +189,15 @@ function getSetCookieValue(response: Response, name: string): string {
   const cookie = setCookie
     ?.split(/, (?=[^;,]+=)/u)
     .find((value) => value.startsWith(`${name}=`));
-  if (cookie === undefined) {
-    throw new Error(`Missing ${name} cookie`);
-  }
+  assert.isDefined(cookie, `Missing ${name} cookie`);
   return cookie;
 }
 
-function createLive(overrides: Partial<LiveRecord> = {}): LiveRecord {
-  const sessionId = overrides.sessionId ?? "session-1";
-  return {
-    broadcastId: "broadcast-1",
-    graceExpiresAt: null,
-    notificationMessageId: null,
-    sessionId,
-    sessionSeenActiveAt: null,
-    tracks: [
-      {
-        location: "remote",
-        mid: "0",
-        sessionId,
-        trackName: "video",
-      },
-    ],
-    userId: "user-1",
-    ...overrides,
-  };
-}
-
 async function requestIngestOffer(
-  env: Bindings,
-  executionContext: ExecutionContext,
+  executionContext = createExecutionContext(),
   query = "",
 ): Promise<Response> {
-  return app.fetch(
+  return fetchApp(
     new Request(`http://localhost/ingest/user-1${query}`, {
       body: "offer-sdp",
       headers: {
@@ -491,84 +206,163 @@ async function requestIngestOffer(
       },
       method: "POST",
     }),
-    env,
     executionContext,
   );
 }
 
 async function requestIngestDelete(
-  env: Bindings,
-  executionContext: ExecutionContext,
+  executionContext = createExecutionContext(),
   sessionId = "session-1",
 ): Promise<Response> {
-  return app.fetch(
+  return fetchApp(
     new Request(`http://localhost/ingest/user-1/${sessionId}`, {
       headers: { Authorization: "Bearer live-token" },
       method: "DELETE",
     }),
-    env,
     executionContext,
   );
 }
 
-async function expectPlayNotFoundAndCleanup(
-  response: Response,
-  env: Bindings,
-  live: LiveRecord,
-): Promise<void> {
-  expect(response.status).toBe(404);
-  expect(await response.text()).toBe("Live stream not found: streamer-1");
-  expect(dbMocks.endLive).toHaveBeenCalledWith(env.LIVE_DB, live);
+/**
+ * 公開されている LiveState のメソッドだけを使って配信を開始した状態を作り、
+ * その配信 ID を返す。各時刻はテストの現在時刻からの相対値で指定する。
+ */
+async function seedLive({
+  graceMs,
+  notificationMessageId,
+  sessionId = "session-1",
+  sessionSeenActiveAt,
+  tracks = createTracks(sessionId),
+  userId = "user-1",
+}: {
+  graceMs?: number;
+  notificationMessageId?: string;
+  sessionId?: string;
+  sessionSeenActiveAt?: number;
+  tracks?: StoredTrack[];
+  userId?: string;
+} = {}): Promise<string> {
+  const liveState = getLiveState(env);
+  const broadcastId = await liveState.insertLive(userId, sessionId, tracks);
+  assert.isNotNull(broadcastId, "Expected a new broadcast");
+  if (notificationMessageId !== undefined) {
+    await liveState.setLiveNotificationMessageId(
+      userId,
+      broadcastId,
+      notificationMessageId,
+    );
+  }
+  if (sessionSeenActiveAt !== undefined) {
+    // LiveState は自身の時計で記録するため、記録時刻まで時計を戻してから記録させる。
+    const now = Date.now();
+    vi.setSystemTime(sessionSeenActiveAt);
+    await liveState.markLiveSessionSeenActive(userId, sessionId, 0);
+    vi.setSystemTime(now);
+  }
+  if (graceMs !== undefined) {
+    await liveState.startLiveReconnectGrace(userId, sessionId, graceMs);
+  }
+  return broadcastId;
+}
+
+async function getLive(userId = "user-1") {
+  return getLiveState(env).getLive(userId);
+}
+
+/** 配信行に保存されている開始通知のメッセージ ID。 */
+async function getStoredNotificationMessageId(
+  userId = "user-1",
+): Promise<SqlStorageValue> {
+  return runInDurableObject(
+    getLiveState(env),
+    (_instance, state) =>
+      state.storage.sql
+        .exec(
+          "SELECT notification_message_id FROM lives WHERE user_id = ?",
+          userId,
+        )
+        .toArray()[0]?.["notification_message_id"] ?? null,
+  );
+}
+
+async function getStoredUsers(): Promise<Record<string, SqlStorageValue>[]> {
+  return runInDurableObject(getLiveState(env), (_instance, state) =>
+    state.storage.sql
+      .exec("SELECT user_id, display_name FROM users ORDER BY user_id")
+      .toArray(),
+  );
+}
+
+async function getLiveStateAlarm(): Promise<number | null> {
+  return runInDurableObject(getLiveState(env), async (_instance, state) =>
+    state.storage.getAlarm(),
+  );
+}
+
+/**
+ * ルートが LiveState から配信行を読んだ直後に別の処理を割り込ませ、Worker が行う
+ * 2 つのオブジェクト呼び出しの間に競合するリクエストが状態を変えた（または時計が進んだ）
+ * 状況を再現する。
+ */
+function interleaveAfterNextGetLive(
+  interleaved: (liveState: LiveState) => Promise<unknown> | undefined,
+): void {
+  // oxlint-disable-next-line typescript/unbound-method -- 元の実装をスパイの中から呼び出すため。
+  const { getLive: readLive } = LiveState.prototype;
+  vi.spyOn(LiveState.prototype, "getLive").mockImplementationOnce(
+    async function (this: LiveState, userId: string) {
+      const live = await readLive.call(this, userId);
+      await interleaved(this);
+      return live;
+    },
+  );
 }
 
 describe("worker app", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  // テストランナーの console はアクセスのたびに別の関数を返すため、スパイは戻り値で参照する。
+  let consoleError: MockInstance<Console["error"]>;
+  let consoleInfo: MockInstance<Console["info"]>;
+  let consoleWarn: MockInstance<Console["warn"]>;
+  /** LiveState が開始通知の削除を引き渡す先。削除そのものは ./live-end.test.ts で検証する。 */
+  let dispatch: MockInstance<LiveEffects["deleteStartNotifications"]>;
 
   beforeEach(async () => {
-    vi.clearAllMocks();
+    vi.setSystemTime(NOW);
+    dispatch = vi
+      .spyOn(LiveEffects.prototype, "deleteStartNotifications")
+      .mockImplementation(() => undefined);
     vi.spyOn(console, "debug").mockImplementation(() => undefined);
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
-    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    dbMocks.endLive.mockResolvedValue({ notificationMessageId: null });
-    dbMocks.getAllLives.mockResolvedValue([]);
-    dbMocks.getLiveTokenHash.mockResolvedValue(
-      await hashTokenWithPepper("test-live-token-pepper", "live-token"),
+    for (const mock of [
+      ...Object.values(sfuMocks),
+      ...Object.values(discordMocks),
+      ...Object.values(notificationsMocks),
+      ...Object.values(turnMocks),
+    ]) {
+      mock.mockReset();
+    }
+
+    // user-1 は配信トークン "live-token" を発行済み。
+    await getLiveState(env).setLiveToken(
+      "user-1",
+      await hashTokenWithPepper(env.LIVE_TOKEN_PEPPER, "live-token"),
     );
-    dbMocks.getLive.mockResolvedValue(null);
-    dbMocks.hasLiveToken.mockResolvedValue(false);
-    dbMocks.setLiveToken.mockResolvedValue();
-    dbMocks.insertLive.mockResolvedValue("broadcast-1");
-    dbMocks.markLiveSessionSeenActive.mockResolvedValue(true);
-    dbMocks.resumeLive.mockResolvedValue(true);
-    dbMocks.setLiveNotificationMessageId.mockResolvedValue(true);
-    dbMocks.setUser.mockResolvedValue();
-    dbMocks.startLiveReconnectGrace.mockResolvedValue(true);
-    workflowMocks.create.mockResolvedValue(createUnusedWorkflowInstance());
 
-    discordMocks.buildDiscordAuthorizationUrl.mockReset();
     discordMocks.buildDiscordAuthorizationUrl.mockImplementation(
       (_env, redirectUri, state) =>
         `https://discord.com/oauth2/authorize?redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`,
     );
-    discordMocks.createOAuthState.mockReset();
     discordMocks.createOAuthState.mockReturnValue("oauth-state");
-    discordMocks.exchangeCodeForToken.mockReset();
     discordMocks.exchangeCodeForToken.mockResolvedValue({
       accessToken: "discord-access-token",
       expiresIn: 3600,
       scope: "guilds.members.read",
       tokenType: "Bearer",
     } satisfies DiscordOAuthToken);
-    discordMocks.getDiscordErrorMessage.mockReset();
-    discordMocks.getDiscordErrorMessage.mockReturnValue(
-      "Discord request failed",
-    );
-    discordMocks.getGuildMember.mockReset();
     discordMocks.getGuildMember.mockResolvedValue({
       nick: null,
       user: {
@@ -578,48 +372,21 @@ describe("worker app", () => {
         username: "alice",
       },
     } satisfies DiscordGuildMember);
-    discordMocks.revokeAccessToken.mockReset();
     discordMocks.revokeAccessToken.mockResolvedValue(undefined);
 
-    callsMocks.closeTracks.mockResolvedValue({});
-    callsMocks.isSessionActive.mockResolvedValue(true);
-    callsMocks.renegotiateSession.mockResolvedValue(undefined);
-    callsMocks.startIngest.mockReset();
-    callsMocks.startIngest.mockResolvedValue({
-      sdpAnswer: "answer-sdp",
-      sessionId: "new-session",
-      tracks: [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "new-session",
-          trackName: "video",
-        },
-      ],
-    });
-    callsMocks.startPlay.mockReset();
-    callsMocks.startPlay.mockResolvedValue({
+    sfuMocks.closeTracks.mockResolvedValue({});
+    sfuMocks.isSessionActive.mockResolvedValue(true);
+    sfuMocks.renegotiateSession.mockResolvedValue(undefined);
+    sfuMocks.startIngest.mockResolvedValue(INGEST_SESSION);
+    sfuMocks.startPlay.mockResolvedValue({
       sdpAnswer: "viewer-answer-sdp",
       sessionId: "viewer-session",
       sdpType: "answer",
-      tracks: [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "viewer-session",
-          trackName: "video",
-        },
-      ],
+      tracks: createTracks("viewer-session"),
     });
-    notificationsMocks.deleteLiveStartedNotification.mockReset();
-    notificationsMocks.deleteLiveStartedNotification.mockResolvedValue(
-      undefined,
-    );
-    notificationsMocks.sendLiveStartedNotification.mockReset();
     notificationsMocks.sendLiveStartedNotification.mockResolvedValue({
       messageId: 1n,
     });
-    turnMocks.generateTurnIceServers.mockReset();
     turnMocks.generateTurnIceServers.mockResolvedValue([
       {
         urls: ["stun:stun.cloudflare.com:3478"],
@@ -627,13 +394,14 @@ describe("worker app", () => {
     ]);
   });
 
-  it("redirects to Discord when login starts", async () => {
-    const env = createBindings();
+  afterEach(async () => {
+    vi.useRealTimers();
+    await reset();
+  });
 
-    const response = await app.fetch(
+  it("redirects to Discord when login starts", async () => {
+    const response = await fetchApp(
       new Request("http://localhost/login?ignored=secret"),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(302);
@@ -651,13 +419,11 @@ describe("worker app", () => {
   });
 
   it("clears the auth cookie when logging out", async () => {
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/logout", {
         headers: { Cookie: "authtoken=existing", Origin: "http://localhost" },
         method: "POST",
       }),
-      createBindings(),
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(302);
@@ -668,9 +434,7 @@ describe("worker app", () => {
   });
 
   it("rejects Discord login when the OAuth state is invalid", async () => {
-    const env = createBindings();
-
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request(
         "http://localhost/login/callback?code=auth-code&state=wrong-state",
         {
@@ -679,8 +443,6 @@ describe("worker app", () => {
           },
         },
       ),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(400);
@@ -695,11 +457,7 @@ describe("worker app", () => {
   ] as const)(
     "rejects a callback with missing or mismatched state",
     async (query, stateCookie) => {
-      const response = await requestLoginCallback(
-        createBindings(),
-        query,
-        stateCookie,
-      );
+      const response = await requestLoginCallback(query, stateCookie);
 
       expect(response.status).toBe(400);
       expect(await response.text()).toBe("Invalid OAuth state");
@@ -731,7 +489,7 @@ describe("worker app", () => {
       if (description !== undefined) {
         query["error_description"] = description;
       }
-      const response = await requestLoginCallback(createBindings(), query);
+      const response = await requestLoginCallback(query);
 
       expect(response.status).toBe(401);
       expect(await response.text()).toBe(expectedBody);
@@ -740,7 +498,7 @@ describe("worker app", () => {
   );
 
   it("requires a code after validating OAuth state", async () => {
-    const response = await requestLoginCallback(createBindings(), {
+    const response = await requestLoginCallback({
       state: "oauth-state",
     });
 
@@ -751,23 +509,21 @@ describe("worker app", () => {
 
   it("maps OAuth token exchange errors to a logged 502 response", async () => {
     discordMocks.exchangeCodeForToken.mockRejectedValue(
-      new discordMocks.DiscordApiError("token exchange failed", {
+      new DiscordApiError("token exchange failed", {
         endpoint: "https://discord.com/api/oauth2/token",
         kind: "http_error",
         statusText: "Bad Gateway",
       }),
     );
 
-    const response = await requestLoginCallback(createBindings(), {
+    const response = await requestLoginCallback({
       code: "auth-code",
       state: "oauth-state",
     });
 
     expect(response.status).toBe(502);
-    expect(await response.text()).toBe(
-      "Discord login failed: Discord request failed",
-    );
-    expect(console.error).toHaveBeenCalledWith(
+    expect(await response.text()).toBe("Discord login failed: Bad Gateway");
+    expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         endpoint: "https://discord.com/api/oauth2/token",
         errorMessage: "token exchange failed",
@@ -781,12 +537,10 @@ describe("worker app", () => {
   });
 
   it("issues an auth cookie after a successful Discord login", async () => {
-    vi.useFakeTimers();
     const now = Date.UTC(2025, 0, 1);
     vi.setSystemTime(now);
-    const env = createBindings();
 
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request(
         "http://localhost/login/callback?code=auth-code&state=oauth-state",
         {
@@ -795,8 +549,6 @@ describe("worker app", () => {
           },
         },
       ),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(302);
@@ -810,10 +562,9 @@ describe("worker app", () => {
       "discord-access-token",
       env.AUTHORIZED_GUILD_ID,
     );
-    expect(dbMocks.setUser).toHaveBeenCalledWith(env.LIVE_DB, {
-      displayName: "Alice",
-      userId: "user-1",
-    });
+    await expect(getStoredUsers()).resolves.toEqual([
+      { display_name: "Alice", user_id: "user-1" },
+    ]);
     expect(discordMocks.revokeAccessToken).toHaveBeenCalledWith(
       env,
       "discord-access-token",
@@ -824,9 +575,7 @@ describe("worker app", () => {
     expect(response.headers.get("set-cookie")).toContain("HttpOnly");
     const authCookie = getSetCookieValue(response, "authtoken");
     const token = authCookie.slice("authtoken=".length).split(";", 1)[0];
-    if (!token) {
-      throw new Error("Login response did not contain an auth token");
-    }
+    assert(token, "Login response did not contain an auth token");
     const payload = await verify(token, env.JWT_SECRET, "HS256");
     expect(payload).toMatchObject({ displayName: "Alice", userId: "user-1" });
     expect(payload.iat).toBe(now / 1000);
@@ -834,17 +583,18 @@ describe("worker app", () => {
     expect(authCookie).toContain(
       `Expires=${new Date(now + 86_400_000).toUTCString()}`,
     );
-    expect(console.warn).not.toHaveBeenCalled();
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it("omits Secure cookies outside production", async () => {
-    const env = createBindings();
-    env.ENVIRONMENT = "development";
-
-    const response = await requestLoginCallback(env, {
-      code: "auth-code",
-      state: "oauth-state",
-    });
+    const response = await requestLoginCallback(
+      {
+        code: "auth-code",
+        state: "oauth-state",
+      },
+      "oauth-state",
+      { ...env, ENVIRONMENT: "development" },
+    );
 
     expect(response.status).toBe(302);
     expect(getSetCookieValue(response, "authtoken")).not.toContain("Secure");
@@ -867,36 +617,35 @@ describe("worker app", () => {
         },
       } satisfies DiscordGuildMember);
 
-      const response = await requestLoginCallback(createBindings(), {
+      const response = await requestLoginCallback({
         code: "auth-code",
         state: "oauth-state",
       });
 
       expect(response.status).toBe(302);
-      expect(dbMocks.setUser).toHaveBeenCalledWith(expect.anything(), {
-        displayName,
-        userId: "user-1",
-      });
+      await expect(getStoredUsers()).resolves.toEqual([
+        { display_name: displayName, user_id: "user-1" },
+      ]);
     },
   );
 
   it("keeps successful login when Discord token revocation fails", async () => {
     discordMocks.revokeAccessToken.mockRejectedValue(
-      new discordMocks.DiscordApiError("revocation failed", {
+      new DiscordApiError("revocation failed", {
         endpoint: "https://discord.com/api/oauth2/token/revoke",
         kind: "http_error",
         statusText: "Bad Gateway",
       }),
     );
 
-    const response = await requestLoginCallback(createBindings(), {
+    const response = await requestLoginCallback({
       code: "auth-code",
       state: "oauth-state",
     });
 
     expect(response.status).toBe(302);
     expect(response.headers.get("set-cookie")).toContain("authtoken=");
-    expect(console.warn).toHaveBeenCalledWith(
+    expect(consoleWarn).toHaveBeenCalledWith(
       expect.objectContaining({
         endpoint: "https://discord.com/api/oauth2/token/revoke",
         errorMessage: "revocation failed",
@@ -908,28 +657,18 @@ describe("worker app", () => {
   });
 
   it("rejects Discord login when the user is not in the authorized guild", async () => {
-    const env = createBindings();
-
     discordMocks.getGuildMember.mockRejectedValue(
-      new discordMocks.DiscordApiError("Discord request failed: not found", {
+      new DiscordApiError("Discord request failed: not found", {
         endpoint: `https://discord.com/api/v10/users/@me/guilds/${env.AUTHORIZED_GUILD_ID}/member`,
         kind: "not_found",
         statusText: "Not Found",
       }),
     );
 
-    const response = await app.fetch(
-      new Request(
-        "http://localhost/login/callback?code=auth-code&state=oauth-state",
-        {
-          headers: {
-            Cookie: "discord_oauth_state=oauth-state",
-          },
-        },
-      ),
-      env,
-      createExecutionContext(),
-    );
+    const response = await requestLoginCallback({
+      code: "auth-code",
+      state: "oauth-state",
+    });
 
     expect(response.status).toBe(401);
     expect(await response.text()).toBe(
@@ -939,8 +678,8 @@ describe("worker app", () => {
       env,
       "discord-access-token",
     );
-    expect(dbMocks.setUser).not.toHaveBeenCalled();
-    expect(console.error).toHaveBeenCalledWith(
+    await expect(getStoredUsers()).resolves.toEqual([]);
+    expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         errorMessage: "Discord request failed: not found",
         event: "discord.login_member_check_failed",
@@ -958,19 +697,18 @@ describe("worker app", () => {
   ] as const)(
     "classifies Discord member lookup %s with matchingEndpoint=%s",
     async (kind, matchingEndpoint, expectedStatus) => {
-      const env = createBindings();
       const endpoint = matchingEndpoint
         ? `https://discord.com/api/v10/users/@me/guilds/${env.AUTHORIZED_GUILD_ID}/member`
         : "https://discord.com/api/v10/users/@me/guilds/another-guild/member";
       discordMocks.getGuildMember.mockRejectedValue(
-        new discordMocks.DiscordApiError("member lookup failed", {
+        new DiscordApiError("member lookup failed", {
           endpoint,
           kind,
           statusText: "Forbidden",
         }),
       );
 
-      const response = await requestLoginCallback(env, {
+      const response = await requestLoginCallback({
         code: "auth-code",
         state: "oauth-state",
       });
@@ -979,27 +717,26 @@ describe("worker app", () => {
       expect(await response.text()).toBe(
         expectedStatus === 401
           ? "Unauthorized: You are not a member of the authorized Discord server"
-          : "Discord login failed: Discord request failed",
+          : "Discord login failed: Forbidden",
       );
       expect(discordMocks.revokeAccessToken).toHaveBeenCalledWith(
         env,
         "discord-access-token",
       );
-      expect(dbMocks.setUser).not.toHaveBeenCalled();
+      await expect(getStoredUsers()).resolves.toEqual([]);
     },
   );
 
   it("issues a live token for an authenticated user", async () => {
-    const env = createBindings();
-    const request = new Request("http://localhost/api/me/livetoken", {
-      headers: {
-        Cookie: await createAuthCookie(env, { userId: "user-1" }),
-        Origin: "http://localhost",
-      },
-      method: "POST",
-    });
-
-    const response = await app.fetch(request, env, createExecutionContext());
+    const response = await fetchApp(
+      new Request("http://localhost/api/me/livetoken", {
+        headers: {
+          Cookie: await createAuthCookie({ userId: "user-2" }),
+          Origin: "http://localhost",
+        },
+        method: "POST",
+      }),
+    );
 
     expect(response.status).toBe(200);
 
@@ -1010,78 +747,53 @@ describe("worker app", () => {
 
     expect(body.success).toBe(true);
     expect(body.token).toMatch(/^[0-9a-f]{64}$/u);
-    const expectedTokenHash = await hashTokenWithPepper(
-      env.LIVE_TOKEN_PEPPER,
-      body.token,
-    );
-    expect(dbMocks.setLiveToken).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      expectedTokenHash,
+    await expect(getLiveState(env).getLiveTokenHash("user-2")).resolves.toBe(
+      await hashTokenWithPepper(env.LIVE_TOKEN_PEPPER, body.token),
     );
   });
 
   it("returns a worker error when saving a new live token fails", async () => {
-    const env = createBindings();
-    const consoleErrorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    dbMocks.setLiveToken.mockRejectedValue(new Error("database unavailable"));
+    vi.spyOn(LiveState.prototype, "setLiveToken").mockRejectedValue(
+      new Error("database unavailable"),
+    );
 
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/api/me/livetoken", {
         headers: {
-          Cookie: await createAuthCookie(env, { userId: "user-1" }),
+          Cookie: await createAuthCookie({ userId: "user-2" }),
           Origin: "http://localhost",
         },
         method: "POST",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(500);
     expect(await response.text()).toBe("Failed to save live token");
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
+    expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         errorMessage: "database unavailable",
         event: "live_token.save_failed",
         level: "error",
-        userId: "user-1",
+        userId: "user-2",
       }),
     );
+    await expect(getLiveState(env).hasLiveToken("user-2")).resolves.toBe(false);
   });
 
   it("returns live-token status and maps database failures to 500", async () => {
-    const env = createBindings();
-    const cookie = await createAuthCookie(env, { userId: "user-1" });
-    dbMocks.hasLiveToken.mockResolvedValue(true);
+    const issued = await requestLiveTokenStatus("user-1");
+    expect(issued.status).toBe(200);
+    await expect(issued.json()).resolves.toEqual({ hasToken: true });
+    const missing = await requestLiveTokenStatus("user-2");
+    await expect(missing.json()).resolves.toEqual({ hasToken: false });
 
-    const success = await app.fetch(
-      new Request("http://localhost/api/me/livetoken", {
-        headers: { Cookie: cookie },
-      }),
-      env,
-      createExecutionContext(),
+    vi.spyOn(LiveState.prototype, "hasLiveToken").mockRejectedValue(
+      new Error("database unavailable"),
     );
-    expect(success.status).toBe(200);
-    await expect(success.json()).resolves.toEqual({ hasToken: true });
-    expect(dbMocks.hasLiveToken).toHaveBeenCalledWith(env.LIVE_DB, "user-1");
-
-    const consoleErrorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    dbMocks.hasLiveToken.mockRejectedValue(new Error("database unavailable"));
-    const failed = await app.fetch(
-      new Request("http://localhost/api/me/livetoken", {
-        headers: { Cookie: cookie },
-      }),
-      env,
-      createExecutionContext(),
-    );
+    const failed = await requestLiveTokenStatus("user-1");
     expect(failed.status).toBe(500);
     expect(await failed.text()).toBe("Failed to check live token");
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
+    expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         errorMessage: "database unavailable",
         event: "live_token.status_check_failed",
@@ -1092,48 +804,38 @@ describe("worker app", () => {
   });
 
   it("lists stored live streams for an authenticated app user", async () => {
-    const env = createBindings();
-    const lives = [
-      {
-        owner: { displayName: "Streamer", userId: "streamer-1" },
-      },
-    ];
-    dbMocks.getAllLives.mockResolvedValue(lives);
+    await getLiveState(env).setUser({
+      displayName: "Streamer",
+      userId: "streamer-1",
+    });
+    await seedLive({ userId: "streamer-1" });
 
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/api/lives", {
-        headers: { Cookie: await createAuthCookie(env) },
+        headers: { Cookie: await createAuthCookie() },
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual(lives);
-    expect(dbMocks.getAllLives).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      expect.any(Number),
-    );
+    await expect(response.json()).resolves.toEqual([
+      { owner: { displayName: "Streamer", userId: "streamer-1" } },
+    ]);
   });
 
   it("logs unexpected errors from API handlers and returns a generic response", async () => {
-    const env = createBindings();
-    const consoleErrorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    dbMocks.getAllLives.mockRejectedValue(new Error("database offline"));
+    vi.spyOn(LiveState.prototype, "getAllLives").mockRejectedValue(
+      new Error("database offline"),
+    );
 
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/api/lives", {
-        headers: { Cookie: await createAuthCookie(env) },
+        headers: { Cookie: await createAuthCookie() },
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(500);
     expect(await response.text()).toBe("Internal Server Error");
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
+    expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         errorMessage: "database offline",
         event: "worker.unhandled_error",
@@ -1143,21 +845,15 @@ describe("worker app", () => {
   });
 
   it("returns the authenticated profile payload", async () => {
-    const env = createBindings();
-    const consoleInfoSpy = vi
-      .spyOn(console, "info")
-      .mockImplementation(() => {});
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/api/me", {
         headers: {
-          Cookie: await createAuthCookie(env, {
+          Cookie: await createAuthCookie({
             displayName: "Viewer Name",
             userId: "viewer-7",
           }),
         },
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(200);
@@ -1165,7 +861,7 @@ describe("worker app", () => {
       displayName: "Viewer Name",
       userId: "viewer-7",
     });
-    expect(consoleInfoSpy).toHaveBeenCalledWith(
+    expect(consoleInfo).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "api.request",
         level: "info",
@@ -1175,14 +871,13 @@ describe("worker app", () => {
   });
 
   it("returns authenticated TURN credentials with no-store caching", async () => {
-    const env = createBindings();
-    const request = new Request("http://localhost/api/turn-credentials", {
-      headers: {
-        Cookie: await createAuthCookie(env, { userId: "viewer-1" }),
-      },
-    });
-
-    const response = await app.fetch(request, env, createExecutionContext());
+    const response = await fetchApp(
+      new Request("http://localhost/api/turn-credentials", {
+        headers: {
+          Cookie: await createAuthCookie({ userId: "viewer-1" }),
+        },
+      }),
+    );
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -1200,10 +895,6 @@ describe("worker app", () => {
   });
 
   it("maps TURN credential timeouts to 504", async () => {
-    const env = createBindings();
-    const consoleErrorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
     turnMocks.generateTurnIceServers.mockRejectedValue(
       new TurnApiError("TURN credential request timed out", {
         endpoint:
@@ -1211,17 +902,18 @@ describe("worker app", () => {
         kind: "request_timeout",
       }),
     );
-    const request = new Request("http://localhost/api/turn-credentials", {
-      headers: {
-        Cookie: await createAuthCookie(env, { userId: "viewer-1" }),
-      },
-    });
 
-    const response = await app.fetch(request, env, createExecutionContext());
+    const response = await fetchApp(
+      new Request("http://localhost/api/turn-credentials", {
+        headers: {
+          Cookie: await createAuthCookie({ userId: "viewer-1" }),
+        },
+      }),
+    );
 
     expect(response.status).toBe(504);
     expect(await response.text()).toBe("Failed to generate TURN credentials");
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
+    expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         errorKind: "request_timeout",
         event: "turn_credentials.generate_failed",
@@ -1232,7 +924,6 @@ describe("worker app", () => {
   });
 
   it("maps non-timeout TURN credential failures to 502", async () => {
-    const env = createBindings();
     turnMocks.generateTurnIceServers.mockRejectedValue(
       new TurnApiError("TURN credential request failed", {
         endpoint:
@@ -1241,14 +932,12 @@ describe("worker app", () => {
       }),
     );
 
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/api/turn-credentials", {
         headers: {
-          Cookie: await createAuthCookie(env, { userId: "viewer-1" }),
+          Cookie: await createAuthCookie({ userId: "viewer-1" }),
         },
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(502);
@@ -1256,9 +945,7 @@ describe("worker app", () => {
   });
 
   it("rejects ingest when the bearer token does not match the stored hash", async () => {
-    const env = createBindings();
-
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/ingest/user-1", {
         body: "offer-sdp",
         headers: {
@@ -1267,165 +954,101 @@ describe("worker app", () => {
         },
         method: "POST",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(401);
     expect(await response.text()).toBe("Unauthorized");
-    expect(callsMocks.startIngest).not.toHaveBeenCalled();
+    expect(sfuMocks.startIngest).not.toHaveBeenCalled();
   });
 
   it("starts ingest after removing a stale live row", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleWarnSpy = vi
-      .spyOn(console, "warn")
-      .mockImplementation(() => {});
-    const consoleInfoSpy = vi
-      .spyOn(console, "info")
-      .mockImplementation(() => {});
-    const staleLive = createLive({
-      notificationMessageId: 2n,
+    const staleBroadcastId = await seedLive({
+      notificationMessageId: "5",
       sessionId: "stale-session",
     });
+    sfuMocks.isSessionActive.mockResolvedValue(false);
+    const executionContext = createExecutionContext();
 
-    dbMocks.getLive.mockResolvedValue(staleLive);
-    dbMocks.endLive.mockResolvedValue({ notificationMessageId: 2n });
-    callsMocks.isSessionActive.mockResolvedValue(false);
-
-    const response = await requestIngestOffer(env, execution.context);
+    const response = await requestIngestOffer(executionContext);
 
     expect(response.status).toBe(201);
-    expect(consoleInfoSpy).toHaveBeenCalledWith(
+    expect(consoleInfo).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ingest.request",
         level: "info",
         userId: "user-1",
       }),
     );
-    expect(consoleInfoSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "live.ended",
-        reason: "session_inactive",
-        sessionId: "stale-session",
-      }),
-    );
     expect(response.headers.get("protocol-version")).toBeNull();
-    expect(dbMocks.endLive).toHaveBeenCalledWith(env.LIVE_DB, staleLive);
-    expect(dbMocks.resumeLive).not.toHaveBeenCalled();
-    expect(callsMocks.startIngest).toHaveBeenCalledWith(
+    expect(response.headers.get("location")).toBe("/ingest/user-1/new-session");
+    expect(response.headers.get("content-type")).toBe("application/sdp");
+    expect(response.headers.get("etag")).toBe('"new-session"');
+    expect(await response.text()).toBe("answer-sdp");
+    expect(sfuMocks.isSessionActive).toHaveBeenCalledWith(env, "stale-session");
+    expect(sfuMocks.startIngest).toHaveBeenCalledWith(
       env,
       "user-1",
       "offer-sdp",
     );
-    expect(dbMocks.insertLive).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "new-session",
-      [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "new-session",
-          trackName: "video",
-        },
-      ],
-    );
-    expect(execution.waitUntilPromises).toHaveLength(2);
+    const live = await getLive();
+    expect(live).toMatchObject({
+      graceExpiresAt: null,
+      sessionId: "new-session",
+      tracks: INGEST_SESSION.tracks,
+    });
+    expect(live?.broadcastId).not.toBe(staleBroadcastId);
+    // 終了した配信の通知削除は LiveState が Worker に引き渡す。
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith([
+      { messageId: "5", userId: "user-1" },
+    ]);
 
-    await Promise.all(execution.waitUntilPromises);
+    await waitOnExecutionContext(executionContext);
 
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).toHaveBeenCalledWith(env, 2n);
     expect(notificationsMocks.sendLiveStartedNotification).toHaveBeenCalledWith(
       env,
       "user-1",
       "http://localhost/",
     );
-    expect(dbMocks.setLiveNotificationMessageId).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "broadcast-1",
-      1n,
-    );
-    expect(response.headers.get("location")).toBe("/ingest/user-1/new-session");
-    expect(response.headers.get("content-type")).toBe("application/sdp");
-    expect(response.headers.get("etag")).toBe('"new-session"');
-    expect(await response.text()).toBe("answer-sdp");
-    expect(consoleWarnSpy).not.toHaveBeenCalled();
-  });
-
-  it("does not clean up an ingest notification when stale-row deletion fails", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    dbMocks.getLive.mockResolvedValue(
-      createLive({ notificationMessageId: 7n, sessionId: "stale-session" }),
-    );
-    dbMocks.endLive.mockResolvedValue(null);
-    callsMocks.isSessionActive.mockResolvedValue(false);
-
-    const response = await requestIngestOffer(
-      env,
-      execution.context,
-      "?notify=false",
-    );
-
-    expect(response.status).toBe(201);
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(0);
+    await expect(getStoredNotificationMessageId()).resolves.toBe("1");
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it("resumes a broadcast in its reconnect grace period without notifying", async () => {
-    vi.useFakeTimers({ now: 1_700_000_000_000 });
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleInfoSpy = vi
-      .spyOn(console, "info")
-      .mockImplementation(() => {});
-    dbMocks.getLive.mockResolvedValue(
-      createLive({
-        graceExpiresAt: 1_700_000_000_001,
-        notificationMessageId: 3n,
-        sessionId: "previous-session",
-      }),
-    );
+    const broadcastId = await seedLive({
+      graceMs: 1,
+      notificationMessageId: "5",
+      sessionId: "previous-session",
+    });
+    const executionContext = createExecutionContext();
 
-    const response = await requestIngestOffer(env, execution.context);
+    const response = await requestIngestOffer(executionContext);
 
     expect(response.status).toBe(201);
     expect(await response.text()).toBe("answer-sdp");
     expect(response.headers.get("location")).toBe("/ingest/user-1/new-session");
-    // The previous session's tracks were already closed by its DELETE, so the
-    // Calls session is not checked before resuming.
-    expect(callsMocks.isSessionActive).not.toHaveBeenCalled();
-    expect(dbMocks.resumeLive).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "previous-session",
-      "new-session",
-      [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "new-session",
-          trackName: "video",
-        },
-      ],
-    );
-    expect(dbMocks.endLive).not.toHaveBeenCalled();
-    expect(dbMocks.insertLive).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(0);
+    // 前回セッションのトラックはその DELETE 時にすでに閉じられているため、
+    // 再開前に SFU セッションの生存確認は行わない。
+    expect(sfuMocks.isSessionActive).not.toHaveBeenCalled();
+    await expect(getLive()).resolves.toEqual({
+      broadcastId,
+      graceExpiresAt: null,
+      sessionId: "new-session",
+      sessionSeenActiveAt: null,
+      tracks: INGEST_SESSION.tracks,
+      userId: "user-1",
+    });
+    // 再開した配信は開始通知を引き継ぎ、再接続猶予のアラームも不要になる。
+    await expect(getStoredNotificationMessageId()).resolves.toBe("5");
+    await expect(getLiveStateAlarm()).resolves.toBeNull();
+    await waitOnExecutionContext(executionContext);
     expect(
       notificationsMocks.sendLiveStartedNotification,
     ).not.toHaveBeenCalled();
-    expect(consoleInfoSpy).toHaveBeenCalledWith(
+    expect(consoleInfo).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ingest.resumed",
         previousSessionId: "previous-session",
+        reason: "reconnect_grace",
         sessionId: "new-session",
         userId: "user-1",
       }),
@@ -1433,70 +1056,36 @@ describe("worker app", () => {
   });
 
   it("starts a new broadcast when the grace period ends during negotiation", async () => {
-    vi.useFakeTimers({ now: 1_700_000_000_000 });
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    dbMocks.getLive.mockResolvedValue(
-      createLive({
-        graceExpiresAt: 1_700_000_000_001,
-        sessionId: "previous-session",
-      }),
-    );
-    dbMocks.resumeLive.mockResolvedValue(false);
-
-    const response = await requestIngestOffer(env, execution.context);
-
-    expect(response.status).toBe(201);
-    expect(dbMocks.insertLive).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "new-session",
-      expect.any(Array),
-    );
-    await Promise.all(execution.waitUntilPromises);
-    expect(notificationsMocks.sendLiveStartedNotification).toHaveBeenCalled();
-    expect(dbMocks.setLiveNotificationMessageId).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "broadcast-1",
-      1n,
-    );
-  });
-
-  it("ends a broadcast whose grace period passed before starting a new one", async () => {
-    vi.useFakeTimers({ now: 1_700_000_000_000 });
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const expiredLive = createLive({
-      graceExpiresAt: 1_700_000_000_000,
-      notificationMessageId: 4n,
+    const previousBroadcastId = await seedLive({
+      graceMs: 1,
+      notificationMessageId: "5",
       sessionId: "previous-session",
     });
-    dbMocks.getLive.mockResolvedValue(expiredLive);
-    dbMocks.endLive.mockResolvedValue({ notificationMessageId: 4n });
+    sfuMocks.startIngest.mockImplementation(async () => {
+      // SFUとのネゴシエーション中に猶予期間が過ぎる。
+      vi.setSystemTime(NOW + 1);
+      return INGEST_SESSION;
+    });
+    const executionContext = createExecutionContext();
 
-    const response = await requestIngestOffer(env, execution.context);
+    const response = await requestIngestOffer(executionContext);
 
     expect(response.status).toBe(201);
-    expect(callsMocks.isSessionActive).not.toHaveBeenCalled();
-    expect(dbMocks.endLive).toHaveBeenCalledWith(env.LIVE_DB, expiredLive);
-    expect(dbMocks.resumeLive).not.toHaveBeenCalled();
-    expect(dbMocks.insertLive).toHaveBeenCalled();
-    await Promise.all(execution.waitUntilPromises);
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).toHaveBeenCalledWith(env, 4n);
+    const live = await getLive();
+    expect(live).toMatchObject({ sessionId: "new-session" });
+    expect(live?.broadcastId).not.toBe(previousBroadcastId);
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith([
+      { messageId: "5", userId: "user-1" },
+    ]);
+    await waitOnExecutionContext(executionContext);
     expect(notificationsMocks.sendLiveStartedNotification).toHaveBeenCalled();
+    await expect(getStoredNotificationMessageId()).resolves.toBe("1");
   });
 
   it("schedules the live start notification via waitUntil", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleWarnSpy = vi
-      .spyOn(console, "warn")
-      .mockImplementation(() => {});
+    const executionContext = createExecutionContext();
 
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("https://wish-broad.example/ingest/user-1", {
         body: "offer-sdp",
         headers: {
@@ -1505,61 +1094,38 @@ describe("worker app", () => {
         },
         method: "POST",
       }),
-      env,
-      execution.context,
+      executionContext,
     );
 
     expect(response.status).toBe(201);
-    expect(execution.waitUntilPromises).toHaveLength(1);
+    // 応答は通知の送信を待たない。
+    await expect(getStoredNotificationMessageId()).resolves.toBeNull();
 
-    await Promise.all(execution.waitUntilPromises);
+    await waitOnExecutionContext(executionContext);
 
     expect(notificationsMocks.sendLiveStartedNotification).toHaveBeenCalledWith(
       env,
       "user-1",
       "https://wish-broad.example/",
     );
-    expect(dbMocks.setLiveNotificationMessageId).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "broadcast-1",
-      1n,
-    );
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
-    expect(consoleWarnSpy).not.toHaveBeenCalled();
+    await expect(getStoredNotificationMessageId()).resolves.toBe("1");
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it("keeps ingest successful when the live start notification fails", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleWarnSpy = vi
-      .spyOn(console, "warn")
-      .mockImplementation(() => {});
-
     notificationsMocks.sendLiveStartedNotification.mockRejectedValue(
       new Error("webhook failed"),
     );
+    const executionContext = createExecutionContext();
 
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1", {
-        body: "offer-sdp",
-        headers: {
-          Authorization: "Bearer live-token",
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      execution.context,
-    );
+    const response = await requestIngestOffer(executionContext);
 
     expect(response.status).toBe(201);
 
-    await Promise.all(execution.waitUntilPromises);
+    await waitOnExecutionContext(executionContext);
 
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
+    expect(consoleWarn).toHaveBeenCalledWith(
       expect.objectContaining({
         errorMessage: "webhook failed",
         errorName: "Error",
@@ -1569,67 +1135,47 @@ describe("worker app", () => {
         userId: "user-1",
       }),
     );
-    expect(dbMocks.setLiveNotificationMessageId).not.toHaveBeenCalled();
+    await expect(getLive()).resolves.toMatchObject({
+      sessionId: "new-session",
+    });
+    await expect(getStoredNotificationMessageId()).resolves.toBeNull();
   });
 
-  it("deletes an orphaned start notification when the live row disappears before persistence", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleWarnSpy = vi
-      .spyOn(console, "warn")
-      .mockImplementation(() => {});
-
-    dbMocks.setLiveNotificationMessageId.mockResolvedValue(false);
-
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1", {
-        body: "offer-sdp",
-        headers: {
-          Authorization: "Bearer live-token",
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      execution.context,
+  it("hands an orphaned start notification to the Worker when the broadcast ended before persistence", async () => {
+    notificationsMocks.sendLiveStartedNotification.mockImplementation(
+      async () => {
+        // 通知の送信中に、SFU 上で失われたセッションとして配信が終了した。
+        await getLiveState(env).endLive("user-1", "new-session");
+        return { messageId: 1n };
+      },
     );
+    const executionContext = createExecutionContext();
+
+    const response = await requestIngestOffer(executionContext);
 
     expect(response.status).toBe(201);
 
-    await Promise.all(execution.waitUntilPromises);
+    await waitOnExecutionContext(executionContext);
 
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).toHaveBeenCalledWith(env, 1n);
-    expect(consoleWarnSpy).not.toHaveBeenCalled();
+    // 保存先の配信がないため、LiveState がメッセージの削除を Worker に引き渡した。
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith([
+      { messageId: "1", userId: "user-1" },
+    ]);
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
-  it("deletes the notification and logs when persisting its id throws", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleWarnSpy = vi
-      .spyOn(console, "warn")
-      .mockImplementation(() => {});
-    dbMocks.setLiveNotificationMessageId.mockRejectedValue(
-      new Error("database unavailable"),
-    );
+  it("logs and leaves the notification when persisting its id throws", async () => {
+    vi.spyOn(
+      LiveState.prototype,
+      "setLiveNotificationMessageId",
+    ).mockRejectedValue(new Error("database unavailable"));
+    const executionContext = createExecutionContext();
 
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1", {
-        body: "offer-sdp",
-        headers: {
-          Authorization: "Bearer live-token",
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      execution.context,
-    );
+    const response = await requestIngestOffer(executionContext);
     expect(response.status).toBe(201);
-    await Promise.all(execution.waitUntilPromises);
+    await waitOnExecutionContext(executionContext);
 
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
+    expect(consoleWarn).toHaveBeenCalledWith(
       expect.objectContaining({
         errorMessage: "database unavailable",
         event: "live_notification.persist_failed",
@@ -1639,23 +1185,17 @@ describe("worker app", () => {
         userId: "user-1",
       }),
     );
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).toHaveBeenCalledWith(env, 1n);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("returns 204 for GET on the WHIP endpoint", async () => {
-    const env = createBindings();
-
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/ingest/user-1", {
         headers: {
           Authorization: "Bearer live-token",
         },
         method: "GET",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(204);
@@ -1663,17 +1203,13 @@ describe("worker app", () => {
   });
 
   it("returns 204 for GET on the WHIP session resource", async () => {
-    const env = createBindings();
-
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/ingest/user-1/session-1", {
         headers: {
           Authorization: "Bearer live-token",
         },
         method: "GET",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(204);
@@ -1681,9 +1217,7 @@ describe("worker app", () => {
   });
 
   it("rejects ingest when Content-Type is not application/sdp", async () => {
-    const env = createBindings();
-
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/ingest/user-1", {
         body: "offer-sdp",
         headers: {
@@ -1692,13 +1226,11 @@ describe("worker app", () => {
         },
         method: "POST",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(415);
     expect(await response.text()).toBe("Content-Type must be application/sdp");
-    expect(callsMocks.startIngest).not.toHaveBeenCalled();
+    expect(sfuMocks.startIngest).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1723,7 +1255,6 @@ describe("worker app", () => {
   ])(
     "rejects ingest with %s",
     async (_label, requestOptions, status, expectedBody) => {
-      const env = createBindings();
       const request = new Request("http://localhost/ingest/user-1", {
         ...requestOptions,
         headers: {
@@ -1735,17 +1266,16 @@ describe("worker app", () => {
       if (_label === "missing Content-Type") {
         request.headers.delete("Content-Type");
       }
-      const response = await app.fetch(request, env, createExecutionContext());
+      const response = await fetchApp(request);
 
       expect(response.status).toBe(status);
       expect(await response.text()).toBe(expectedBody);
-      expect(callsMocks.startIngest).not.toHaveBeenCalled();
+      expect(sfuMocks.startIngest).not.toHaveBeenCalled();
     },
   );
 
   it("accepts case-insensitive SDP content types with parameters and spacing", async () => {
-    const env = createBindings();
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/ingest/user-1", {
         body: "offer-sdp",
         headers: {
@@ -1754,12 +1284,10 @@ describe("worker app", () => {
         },
         method: "POST",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(201);
-    expect(callsMocks.startIngest).toHaveBeenCalledWith(
+    expect(sfuMocks.startIngest).toHaveBeenCalledWith(
       env,
       "user-1",
       "offer-sdp",
@@ -1769,53 +1297,44 @@ describe("worker app", () => {
   it.each(["false", "0"])(
     "honors notify=%s when starting an ingest session",
     async (notify) => {
-      const env = createBindings();
-      const execution = createObservedExecutionContext();
-      const response = await app.fetch(
-        new Request(`http://localhost/ingest/user-1?notify=${notify}`, {
-          body: "offer-sdp",
-          headers: {
-            Authorization: "Bearer live-token",
-            "Content-Type": "application/sdp",
-          },
-          method: "POST",
-        }),
-        env,
-        execution.context,
+      const executionContext = createExecutionContext();
+
+      const response = await requestIngestOffer(
+        executionContext,
+        `?notify=${notify}`,
       );
 
       expect(response.status).toBe(201);
-      expect(execution.waitUntilPromises).toHaveLength(0);
+      await expect(getLive()).resolves.toMatchObject({
+        sessionId: "new-session",
+      });
+      await waitOnExecutionContext(executionContext);
       expect(
         notificationsMocks.sendLiveStartedNotification,
       ).not.toHaveBeenCalled();
     },
   );
 
-  it("rejects stale-ingest checks when Calls cannot verify the stored session", async () => {
-    const env = createBindings();
-    const consoleErrorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    dbMocks.getLive.mockResolvedValue(
-      createLive({ sessionId: "stale-session" }),
-    );
-    callsMocks.isSessionActive.mockRejectedValue(
-      new SfuApiError("Calls request failed", {
+  it("rejects stale-ingest checks when the SFU cannot verify the stored session", async () => {
+    await seedLive({ sessionId: "stale-session" });
+    sfuMocks.isSessionActive.mockRejectedValue(
+      new SfuApiError("SFU request failed", {
         endpoint: "/sessions/stale-session",
         kind: "request_failed",
       }),
     );
 
-    const response = await requestIngestOffer(env, createExecutionContext());
+    const response = await requestIngestOffer();
 
     expect(response.status).toBe(502);
     expect(await response.text()).toBe(
       "Failed to verify ingest session status",
     );
-    expect(dbMocks.endLive).not.toHaveBeenCalled();
-    expect(callsMocks.startIngest).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
+    await expect(getLive()).resolves.toMatchObject({
+      sessionId: "stale-session",
+    });
+    expect(sfuMocks.startIngest).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         endpoint: "/sessions/stale-session",
         errorKind: "request_failed",
@@ -1827,10 +1346,7 @@ describe("worker app", () => {
   });
 
   it("returns SFU client errors for invalid ingest offers", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-
-    callsMocks.startIngest.mockRejectedValue(
+    sfuMocks.startIngest.mockRejectedValue(
       new SfuApiError("SFU request failed: unprocessable content", {
         endpoint: "/tracks/new",
         kind: "unprocessable_content",
@@ -1838,35 +1354,21 @@ describe("worker app", () => {
         statusText: "Unprocessable Content",
       }),
     );
+    const executionContext = createExecutionContext();
 
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1", {
-        body: "offer-sdp",
-        headers: {
-          Authorization: "Bearer live-token",
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      execution.context,
-    );
+    const response = await requestIngestOffer(executionContext);
 
     expect(response.status).toBe(422);
     expect(await response.text()).toBe("Malformed SDP offer");
+    await expect(getLive()).resolves.toBeNull();
+    await waitOnExecutionContext(executionContext);
     expect(
       notificationsMocks.sendLiveStartedNotification,
     ).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
   it("keeps SFU auth failures as worker errors during ingest", async () => {
-    const env = createBindings();
-    const consoleErrorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-
-    callsMocks.startIngest.mockRejectedValue(
+    sfuMocks.startIngest.mockRejectedValue(
       new SfuApiError("SFU request failed", {
         endpoint: "/sessions/new",
         kind: "http_error",
@@ -1875,22 +1377,11 @@ describe("worker app", () => {
       }),
     );
 
-    const response = await app.fetch(
-      new Request("http://localhost/ingest/user-1", {
-        body: "offer-sdp",
-        headers: {
-          Authorization: "Bearer live-token",
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      createExecutionContext(),
-    );
+    const response = await requestIngestOffer();
 
     expect(response.status).toBe(500);
     expect(await response.text()).toBe("Internal Server Error");
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
+    expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         endpoint: "/sessions/new",
         errorKind: "http_error",
@@ -1903,119 +1394,105 @@ describe("worker app", () => {
   });
 
   it("rejects a new ingest when the user already has an active live", async () => {
-    vi.useFakeTimers({ now: 1_700_000_000_000 });
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
+    const broadcastId = await seedLive({ sessionId: "active-session" });
+    const executionContext = createExecutionContext();
 
-    dbMocks.getLive.mockResolvedValue(
-      createLive({ sessionId: "active-session" }),
-    );
-    callsMocks.isSessionActive.mockResolvedValue(true);
-
-    const response = await requestIngestOffer(env, execution.context);
+    const response = await requestIngestOffer(executionContext);
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe(
       "A live stream is already active for this user",
     );
-    expect(dbMocks.endLive).not.toHaveBeenCalled();
-    expect(callsMocks.startIngest).not.toHaveBeenCalled();
-    expect(dbMocks.insertLive).not.toHaveBeenCalled();
+    expect(sfuMocks.startIngest).not.toHaveBeenCalled();
+    await waitOnExecutionContext(executionContext);
     expect(
       notificationsMocks.sendLiveStartedNotification,
     ).not.toHaveBeenCalled();
-    // This may be OBS retrying after losing the session without DELETE, so
-    // the rejection remembers that Calls still had the session.
-    expect(execution.waitUntilPromises).toHaveLength(1);
-    await Promise.all(execution.waitUntilPromises);
-    expect(dbMocks.markLiveSessionSeenActive).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "active-session",
-      1_700_000_000_000,
-      10_000,
-    );
+    // 拒否したインジェストでもセッションの生存を記録する。
+    await expect(getLive()).resolves.toMatchObject({
+      broadcastId,
+      sessionId: "active-session",
+      sessionSeenActiveAt: NOW,
+    });
   });
 
   it.each([
-    ["was never seen active", null],
-    ["was last seen active over a minute ago", 1_699_999_939_999],
+    ["skips", NOW - 9999, 0],
+    ["repeats", NOW - 10_000, 1],
+  ])(
+    "%s the session activity record when the last one is from %i",
+    async (_case, sessionSeenActiveAt, expectedCalls) => {
+      await seedLive({ sessionId: "active-session", sessionSeenActiveAt });
+      const markSeenActive = vi.spyOn(
+        LiveState.prototype,
+        "markLiveSessionSeenActive",
+      );
+      const executionContext = createExecutionContext();
+
+      const response = await requestIngestOffer(executionContext);
+
+      expect(response.status).toBe(400);
+      await waitOnExecutionContext(executionContext);
+      // 書き込み間隔より新しい記録であれば十分新鮮なため、LiveState を再度呼び出さない。
+      expect(markSeenActive).toHaveBeenCalledTimes(expectedCalls);
+      await expect(getLive()).resolves.toMatchObject({
+        sessionSeenActiveAt: expectedCalls === 0 ? sessionSeenActiveAt : NOW,
+      });
+    },
+  );
+
+  it.each([
+    ["was never seen active", undefined],
+    ["was last seen active over a minute ago", NOW - 60_001],
   ])(
     "starts a new broadcast when a lost session %s",
     async (_case, sessionSeenActiveAt) => {
-      vi.useFakeTimers({ now: 1_700_000_000_000 });
-      const env = createBindings();
-      const execution = createObservedExecutionContext();
-      const lostLive = createLive({
-        notificationMessageId: 8n,
+      const lostBroadcastId = await seedLive({
         sessionId: "lost-session",
-        sessionSeenActiveAt,
+        ...(sessionSeenActiveAt === undefined ? {} : { sessionSeenActiveAt }),
       });
-      dbMocks.getLive.mockResolvedValue(lostLive);
-      dbMocks.endLive.mockResolvedValue({ notificationMessageId: 8n });
-      callsMocks.isSessionActive.mockResolvedValue(false);
+      sfuMocks.isSessionActive.mockResolvedValue(false);
+      const executionContext = createExecutionContext();
 
-      const response = await requestIngestOffer(env, execution.context);
+      const response = await requestIngestOffer(executionContext);
 
       expect(response.status).toBe(201);
-      // The session may have been lost days before an ingest meant as a new
-      // broadcast, so that one must not lose its notification.
-      expect(dbMocks.endLive).toHaveBeenCalledWith(env.LIVE_DB, lostLive);
-      expect(dbMocks.resumeLive).not.toHaveBeenCalled();
-      expect(dbMocks.insertLive).toHaveBeenCalled();
-      await Promise.all(execution.waitUntilPromises);
-      expect(
-        notificationsMocks.deleteLiveStartedNotification,
-      ).toHaveBeenCalledWith(env, 8n);
+      // 再開ではなく新しい配信として開始し、開始通知を送る。
+      const live = await getLive();
+      expect(live).toMatchObject({ sessionId: "new-session" });
+      expect(live?.broadcastId).not.toBe(lostBroadcastId);
+      await waitOnExecutionContext(executionContext);
       expect(notificationsMocks.sendLiveStartedNotification).toHaveBeenCalled();
     },
   );
 
   it("resumes the broadcast when OBS reconnects right after losing its session without DELETE", async () => {
-    vi.useFakeTimers({ now: 1_700_000_000_000 });
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleInfoSpy = vi
-      .spyOn(console, "info")
-      .mockImplementation(() => {});
-    dbMocks.getLive.mockResolvedValue(
-      createLive({
-        notificationMessageId: 9n,
-        sessionId: "lost-session",
-        // Exactly one minute ago still counts as just now.
-        sessionSeenActiveAt: 1_699_999_940_000,
-      }),
-    );
-    callsMocks.isSessionActive.mockResolvedValue(false);
+    const broadcastId = await seedLive({
+      sessionId: "lost-session",
+      // ちょうど 1 分前までは直前（just now）とみなす。
+      sessionSeenActiveAt: NOW - 60_000,
+    });
+    sfuMocks.isSessionActive.mockResolvedValue(false);
+    const executionContext = createExecutionContext();
 
-    const response = await requestIngestOffer(env, execution.context);
+    const response = await requestIngestOffer(executionContext);
 
     expect(response.status).toBe(201);
     expect(response.headers.get("location")).toBe("/ingest/user-1/new-session");
-    expect(dbMocks.resumeLive).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "lost-session",
-      "new-session",
-      [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "new-session",
-          trackName: "video",
-        },
-      ],
-    );
-    expect(dbMocks.endLive).not.toHaveBeenCalled();
-    expect(dbMocks.insertLive).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(0);
+    await expect(getLive()).resolves.toEqual({
+      broadcastId,
+      graceExpiresAt: null,
+      sessionId: "new-session",
+      sessionSeenActiveAt: null,
+      tracks: INGEST_SESSION.tracks,
+      userId: "user-1",
+    });
+    await waitOnExecutionContext(executionContext);
     expect(
       notificationsMocks.sendLiveStartedNotification,
     ).not.toHaveBeenCalled();
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
-    expect(consoleInfoSpy).toHaveBeenCalledWith(
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(consoleInfo).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ingest.resumed",
         previousSessionId: "lost-session",
@@ -2025,47 +1502,57 @@ describe("worker app", () => {
     );
   });
 
-  it.each([
-    ["no live row", null],
+  it.each<[string, () => Promise<unknown>]>([
+    ["no live row", async () => undefined],
     [
       "a broadcast in its grace period",
-      createLive({
-        graceExpiresAt: Number.MAX_SAFE_INTEGER,
-        sessionId: "previous-session",
-      }),
+      async () => seedLive({ graceMs: 60_000, sessionId: "previous-session" }),
     ],
     [
       "a session lost just now",
-      createLive({
-        sessionId: "lost-session",
-        sessionSeenActiveAt: Number.MAX_SAFE_INTEGER,
-      }),
+      async () =>
+        seedLive({ sessionId: "previous-session", sessionSeenActiveAt: NOW }),
     ],
-  ] as const)(
+  ])(
     "rejects an ingest that loses a race for the owner's row after reading %s",
-    async (_case, observedLive) => {
-      const env = createBindings();
-      const execution = createObservedExecutionContext();
-      const consoleWarnSpy = vi
-        .spyOn(console, "warn")
-        .mockImplementation(() => {});
-      dbMocks.getLive.mockResolvedValue(observedLive);
-      callsMocks.isSessionActive.mockResolvedValue(false);
-      // A concurrent ingest resumed or created the row first.
-      dbMocks.resumeLive.mockResolvedValue(false);
-      dbMocks.insertLive.mockResolvedValue(null);
+    async (_case, seed) => {
+      await seed();
+      sfuMocks.isSessionActive.mockResolvedValue(false);
+      // SFUとのネゴシエーション中に、競合する別のインジェストが先に行を再開または作成した。
+      sfuMocks.startIngest.mockImplementation(async () => {
+        const liveState = getLiveState(env);
+        if (
+          !(await liveState.resumeLive(
+            "user-1",
+            "previous-session",
+            "other-session",
+            createTracks("other-session"),
+          ))
+        ) {
+          await liveState.insertLive(
+            "user-1",
+            "other-session",
+            createTracks("other-session"),
+          );
+        }
+        return INGEST_SESSION;
+      });
+      const executionContext = createExecutionContext();
 
-      const response = await requestIngestOffer(env, execution.context);
+      const response = await requestIngestOffer(executionContext);
 
       expect(response.status).toBe(400);
       expect(await response.text()).toBe(
         "A live stream is already active for this user",
       );
+      await expect(getLive()).resolves.toMatchObject({
+        sessionId: "other-session",
+      });
+      await waitOnExecutionContext(executionContext);
       expect(
         notificationsMocks.sendLiveStartedNotification,
       ).not.toHaveBeenCalled();
-      expect(execution.waitUntilPromises).toHaveLength(0);
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect(consoleWarn).toHaveBeenCalledWith(
         expect.objectContaining({
           event: "ingest.concurrent_ingest_rejected",
           sessionId: "new-session",
@@ -2076,36 +1563,30 @@ describe("worker app", () => {
   );
 
   it("does not schedule a notification when persisting the live row fails", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
+    vi.spyOn(LiveState.prototype, "insertLive").mockRejectedValue(
+      new Error("insert failed"),
+    );
+    const executionContext = createExecutionContext();
 
-    dbMocks.insertLive.mockRejectedValue(new Error("insert failed"));
-
-    const response = await requestIngestOffer(env, execution.context);
+    const response = await requestIngestOffer(executionContext);
 
     expect(response.status).toBe(500);
     expect(await response.text()).toBe("Internal Server Error");
+    await waitOnExecutionContext(executionContext);
     expect(
       notificationsMocks.sendLiveStartedNotification,
     ).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(0);
   });
 
   it("starts a reconnect grace period instead of ending the live on ingest delete", async () => {
-    vi.useFakeTimers({ now: 1_700_000_000_000 });
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleInfoSpy = vi
-      .spyOn(console, "info")
-      .mockImplementation(() => {});
-    const live = createLive({ notificationMessageId: 1n });
-    dbMocks.getLive.mockResolvedValue(live);
+    await seedLive({ notificationMessageId: "5" });
+    const executionContext = createExecutionContext();
 
-    const response = await requestIngestDelete(env, execution.context);
+    const response = await requestIngestDelete(executionContext);
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("OK");
-    expect(consoleInfoSpy).toHaveBeenCalledWith(
+    expect(consoleInfo).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ingest.request",
         level: "info",
@@ -2113,106 +1594,68 @@ describe("worker app", () => {
         userId: "user-1",
       }),
     );
-    expect(dbMocks.startLiveReconnectGrace).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "user-1",
-      "session-1",
-      1_700_000_060_000,
-    );
-    expect(dbMocks.endLive).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(2);
+    // LiveState が猶予期限と配信を終了させるアラームの両方を設定する。
+    await expect(getLive()).resolves.toMatchObject({
+      graceExpiresAt: NOW + 60_000,
+      sessionId: "session-1",
+    });
+    await expect(getLiveStateAlarm()).resolves.toBe(NOW + 60_000);
 
-    await Promise.all(execution.waitUntilPromises);
+    await waitOnExecutionContext(executionContext);
 
-    expect(callsMocks.closeTracks).toHaveBeenCalledWith(
+    expect(sfuMocks.closeTracks).toHaveBeenCalledWith(
       env,
       "session-1",
-      live.tracks,
+      createTracks("session-1"),
     );
-    expect(workflowMocks.create).toHaveBeenCalledWith({
-      params: {
-        graceExpiresAt: 1_700_000_060_000,
-        sessionId: "session-1",
-        userId: "user-1",
-      },
-    });
-    // The start notification stays until the grace period ends the broadcast.
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
-  });
-
-  it("logs when the end of a reconnect grace period cannot be scheduled", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleErrorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    dbMocks.getLive.mockResolvedValue(createLive());
-    workflowMocks.create.mockRejectedValue(new Error("workflow unavailable"));
-
-    const response = await requestIngestDelete(env, execution.context);
-
-    expect(response.status).toBe(200);
-    await Promise.all(execution.waitUntilPromises);
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        errorMessage: "workflow unavailable",
-        event: "live_end.schedule_failed",
-        level: "error",
-        sessionId: "session-1",
-        userId: "user-1",
-      }),
-    );
+    // 開始通知は猶予期間が経過して配信が終了するまで維持される。
+    await expect(getStoredNotificationMessageId()).resolves.toBe("5");
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("accepts a repeated ingest delete during the grace period", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    dbMocks.getLive.mockResolvedValue(
-      createLive({ graceExpiresAt: 1_700_000_060_000 }),
-    );
+    await seedLive({ graceMs: 60_000 });
+    vi.setSystemTime(NOW + 1000);
+    const executionContext = createExecutionContext();
 
-    const response = await requestIngestDelete(env, execution.context);
+    const response = await requestIngestDelete(executionContext);
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("OK");
-    expect(dbMocks.startLiveReconnectGrace).not.toHaveBeenCalled();
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-    expect(workflowMocks.create).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(0);
+    // 重複した DELETE で猶予期限が延長されてはならない。
+    await expect(getLive()).resolves.toMatchObject({
+      graceExpiresAt: NOW + 60_000,
+    });
+    await waitOnExecutionContext(executionContext);
+    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
   });
 
   it("rejects ingest deletion when there is no live row", async () => {
-    const env = createBindings();
-    const response = await requestIngestDelete(env, createExecutionContext());
+    const response = await requestIngestDelete();
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe("No live stream found for this user");
-    expect(dbMocks.startLiveReconnectGrace).not.toHaveBeenCalled();
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
+    await expect(getLive()).resolves.toBeNull();
+    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
   });
 
   it("returns success and logs when ingest close reports track errors", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleWarnSpy = vi
-      .spyOn(console, "warn")
-      .mockImplementation(() => {});
-
-    dbMocks.getLive.mockResolvedValue(createLive());
-    callsMocks.closeTracks.mockResolvedValue({
+    await seedLive();
+    sfuMocks.closeTracks.mockResolvedValue({
       tracks: [{ mid: "0" }, { errorCode: "failed_to_close", mid: "1" }],
     });
+    const executionContext = createExecutionContext();
 
-    const response = await requestIngestDelete(env, execution.context);
+    const response = await requestIngestDelete(executionContext);
 
     expect(response.status).toBe(200);
-    expect(dbMocks.startLiveReconnectGrace).toHaveBeenCalled();
+    await expect(getLive()).resolves.toMatchObject({
+      graceExpiresAt: NOW + 60_000,
+    });
 
-    await Promise.all(execution.waitUntilPromises);
+    await waitOnExecutionContext(executionContext);
 
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
+    expect(consoleWarn).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "track_close.sfu_errors",
         level: "warn",
@@ -2223,44 +1666,32 @@ describe("worker app", () => {
         sessionId: "session-1",
       }),
     );
-    expect(workflowMocks.create).toHaveBeenCalled();
   });
 
   it("returns success when ingest close says tracks are already gone", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleWarnSpy = vi
-      .spyOn(console, "warn")
-      .mockImplementation(() => {});
-
-    dbMocks.getLive.mockResolvedValue(createLive());
-    callsMocks.closeTracks.mockRejectedValue(
+    await seedLive();
+    sfuMocks.closeTracks.mockRejectedValue(
       new SfuApiError("SFU request failed: session not found", {
         endpoint: "/tracks/close",
         kind: "session_not_found",
         statusText: "Not Found",
       }),
     );
+    const executionContext = createExecutionContext();
 
-    const response = await requestIngestDelete(env, execution.context);
+    const response = await requestIngestDelete(executionContext);
 
     expect(response.status).toBe(200);
-    await Promise.all(execution.waitUntilPromises);
-    expect(workflowMocks.create).toHaveBeenCalled();
-    expect(consoleWarnSpy).not.toHaveBeenCalled();
+    await waitOnExecutionContext(executionContext);
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it("rejects ingest deletion when the session id does not match", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-
-    dbMocks.getLive.mockResolvedValue(
-      createLive({ sessionId: "actual-session" }),
-    );
+    await seedLive({ sessionId: "actual-session" });
+    const executionContext = createExecutionContext();
 
     const response = await requestIngestDelete(
-      env,
-      execution.context,
+      executionContext,
       "other-session",
     );
 
@@ -2268,10 +1699,9 @@ describe("worker app", () => {
     expect(await response.text()).toBe(
       "Session ID does not match the active live stream",
     );
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-    expect(dbMocks.startLiveReconnectGrace).not.toHaveBeenCalled();
-    expect(workflowMocks.create).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(0);
+    await expect(getLive()).resolves.toMatchObject({ graceExpiresAt: null });
+    await waitOnExecutionContext(executionContext);
+    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
   });
 
   it.each<[string, StoredTrack[]]>([
@@ -2291,156 +1721,143 @@ describe("worker app", () => {
   ])(
     "returns 500 when stored live track data has %s on ingest delete",
     async (_label, tracks) => {
-      const env = createBindings();
-      const execution = createObservedExecutionContext();
-      dbMocks.getLive.mockResolvedValue(createLive({ tracks }));
+      await seedLive({ tracks });
+      const executionContext = createExecutionContext();
 
-      const response = await requestIngestDelete(env, execution.context);
+      const response = await requestIngestDelete(executionContext);
 
       expect(response.status).toBe(500);
       expect(await response.text()).toBe("Stored live track data is invalid");
-      expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-      expect(dbMocks.startLiveReconnectGrace).not.toHaveBeenCalled();
-      expect(execution.waitUntilPromises).toHaveLength(0);
+      await expect(getLive()).resolves.toMatchObject({ graceExpiresAt: null });
+      await waitOnExecutionContext(executionContext);
+      expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
     },
   );
 
   it("does not schedule ingest close when the grace period cannot start", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-
-    dbMocks.getLive.mockResolvedValue(
-      createLive({ notificationMessageId: 1n }),
+    await seedLive();
+    // DELETE が行を読んだ直後に、再接続した OBS が新しいセッションで配信を再開した。
+    interleaveAfterNextGetLive(async (liveState) =>
+      liveState.resumeLive(
+        "user-1",
+        "session-1",
+        "session-2",
+        createTracks("session-2"),
+      ),
     );
-    dbMocks.startLiveReconnectGrace.mockResolvedValue(false);
+    const executionContext = createExecutionContext();
 
-    const response = await requestIngestDelete(env, execution.context);
+    const response = await requestIngestDelete(executionContext);
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe(
       "Failed to delete the requested live stream",
     );
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-    expect(workflowMocks.create).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(0);
+    await expect(getLive()).resolves.toMatchObject({
+      graceExpiresAt: null,
+      sessionId: "session-2",
+    });
+    await waitOnExecutionContext(executionContext);
+    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
   });
 
-  it("returns 404 and cleans up when a stored play session is inactive", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const live = createLive({
-      notificationMessageId: 1n,
+  it("returns 404 and ends the broadcast when a stored play session is inactive", async () => {
+    await seedLive({
+      notificationMessageId: "5",
       sessionId: "live-session",
       userId: "streamer-1",
     });
+    sfuMocks.isSessionActive.mockResolvedValue(false);
+    const executionContext = createExecutionContext();
 
-    dbMocks.getLive.mockResolvedValue(live);
-    dbMocks.endLive.mockResolvedValue({ notificationMessageId: 1n });
-    callsMocks.isSessionActive.mockResolvedValue(false);
+    const response = await requestPlayOffer(executionContext);
 
-    const response = await requestPlayOffer(env, execution.context);
-    await expectPlayNotFoundAndCleanup(response, env, live);
-    await Promise.all(execution.waitUntilPromises);
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).toHaveBeenCalledWith(env, 1n);
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe("Live stream not found: streamer-1");
+    await expect(getLive("streamer-1")).resolves.toBeNull();
+    // 配信を終了したことで、その開始通知の削除が Worker に引き渡された。
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith([
+      { messageId: "5", userId: "streamer-1" },
+    ]);
+    await waitOnExecutionContext(executionContext);
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
   });
 
   it("asks viewers to retry when an inactive play session's row changed meanwhile", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const live = createLive({
-      notificationMessageId: 12n,
-      sessionId: "live-session",
-      userId: "streamer-1",
+    await seedLive({ sessionId: "live-session", userId: "streamer-1" });
+    sfuMocks.isSessionActive.mockImplementation(async () => {
+      // SFUへの確認中に OBS が新しいセッションで配信を再開した。
+      await getLiveState(env).resumeLive(
+        "streamer-1",
+        "live-session",
+        "resumed-session",
+        createTracks("resumed-session"),
+      );
+      return false;
     });
-    dbMocks.getLive.mockResolvedValue(live);
-    dbMocks.endLive.mockResolvedValue(null);
-    callsMocks.isSessionActive.mockResolvedValue(false);
 
-    const response = await requestPlayOffer(env, execution.context);
+    const response = await requestPlayOffer();
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(409);
     expect(response.headers.get("retry-after")).toBe("2");
-    expect(dbMocks.endLive).toHaveBeenCalledWith(env.LIVE_DB, live);
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(0);
+    await expect(getLive("streamer-1")).resolves.toMatchObject({
+      sessionId: "resumed-session",
+    });
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
   });
 
-  it("asks viewers to retry while the publisher may still reconnect", async () => {
-    vi.useFakeTimers({ now: 1_700_000_000_000 });
-    const env = createBindings();
-    dbMocks.getLive.mockResolvedValue(
-      createLive({
-        graceExpiresAt: 1_700_000_000_001,
+  it.each([
+    ["is still ahead", undefined],
+    // LiveState は応答前に期限切れの配信を終了させるため、返された期限時刻は
+    // Worker の時計上で過ぎていても LiveState の時計上ではまだ過ぎていない。
+    ["looks passed on the Worker's clock", NOW + 1],
+  ])(
+    "asks viewers to retry while the stored grace deadline %s",
+    async (_case, workerNow) => {
+      await seedLive({
+        graceMs: 1,
         sessionId: "live-session",
         userId: "streamer-1",
-      }),
-    );
+      });
+      if (workerNow !== undefined) {
+        interleaveAfterNextGetLive(() => {
+          vi.setSystemTime(workerNow);
+          return undefined;
+        });
+      }
 
-    const response = await requestPlayOffer(env);
+      const response = await requestPlayOffer();
 
-    expect(response.status).toBe(503);
-    expect(response.headers.get("retry-after")).toBe("2");
-    expect(await response.text()).toBe(
-      "Live stream is waiting for the publisher to reconnect",
-    );
-    expect(callsMocks.isSessionActive).not.toHaveBeenCalled();
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
-    expect(dbMocks.endLive).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(409);
+      expect(response.headers.get("retry-after")).toBe("2");
+      expect(await response.text()).toBe(
+        "Live stream is waiting for the publisher to reconnect",
+      );
+      expect(sfuMocks.isSessionActive).not.toHaveBeenCalled();
+      expect(sfuMocks.startPlay).not.toHaveBeenCalled();
+    },
+  );
 
-  it("ends a live whose reconnect grace period passed and returns 404", async () => {
-    vi.useFakeTimers({ now: 1_700_000_000_000 });
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const live = createLive({
-      graceExpiresAt: 1_700_000_000_000,
-      notificationMessageId: 5n,
-      sessionId: "live-session",
-      userId: "streamer-1",
-    });
-    dbMocks.getLive.mockResolvedValue(live);
-    dbMocks.endLive.mockResolvedValue({ notificationMessageId: 5n });
-
-    const response = await requestPlayOffer(env, execution.context);
-
-    await expectPlayNotFoundAndCleanup(response, env, live);
-    expect(callsMocks.isSessionActive).not.toHaveBeenCalled();
-    await Promise.all(execution.waitUntilPromises);
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).toHaveBeenCalledWith(env, 5n);
-  });
-
-  it("returns a logged 502 when Calls cannot verify a play session", async () => {
-    const env = createBindings();
-    const consoleErrorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    dbMocks.getLive.mockResolvedValue(
-      createLive({ sessionId: "live-session", userId: "streamer-1" }),
-    );
-    callsMocks.isSessionActive.mockRejectedValue(
-      new SfuApiError("Calls request failed", {
+  it("returns a logged 502 when the SFU cannot verify a play session", async () => {
+    await seedLive({ sessionId: "live-session", userId: "streamer-1" });
+    sfuMocks.isSessionActive.mockRejectedValue(
+      new SfuApiError("SFU request failed", {
         endpoint: "/sessions/live-session",
         kind: "request_failed",
       }),
     );
 
-    const response = await requestPlayOffer(env);
+    const response = await requestPlayOffer();
 
     expect(response.status).toBe(502);
     expect(await response.text()).toBe("Failed to verify live stream status");
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
+    await expect(getLive("streamer-1")).resolves.not.toBeNull();
+    expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         endpoint: "/sessions/live-session",
         errorKind: "request_failed",
-        errorMessage: "Calls request failed",
+        errorMessage: "SFU request failed",
         event: "play.session_activity_check_failed",
         level: "error",
         sessionId: "live-session",
@@ -2450,30 +1867,24 @@ describe("worker app", () => {
   });
 
   it("maps a missing live from the playback negotiator to 404", async () => {
-    const env = createBindings();
-    callsMocks.startPlay.mockRejectedValue(new LiveNotFoundError("streamer-1"));
+    sfuMocks.startPlay.mockRejectedValue(new LiveNotFoundError("streamer-1"));
 
-    const response = await requestPlayOffer(env);
+    const response = await requestPlayOffer();
 
     expect(response.status).toBe(404);
     expect(await response.text()).toBe("Live stream not found: streamer-1");
-    expect(dbMocks.endLive).not.toHaveBeenCalled();
   });
 
   it("leaves non-SFU playback errors to the unhandled error handler", async () => {
-    const env = createBindings();
-    const consoleErrorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    callsMocks.startPlay.mockRejectedValue(
+    sfuMocks.startPlay.mockRejectedValue(
       new TypeError("unexpected playback error"),
     );
 
-    const response = await requestPlayOffer(env);
+    const response = await requestPlayOffer();
 
     expect(response.status).toBe(500);
     expect(await response.text()).toBe("Internal Server Error");
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
+    expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         errorMessage: "unexpected playback error",
         event: "worker.unhandled_error",
@@ -2483,11 +1894,7 @@ describe("worker app", () => {
   });
 
   it("logs SFU playback negotiation errors and returns 502", async () => {
-    const env = createBindings();
-    const consoleErrorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    callsMocks.startPlay.mockRejectedValue(
+    sfuMocks.startPlay.mockRejectedValue(
       new SfuApiError("SFU request failed", {
         endpoint: "/tracks/new",
         kind: "http_error",
@@ -2495,11 +1902,11 @@ describe("worker app", () => {
       }),
     );
 
-    const response = await requestPlayOffer(env);
+    const response = await requestPlayOffer();
 
     expect(response.status).toBe(502);
     expect(await response.text()).toBe("Failed to negotiate playback session");
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
+    expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         errorMessage: "SFU request failed",
         event: "play.negotiation_failed",
@@ -2509,18 +1916,9 @@ describe("worker app", () => {
     );
   });
 
-  it("waits for OBS when Calls loses the session between its check and play start", async () => {
-    vi.useFakeTimers({ now: 1_700_000_000_000 });
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    dbMocks.getLive.mockResolvedValue(
-      createLive({
-        notificationMessageId: 1n,
-        sessionId: "live-session",
-        userId: "streamer-1",
-      }),
-    );
-    callsMocks.startPlay.mockRejectedValue(
+  it("waits for OBS when the SFU loses the session between its check and play start", async () => {
+    await seedLive({ sessionId: "live-session", userId: "streamer-1" });
+    sfuMocks.startPlay.mockRejectedValue(
       new SfuApiError("SFU request failed: session not found", {
         endpoint: "/tracks/new",
         kind: "session_not_found",
@@ -2528,132 +1926,101 @@ describe("worker app", () => {
       }),
     );
 
-    const response = await requestPlayOffer(env, execution.context);
+    const response = await requestPlayOffer();
 
-    // The session was active a moment ago, so OBS was lost just now.
-    expect(response.status).toBe(503);
+    // セッションが直前まで生存していたため、OBS はたった今失われたと判定される。
+    expect(response.status).toBe(409);
     expect(response.headers.get("retry-after")).toBe("2");
-    expect(dbMocks.startLiveReconnectGrace).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "streamer-1",
-      "live-session",
-      1_700_000_030_000,
-    );
-    expect(dbMocks.endLive).not.toHaveBeenCalled();
-    await Promise.all(execution.waitUntilPromises);
-    expect(workflowMocks.create).toHaveBeenCalledWith({
-      params: {
-        graceExpiresAt: 1_700_000_030_000,
-        sessionId: "live-session",
-        userId: "streamer-1",
-      },
+    await expect(getLive("streamer-1")).resolves.toMatchObject({
+      graceExpiresAt: NOW + 30_000,
+      sessionId: "live-session",
     });
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
+    await expect(getLiveStateAlarm()).resolves.toBe(NOW + 30_000);
   });
 
   it("starts a short grace period when a play request finds a session lost just now", async () => {
-    vi.useFakeTimers({ now: 1_700_000_000_000 });
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleInfoSpy = vi
-      .spyOn(console, "info")
-      .mockImplementation(() => {});
-    dbMocks.getLive.mockResolvedValue(
-      createLive({
-        notificationMessageId: 15n,
-        sessionId: "live-session",
-        sessionSeenActiveAt: 1_699_999_995_000,
-        userId: "streamer-1",
-      }),
-    );
-    callsMocks.isSessionActive.mockResolvedValue(false);
-
-    const response = await requestPlayOffer(env, execution.context);
-
-    expect(response.status).toBe(503);
-    expect(response.headers.get("retry-after")).toBe("2");
-    expect(dbMocks.startLiveReconnectGrace).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "streamer-1",
-      "live-session",
-      1_700_000_030_000,
-    );
-    expect(dbMocks.endLive).not.toHaveBeenCalled();
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(1);
-    await Promise.all(execution.waitUntilPromises);
-    expect(workflowMocks.create).toHaveBeenCalledWith({
-      params: {
-        graceExpiresAt: 1_700_000_030_000,
-        sessionId: "live-session",
-        userId: "streamer-1",
-      },
+    await seedLive({
+      sessionId: "live-session",
+      sessionSeenActiveAt: NOW - 5000,
+      userId: "streamer-1",
     });
-    expect(
-      notificationsMocks.deleteLiveStartedNotification,
-    ).not.toHaveBeenCalled();
-    expect(consoleInfoSpy).toHaveBeenCalledWith(
+    sfuMocks.isSessionActive.mockResolvedValue(false);
+
+    const response = await requestPlayOffer();
+
+    expect(response.status).toBe(409);
+    expect(response.headers.get("retry-after")).toBe("2");
+    // LiveState が猶予期限と配信を終了させるアラームの両方を設定する。
+    await expect(getLive("streamer-1")).resolves.toMatchObject({
+      graceExpiresAt: NOW + 30_000,
+    });
+    await expect(getLiveStateAlarm()).resolves.toBe(NOW + 30_000);
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
+    expect(consoleInfo).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "live.session_lost",
-        graceExpiresAt: 1_700_000_030_000,
+        graceExpiresAt: NOW + 30_000,
         sessionId: "live-session",
         userId: "streamer-1",
       }),
     );
   });
 
-  it("asks viewers to retry without scheduling an end if a lost session's row changed meanwhile", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    dbMocks.getLive.mockResolvedValue(
-      createLive({
-        sessionId: "live-session",
-        sessionSeenActiveAt: Number.MAX_SAFE_INTEGER,
-        userId: "streamer-1",
-      }),
+  it("asks viewers to retry if a lost session's row changed before its grace period started", async () => {
+    await seedLive({
+      sessionId: "live-session",
+      sessionSeenActiveAt: NOW,
+      userId: "streamer-1",
+    });
+    sfuMocks.isSessionActive.mockImplementation(async () => {
+      // SFUへの確認中に OBS が DELETE を送信した。
+      await getLiveState(env).startLiveReconnectGrace(
+        "streamer-1",
+        "live-session",
+        60_000,
+      );
+      return false;
+    });
+
+    const response = await requestPlayOffer();
+
+    expect(response.status).toBe(409);
+    await expect(getLive("streamer-1")).resolves.toMatchObject({
+      graceExpiresAt: NOW + 60_000,
+    });
+    expect(consoleInfo).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "live.session_lost" }),
     );
-    callsMocks.isSessionActive.mockResolvedValue(false);
-    // OBS sent DELETE or resumed first.
-    dbMocks.startLiveReconnectGrace.mockResolvedValue(false);
-
-    const response = await requestPlayOffer(env, execution.context);
-
-    expect(response.status).toBe(503);
-    expect(execution.waitUntilPromises).toHaveLength(0);
-    expect(workflowMocks.create).not.toHaveBeenCalled();
   });
 
-  it("records that a play request found the session active, and logs if that fails", async () => {
-    vi.useFakeTimers({ now: 1_700_000_000_000 });
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleWarnSpy = vi
-      .spyOn(console, "warn")
-      .mockImplementation(() => {});
-    dbMocks.getLive.mockResolvedValue(
-      createLive({ sessionId: "live-session", userId: "streamer-1" }),
-    );
-    dbMocks.markLiveSessionSeenActive.mockRejectedValue(
-      new Error("D1 unavailable"),
-    );
+  it("records that a play request found the session active", async () => {
+    await seedLive({ sessionId: "live-session", userId: "streamer-1" });
+    const executionContext = createExecutionContext();
 
-    const response = await requestPlayOffer(env, execution.context);
+    const response = await requestPlayOffer(executionContext);
 
     expect(response.status).toBe(201);
-    expect(execution.waitUntilPromises).toHaveLength(1);
-    await Promise.all(execution.waitUntilPromises);
-    expect(dbMocks.markLiveSessionSeenActive).toHaveBeenCalledWith(
-      env.LIVE_DB,
-      "streamer-1",
-      "live-session",
-      1_700_000_000_000,
-      10_000,
-    );
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
+    await waitOnExecutionContext(executionContext);
+    await expect(getLive("streamer-1")).resolves.toMatchObject({
+      sessionSeenActiveAt: NOW,
+    });
+  });
+
+  it("keeps playback successful and logs when the activity record fails", async () => {
+    await seedLive({ sessionId: "live-session", userId: "streamer-1" });
+    vi.spyOn(
+      LiveState.prototype,
+      "markLiveSessionSeenActive",
+    ).mockRejectedValue(new Error("live state unavailable"));
+    const executionContext = createExecutionContext();
+
+    const response = await requestPlayOffer(executionContext);
+
+    expect(response.status).toBe(201);
+    await waitOnExecutionContext(executionContext);
+    expect(consoleWarn).toHaveBeenCalledWith(
       expect.objectContaining({
-        errorMessage: "D1 unavailable",
+        errorMessage: "live state unavailable",
         event: "live.session_activity_record_failed",
         sessionId: "live-session",
         userId: "streamer-1",
@@ -2662,52 +2029,46 @@ describe("worker app", () => {
   });
 
   it("returns 404 when the SFU loses playback for an owner with no stored row", async () => {
-    const env = createBindings();
-    callsMocks.startPlay.mockRejectedValue(
+    sfuMocks.startPlay.mockRejectedValue(
       new SfuApiError("Session not found", {
         endpoint: "/tracks/new",
         kind: "session_not_found",
       }),
     );
 
-    const response = await requestPlayOffer(env);
+    const response = await requestPlayOffer();
 
     expect(response.status).toBe(404);
     expect(await response.text()).toBe("Live stream not found: streamer-1");
-    expect(callsMocks.startPlay).toHaveBeenCalledWith(
+    expect(sfuMocks.startPlay).toHaveBeenCalledWith(
       env,
       "streamer-1",
       [],
       "viewer-offer",
     );
-    expect(dbMocks.endLive).not.toHaveBeenCalled();
+    await expect(getLive("streamer-1")).resolves.toBeNull();
   });
 
   it("returns 400 for an empty WHEP offer", async () => {
-    const env = createBindings();
-
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/play/streamer-1", {
         body: "",
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
           "Content-Type": "application/sdp",
         },
         method: "POST",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe("SDP offer is required");
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
   });
 
   it("rejects whitespace WHEP offers and offers with no Content-Type", async () => {
-    const env = createBindings();
-    const cookie = await createAuthCookie(env);
-    const whitespace = await app.fetch(
+    const cookie = await createAuthCookie();
+    const whitespace = await fetchApp(
       new Request("http://localhost/play/streamer-1", {
         body: "   ",
         headers: {
@@ -2716,8 +2077,6 @@ describe("worker app", () => {
         },
         method: "POST",
       }),
-      env,
-      createExecutionContext(),
     );
     expect(whitespace.status).toBe(400);
     expect(await whitespace.text()).toBe("SDP offer is required");
@@ -2731,30 +2090,22 @@ describe("worker app", () => {
       },
     );
     noContentTypeRequest.headers.delete("Content-Type");
-    const missingType = await app.fetch(
-      noContentTypeRequest,
-      env,
-      createExecutionContext(),
-    );
+    const missingType = await fetchApp(noContentTypeRequest);
     expect(missingType.status).toBe(415);
     expect(await missingType.text()).toBe(
       "Content-Type must be application/sdp",
     );
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
   });
 
   it("returns 204 for GET on the WHEP endpoint", async () => {
-    const env = createBindings();
-
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/play/streamer-1", {
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
         },
         method: "GET",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(204);
@@ -2762,17 +2113,13 @@ describe("worker app", () => {
   });
 
   it("returns 204 for GET on the WHEP session resource", async () => {
-    const env = createBindings();
-
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/play/streamer-1/viewer-session", {
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
         },
         method: "GET",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(204);
@@ -2780,46 +2127,26 @@ describe("worker app", () => {
   });
 
   it("rejects WHEP offers when Content-Type is not application/sdp", async () => {
-    const env = createBindings();
-
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/play/streamer-1", {
         body: "viewer-offer",
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
           "Content-Type": "text/plain",
           Origin: "http://localhost",
         },
         method: "POST",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(415);
     expect(await response.text()).toBe("Content-Type must be application/sdp");
-    expect(callsMocks.startPlay).not.toHaveBeenCalled();
+    expect(sfuMocks.startPlay).not.toHaveBeenCalled();
   });
 
   it("returns SFU client errors for invalid WHEP offers", async () => {
-    const env = createBindings();
-    const liveTracks: StoredTrack[] = [
-      {
-        location: "remote",
-        mid: "0",
-        sessionId: "live-session",
-        trackName: "video",
-      },
-    ];
-
-    dbMocks.getLive.mockResolvedValue(
-      createLive({
-        sessionId: "live-session",
-        tracks: liveTracks,
-        userId: "streamer-1",
-      }),
-    );
-    callsMocks.startPlay.mockRejectedValue(
+    await seedLive({ sessionId: "live-session", userId: "streamer-1" });
+    sfuMocks.startPlay.mockRejectedValue(
       new SfuApiError("SFU request failed: unprocessable content", {
         endpoint: "/tracks/new",
         kind: "unprocessable_content",
@@ -2828,75 +2155,35 @@ describe("worker app", () => {
       }),
     );
 
-    const response = await app.fetch(
-      new Request("http://localhost/play/streamer-1", {
-        body: "viewer-offer",
-        headers: {
-          Cookie: await createAuthCookie(env),
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      createExecutionContext(),
-    );
+    const response = await requestPlayOffer();
 
     expect(response.status).toBe(422);
     expect(await response.text()).toBe("Malformed SDP offer");
   });
 
   it("checks the live session before starting play", async () => {
-    const env = createBindings();
-    const consoleInfoSpy = vi
-      .spyOn(console, "info")
-      .mockImplementation(() => {});
-    const liveTracks: StoredTrack[] = [
-      {
-        location: "remote",
-        mid: "0",
-        sessionId: "live-session",
-        trackName: "video",
-      },
-    ];
+    const liveTracks = createTracks("live-session");
+    await seedLive({
+      sessionId: "live-session",
+      tracks: liveTracks,
+      userId: "streamer-1",
+    });
 
-    dbMocks.getLive.mockResolvedValue(
-      createLive({
-        sessionId: "live-session",
-        tracks: liveTracks,
-        userId: "streamer-1",
-      }),
-    );
-    callsMocks.isSessionActive.mockResolvedValue(true);
-
-    const response = await app.fetch(
-      new Request("http://localhost/play/streamer-1", {
-        body: "viewer-offer",
-        headers: {
-          Cookie: await createAuthCookie(env),
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      createExecutionContext(),
-    );
+    const response = await requestPlayOffer();
 
     expect(response.status).toBe(201);
     expect(await response.text()).toBe("viewer-answer-sdp");
     expect(response.headers.get("content-type")).toBe("application/sdp");
     expect(response.headers.get("etag")).toBe('"viewer-session"');
-    expect(consoleInfoSpy).toHaveBeenCalledWith(
+    expect(consoleInfo).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "play.request",
         level: "info",
         userId: "viewer-1",
       }),
     );
-    expect(callsMocks.isSessionActive).toHaveBeenCalledWith(
-      env,
-      "live-session",
-    );
-    expect(callsMocks.startPlay).toHaveBeenCalledWith(
+    expect(sfuMocks.isSessionActive).toHaveBeenCalledWith(env, "live-session");
+    expect(sfuMocks.startPlay).toHaveBeenCalledWith(
       env,
       "streamer-1",
       liveTracks,
@@ -2911,49 +2198,15 @@ describe("worker app", () => {
   });
 
   it("returns a WHEP counter-offer with 406", async () => {
-    const env = createBindings();
-    const liveTracks: StoredTrack[] = [
-      {
-        location: "remote",
-        mid: "0",
-        sessionId: "live-session",
-        trackName: "video",
-      },
-    ];
-
-    dbMocks.getLive.mockResolvedValue(
-      createLive({
-        sessionId: "live-session",
-        tracks: liveTracks,
-        userId: "streamer-1",
-      }),
-    );
-    callsMocks.startPlay.mockResolvedValue({
+    await seedLive({ sessionId: "live-session", userId: "streamer-1" });
+    sfuMocks.startPlay.mockResolvedValue({
       sdpAnswer: "viewer-counter-offer-sdp",
       sessionId: "viewer-session",
       sdpType: "offer",
-      tracks: [
-        {
-          location: "remote",
-          mid: "0",
-          sessionId: "viewer-session",
-          trackName: "video",
-        },
-      ],
+      tracks: createTracks("viewer-session"),
     });
 
-    const response = await app.fetch(
-      new Request("http://localhost/play/streamer-1", {
-        body: "viewer-offer",
-        headers: {
-          Cookie: await createAuthCookie(env),
-          "Content-Type": "application/sdp",
-        },
-        method: "POST",
-      }),
-      env,
-      createExecutionContext(),
-    );
+    const response = await requestPlayOffer();
 
     expect(response.status).toBe(406);
     expect(await response.text()).toBe("viewer-counter-offer-sdp");
@@ -2965,28 +2218,24 @@ describe("worker app", () => {
   });
 
   it("closes WHEP playback tracks on DELETE", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
+    const executionContext = createExecutionContext();
 
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/play/streamer-1/viewer-session?mid=0", {
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
           Origin: "http://localhost",
         },
         method: "DELETE",
       }),
-      env,
-      execution.context,
+      executionContext,
     );
 
     expect(response.status).toBe(200);
 
-    expect(execution.waitUntilPromises).toHaveLength(1);
+    await waitOnExecutionContext(executionContext);
 
-    await Promise.all(execution.waitUntilPromises);
-
-    expect(callsMocks.closeTracks).toHaveBeenCalledWith(env, "viewer-session", [
+    expect(sfuMocks.closeTracks).toHaveBeenCalledWith(env, "viewer-session", [
       {
         location: "remote",
         mid: "0",
@@ -2997,89 +2246,82 @@ describe("worker app", () => {
   });
 
   it("rejects WHEP playback DELETE without track mids", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
+    const executionContext = createExecutionContext();
 
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/play/streamer-1/viewer-session", {
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
           Origin: "http://localhost",
         },
         method: "DELETE",
       }),
-      env,
-      execution.context,
+      executionContext,
     );
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe("WHEP session track mids are required");
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-    expect(execution.waitUntilPromises).toHaveLength(0);
+    await waitOnExecutionContext(executionContext);
+    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
   });
 
   it("rejects WHEP session requests whose session id is not URL-safe", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    // Hono decodes %2F and %3F in the parameter, so without the check this
-    // would rewrite the Calls API URL to another path.
+    const executionContext = createExecutionContext();
+    // Hono はパラメーター内の %2F や %3F をデコードするため、検証がないと
+    // SFUAPI の URL が別のパスへ書き換えられてしまう。
     const sessionUrl = "http://localhost/play/streamer-1/..%2F..%2Fother%3F";
 
-    const deleteResponse = await app.fetch(
+    const deleteResponse = await fetchApp(
       new Request(`${sessionUrl}?mid=0`, {
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
           Origin: "http://localhost",
         },
         method: "DELETE",
       }),
-      env,
-      execution.context,
+      executionContext,
     );
-    const patchResponse = await app.fetch(
+    const patchResponse = await fetchApp(
       new Request(sessionUrl, {
         body: "viewer-answer",
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
           "Content-Type": "application/sdp",
         },
         method: "PATCH",
       }),
-      env,
-      execution.context,
+      executionContext,
     );
 
     expect(deleteResponse.status).toBe(400);
     expect(await deleteResponse.text()).toBe("Invalid WHEP session ID");
     expect(patchResponse.status).toBe(400);
     expect(await patchResponse.text()).toBe("Invalid WHEP session ID");
-    expect(execution.waitUntilPromises).toHaveLength(0);
-    expect(callsMocks.closeTracks).not.toHaveBeenCalled();
-    expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
+    await waitOnExecutionContext(executionContext);
+    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
+    expect(sfuMocks.renegotiateSession).not.toHaveBeenCalled();
   });
 
   it("trims and deduplicates requested WHEP track mids", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
+    const executionContext = createExecutionContext();
 
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request(
         "http://localhost/play/streamer-1/viewer-session?mid=%20&mid=0&mid=0&mid=1%20",
         {
           headers: {
-            Cookie: await createAuthCookie(env),
+            Cookie: await createAuthCookie(),
             Origin: "http://localhost",
           },
           method: "DELETE",
         },
       ),
-      env,
-      execution.context,
+      executionContext,
     );
 
     expect(response.status).toBe(200);
-    await Promise.all(execution.waitUntilPromises);
-    expect(callsMocks.closeTracks).toHaveBeenCalledWith(env, "viewer-session", [
+    await waitOnExecutionContext(executionContext);
+    expect(sfuMocks.closeTracks).toHaveBeenCalledWith(env, "viewer-session", [
       {
         location: "remote",
         mid: "0",
@@ -3096,33 +2338,27 @@ describe("worker app", () => {
   });
 
   it("returns success and logs when WHEP close reports track errors", async () => {
-    const env = createBindings();
-    const execution = createObservedExecutionContext();
-    const consoleWarnSpy = vi
-      .spyOn(console, "warn")
-      .mockImplementation(() => {});
-
-    callsMocks.closeTracks.mockResolvedValue({
+    sfuMocks.closeTracks.mockResolvedValue({
       tracks: [{ errorCode: "failed_to_close", mid: "0" }],
     });
+    const executionContext = createExecutionContext();
 
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/play/streamer-1/viewer-session?mid=0", {
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
           Origin: "http://localhost",
         },
         method: "DELETE",
       }),
-      env,
-      execution.context,
+      executionContext,
     );
 
     expect(response.status).toBe(200);
 
-    await Promise.all(execution.waitUntilPromises);
+    await waitOnExecutionContext(executionContext);
 
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
+    expect(consoleWarn).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "track_close.sfu_errors",
         level: "warn",
@@ -3137,52 +2373,42 @@ describe("worker app", () => {
   });
 
   it("returns 400 for an empty renegotiation SDP answer", async () => {
-    const env = createBindings();
-
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/play/streamer-1/viewer-session", {
         body: "",
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
           "Content-Type": "application/sdp",
         },
         method: "PATCH",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe("SDP answer is required");
-    expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
+    expect(sfuMocks.renegotiateSession).not.toHaveBeenCalled();
   });
 
   it("rejects WHEP answers when Content-Type is not application/sdp", async () => {
-    const env = createBindings();
-
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/play/streamer-1/viewer-session", {
         body: "viewer-answer",
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
           "Content-Type": "text/plain",
           Origin: "http://localhost",
         },
         method: "PATCH",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(415);
     expect(await response.text()).toBe("Content-Type must be application/sdp");
-    expect(callsMocks.renegotiateSession).not.toHaveBeenCalled();
+    expect(sfuMocks.renegotiateSession).not.toHaveBeenCalled();
   });
 
   it("returns SFU client errors for invalid WHEP answers", async () => {
-    const env = createBindings();
-
-    callsMocks.renegotiateSession.mockRejectedValue(
+    sfuMocks.renegotiateSession.mockRejectedValue(
       new SfuApiError("SFU request failed: unprocessable content", {
         endpoint: "/renegotiate",
         kind: "unprocessable_content",
@@ -3191,17 +2417,15 @@ describe("worker app", () => {
       }),
     );
 
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/play/streamer-1/viewer-session", {
         body: "viewer-answer",
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
           "Content-Type": "application/sdp",
         },
         method: "PATCH",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(422);
@@ -3209,25 +2433,19 @@ describe("worker app", () => {
   });
 
   it("returns 204 after successful WHEP renegotiation", async () => {
-    const env = createBindings();
-
-    callsMocks.renegotiateSession.mockResolvedValue(undefined);
-
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/play/streamer-1/viewer-session", {
         body: "viewer-answer",
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
           "Content-Type": "application/sdp",
         },
         method: "PATCH",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(204);
-    expect(callsMocks.renegotiateSession).toHaveBeenCalledWith(
+    expect(sfuMocks.renegotiateSession).toHaveBeenCalledWith(
       env,
       "viewer-session",
       "viewer-answer",
@@ -3235,33 +2453,27 @@ describe("worker app", () => {
   });
 
   it("logs non-SFU WHEP answer errors and returns 502", async () => {
-    const env = createBindings();
-    const consoleErrorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
-    callsMocks.renegotiateSession.mockRejectedValue(
+    sfuMocks.renegotiateSession.mockRejectedValue(
       new SfuApiError("unexpected renegotiation error", {
         endpoint: "/renegotiate",
         kind: "request_failed",
       }),
     );
 
-    const response = await app.fetch(
+    const response = await fetchApp(
       new Request("http://localhost/play/streamer-1/viewer-session", {
         body: "viewer-answer",
         headers: {
-          Cookie: await createAuthCookie(env),
+          Cookie: await createAuthCookie(),
           "Content-Type": "application/sdp",
         },
         method: "PATCH",
       }),
-      env,
-      createExecutionContext(),
     );
 
     expect(response.status).toBe(502);
     expect(await response.text()).toBe("Failed to submit WHEP answer");
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
+    expect(consoleError).toHaveBeenCalledWith(
       expect.objectContaining({
         errorMessage: "unexpected renegotiation error",
         event: "play.answer_submission_failed",

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createErrorLogFields } from "./logger";
 import {
   deleteLiveStartedNotification,
@@ -9,15 +9,12 @@ import {
 async function catchWebhookError(
   promise: Promise<unknown>,
 ): Promise<DiscordWebhookError> {
-  try {
-    await promise;
-  } catch (error: unknown) {
-    if (error instanceof DiscordWebhookError) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error("Expected a DiscordWebhookError");
+  const error = await promise.then(
+    () => undefined,
+    (rejection: unknown) => rejection,
+  );
+  assert.instanceOf(error, DiscordWebhookError);
+  return error;
 }
 
 describe("worker live start notifications", () => {
@@ -53,10 +50,10 @@ describe("worker live start notifications", () => {
     expect(init?.headers).toEqual({
       "Content-Type": "application/json",
     });
-    expect(typeof init?.body).toBe("string");
-    if (typeof init?.body !== "string") {
-      throw new TypeError("Expected webhook body to be a JSON string");
-    }
+    assert(
+      typeof init?.body === "string",
+      "Expected webhook body to be a JSON string",
+    );
     expect(JSON.parse(init.body)).toEqual({
       allowed_mentions: {
         parse: [],

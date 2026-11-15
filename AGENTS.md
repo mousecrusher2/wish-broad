@@ -1,43 +1,58 @@
-# Repository Guidelines
+# リポジトリガイドライン
 
-## Project Structure & Module Organization
+## プロジェクト構成とモジュール配置
 
-`src/` contains the React 19 + Vite client. App bootstrapping lives in `src/main.tsx` and `src/App.tsx`. API fetching, the SWR hooks (`useBootstrapAuthState`, `useCurrentUser`, `useLiveStreams`, `useLiveToken`), and the auth bootstrap state live in `src/api.ts`. Page-level components (`WHEPPlayerPage.tsx`, `WHEPPlayer.tsx`, `LoginPrompt.tsx`, `OBSStreamingInfo.tsx`) live directly in `src/`, and smaller UI pieces live in `src/components/`. WHEP playback, reconnect behavior, TURN credential fetching, and PeerConnection session logic live in `src/player/`.
+### クライアント（`src/`）
 
-`worker/` contains the Cloudflare Worker and Hono routes. `worker/main.ts` is the Worker entrypoint: it exports the Hono app and the Workflow classes, and is the only module that imports `cloudflare:workers`, so keep it thin. `worker/index.ts` is the route composition layer. Keep data access in `worker/database.ts`, Cloudflare Realtime SFU integration in `worker/sfu.ts`, Discord OAuth helpers in `worker/discord.ts` and `worker/discord-login.ts`, live notifications in `worker/notifications.ts`, the reconnect grace period and live-end Workflow body in `worker/live-end.ts`, TURN credential generation in `worker/turn.ts`, and token hashing/authentication helpers in their existing modules.
+`src/` には React 19 + Vite のクライアントコードを配置しています。
 
-Static assets live in `public/`. Treat `schema.sql` as the authoritative D1 schema for current development; migrations in `migrations/` record deployment history and must be kept aligned when table shape changes. `wrangler.jsonc` defines Worker bindings, secrets, assets, observability, and deployment settings. Generated Cloudflare binding types live in `worker-configuration.d.ts`, with app-facing aliases in `worker/types.ts`.
+- `src/main.tsx`、`src/App.tsx`: アプリケーションの起動処理
+- `src/api.ts`: API 関連
+- `src/` 直下のページレベルコンポーネント
+- `src/components/`: 小さな UI 部品
+- `src/player/`: WHEP 再生、再接続処理、TURN 認証情報の取得、PeerConnection のセッション管理
 
-Architecture and lifecycle decisions that are not obvious from code live in `docs/architecture.md`; update it when changing ingest/playback lifecycle, SFU reconciliation, notifications, or WHEP negotiation behavior.
+### Worker（`worker/`）
 
-## Build, Test, and Development Commands
+`worker/` には Cloudflare Worker を配置しています。
 
-Run `pnpm install` after cloning. Use `pnpm dev` for local development; the Cloudflare Vite plugin runs the Worker in `workerd` alongside the client. Use `pnpm preview` to build and serve the production bundle locally. Run `pnpm build` to type-check and bundle the client and the Worker. Run `pnpm test` for the Vitest suite and `pnpm test:watch` while iterating.
+- `worker/main.ts`: Worker のエントリーポイント。Hono アプリ、`LiveState` Durable Object クラス、および `LiveState` から呼び出される `LiveEffects` エントリーポイントを再エクスポートするだけの薄いモジュールです。ここに実装ロジックを書かないでください。
+- `worker/index.ts`: ルート構成層
+- `worker/live-state.ts`: Durable Object の挙動（`LiveState`: トランザクション、再接続猶予アラーム、開始通知の削除の引き渡し）
+- `worker/live-end.ts`: Durable Object からの依頼で Worker が実行する処理
 
-Run `pnpm check` before opening a PR; it executes TypeScript, oxlint, and `pnpm check:unused-exports` via Knip. `eslint-plugin-better-tailwindcss` is loaded by oxlint as a JS plugin for `src/`; the repo does not run ESLint. Use `pnpm format` to apply Prettier repo-wide and `pnpm format:check` for formatting verification. Run `pnpm schema:check` after editing D1 migrations; it requires the `sqlite3` CLI on `PATH`, replays `migrations/*.sql` into a temporary SQLite database, and compares the resulting schema shape with authoritative `schema.sql`. This mitigates schema drift only; it cannot prove that data migration logic preserves data correctly. `pnpm deploy` builds and publishes the Worker and static assets to Cloudflare.
+## ビルド・テスト・開発コマンド
 
-Do not invoke executables under `node_modules/` directly, including `.cmd` or `.ps1` shims. Always use `pnpm run <script>` for package scripts or `pnpm exec <binary>` for package binaries. In this environment, `pnpm exec ...` may fail under the sandbox and should be rerun with elevated permissions instead of falling back to direct `node_modules` executables.
+`.cmd` や `.ps1` のシムを含め、`node_modules/` 配下の実行ファイルを直接呼び出さないでください。package.json のスクリプトには常に `pnpm run <script>`、パッケージのバイナリには `pnpm exec <binary>` を使用してください。この環境ではサンドボックス制限により `pnpm exec ...` が失敗する場合がありますが、`node_modules/` 直下の実行ファイルへフォールバックせず、昇格権限（サンドボックス外）で再実行してください。
 
-## Coding Style & Naming Conventions
+## コーディングスタイルと命名規則
 
-This repo uses TypeScript ES modules with strict compiler settings and Prettier with `prettier-plugin-tailwindcss` (otherwise defaults: 2-space indentation, semicolons, and double quotes). Follow existing naming: PascalCase for React components (`WHEPPlayer.tsx`), camelCase for utilities, and `useX` for hooks (`useLiveStreams` in `src/api.ts`). Keep protected frontend requests relative to origin, for example `fetch("/api/me", { credentials: "include" })`.
+### コメントと `docs/architecture.md` の書き分け
 
-Use Valibot to validate untrusted JSON boundaries. Report failures by throwing. Each external API wrapper throws its own `Error` subclass with a `kind` (`SfuApiError`, `DiscordApiError`, `TurnApiError`, `DiscordWebhookError`, and `WHEPSessionError` on the client), and other failures that callers branch on get a named subclass (`LiveNotFoundError`, `UnauthorizedError`). Document the errors a function throws on purpose with JSDoc `@throws`. Callers that branch on a failure wrap only that call in `try`/`catch`, check the error with `instanceof`, and rethrow what they do not handle. Best-effort work (notifications, track cleanup, token revocation, anything in `waitUntil` or a `finally`) must catch and log at the call site so a failure never replaces the main response. The SWR layer in `src/api.ts` is the exception: its fetchers catch every failure and cache it as `{ status: "error" }` data, because SWR applies a rejected request even after a newer request or a local `mutate` has replaced it. Put new SQL access in `worker/database.ts` rather than scattering queries across route handlers. Keep SFU, Discord, TURN, notification, and token-auth concerns isolated in their existing Worker modules.
+理由は 1 か所にだけ書き、コードとドキュメントで重複させないでください。
 
-## Testing Guidelines
+- `docs/architecture.md`: 複数のモジュールにまたがる設計判断、ライフサイクルと状態遷移、トレードオフを記載します。
+- コードコメント: その箇所だけで完結する制約・不変条件・外部 API の仕様や癖など、知らないと誤って「直して」しまいそうな点を 1〜3 行で書きます。
+- 宣言と行コメントの使い分け: 宣言（関数・クラス・メソッド・型とそのフィールド・定数）の説明には `/** */` の JSDoc を使い、関数本体の中の注記や複数の宣言にまたがる注記には `//` を使います。JSDoc には「何をするか」「`null` や `false` など特別な戻り値の意味」「`@throws`」だけを書き、名前や型から明らかな宣言には付けないでください。
 
-Vitest tests are committed next to most Worker modules (routes, D1 access, SFU, Discord OAuth, notifications, the live-end Workflow body, TURN credentials, live token and bearer auth helpers, JWT helpers, and logging) and for the frontend API layer and WHEP player (`WHEPClient`, `WHEPPlaybackController`, reconnect policy, and TURN parsing). Add tests as `*.test.ts` or `*.test.tsx` near the feature they cover. Prefer focused tests around protocol edges, schema validation, retry/reconnect timing, and Worker response status/header behavior.
+### バリデーション・エラー処理・責務分離
 
-Treat `pnpm test` and `pnpm check` as the minimum automated validation for code changes. For Worker/WebRTC changes, also manually verify the affected flows locally: `/api/me`, `/api/lives`, live token creation, WHIP publish through `/ingest/:userId`, WHEP playback through `/play/:userId`, TURN credential retrieval, and live start notification cleanup when relevant, including an OBS reconnect within the 60-second grace period (no second notification) and a stop that ends the broadcast after it.
+- 名前付きの `Error` サブクラスは、主に呼び出し元がその失敗から回復する場合や、実行時にその種別で分岐する場合に作成します。ただし、回復も分岐もしないというだけでむやみに `Error` にまとめないでください。
+- 関数が意図的にスローするエラーは JSDoc の `@throws` に明記してください。
 
-## Commit & Pull Request Guidelines
+### `LiveState` Durable Object の制約
 
-Recent history uses Conventional Commit-style prefixes such as `fix:` and `feat:`; keep that pattern and make each commit a single logical change. PRs should include a short scope summary, note any updates to `schema.sql`, `migrations/`, `wrangler.jsonc`, or generated Cloudflare types, link related issues, and attach screenshots for UI changes. Include the automated and manual verification steps you ran.
+- `LiveState` Durable Object は外部応答の待機時間に対しても課金されるため、Realtime SFU や Discord その他の外部 API を呼び出してはならず、自身のストレージおよびアラーム呼び出し以外の非同期処理を呼び出してはなりません。`await` せずに呼び出す場合も同様です。
+- `LiveState` 自身が外部処理を開始する必要がある場合は `LiveEffects` へ引き渡してください。`LiveEffects` のメソッドは即座に制御を返し、実際の処理を `waitUntil` 内で実行します。
 
-## Security & Configuration Tips
+## テストガイドライン
 
-Keep secrets in `.dev.vars`, which is gitignored, and keep binding names aligned between `wrangler.jsonc` and `.dev.vars`. `worker/types.ts` only aliases the generated binding types. Required production secrets include Discord OAuth/guild values, Cloudflare Realtime SFU app credentials, JWT and live-token pepper values, notification webhook URL, and TURN key credentials.
+### Worker テストの書き方と注意点
 
-`LOG_LEVEL` is a non-secret Worker variable for structured application logs; use `debug`, `info`, `warn`, `error`, or `silent`.
+- `worker/` のテストは `cloudflare:workers` の `env` を通じて、SQLite ストレージとアラームを備えた実際の `LiveState` と `LiveEffects` を使用します。
+- Durable Object スタブの RPC 呼び出しが返す Promise は関数としても呼び出せるため、`expect(...).rejects` に渡す前に通常の `Promise` で包んでください。
 
-Live ingest tokens are only displayed on creation, stored as HMAC hashes, and verified through bearer auth on `/ingest/:userId/*`; do not log raw tokens. After changing Worker bindings or environment types, run `pnpm cf-typegen` to refresh generated Cloudflare types.
+## セキュリティと設定のヒント
+
+- シークレットは `.dev.vars`（`.gitignore` 対象）に保持し、`wrangler.jsonc` と `.dev.vars` のバインディング名を一致させてください。
+- Worker のバインディングや環境変数の型を変更した後は、`pnpm cf-typegen` を実行して自動生成される Cloudflare 型を更新してください。

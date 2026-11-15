@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   WHEPPlaybackController,
   type WHEPPlaybackControllerSnapshot,
@@ -105,9 +113,7 @@ class FakeSessionDescription {
 
 function lastPeer(): FakePeerConnection {
   const pc = FakePeerConnection.instances.at(-1);
-  if (pc === undefined) {
-    throw new Error("Expected a peer connection");
-  }
+  assert.isDefined(pc, "Expected a peer connection");
   return pc;
 }
 
@@ -159,7 +165,7 @@ function createController() {
     play: async () => undefined,
     srcObject: null,
   };
-  // oxlint-disable-next-line typescript/consistent-type-assertions, typescript/no-unsafe-type-assertion -- The controller only forwards srcObject/play to WHEPSession.
+  // oxlint-disable-next-line typescript/consistent-type-assertions, typescript/no-unsafe-type-assertion -- コントローラーは srcObject/play を WHEPSession に転送するだけ。
   void controller.attachVideoElement(videoElement as HTMLVideoElement);
   return { controller, snapshots };
 }
@@ -232,17 +238,20 @@ describe("WHEPPlaybackController", () => {
     },
   );
 
-  it("handles a rejected offer once even though the session also reports failed", async () => {
-    const requests = mockPlayEndpoint(502);
-    const { controller, snapshots } = createController();
+  it.each([502, 503])(
+    "handles a rejected %i offer once even though the session also reports failed",
+    async (status) => {
+      const requests = mockPlayEndpoint(status);
+      const { controller, snapshots } = createController();
 
-    await controller.load("alice");
-    await vi.advanceTimersByTimeAsync(5_000);
+      await controller.load("alice");
+      await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(snapshots.at(-1)?.playbackState.phase).toBe("error");
-    expect(console.error).toHaveBeenCalledOnce();
-    expect(countPosts(requests)).toBe(1);
-  });
+      expect(snapshots.at(-1)?.playbackState.phase).toBe("error");
+      expect(console.error).toHaveBeenCalledOnce();
+      expect(countPosts(requests)).toBe(1);
+    },
+  );
 
   it("keeps reconnecting when ICE fails on a retry attempt", async () => {
     const requests = mockPlayEndpoint();
@@ -251,7 +260,7 @@ describe("WHEPPlaybackController", () => {
     await controller.load("alice");
     const first = lastPeer();
     first.updateStates(ICE_CONNECTED);
-    // The established session is replaced after its recovery grace period.
+    // 確立済みセッションは、リカバリー猶予期間の経過後に置き換えられる。
     first.updateStates(ICE_FAILED);
     await vi.advanceTimersByTimeAsync(3_000);
     await vi.waitFor(() => {
@@ -260,7 +269,7 @@ describe("WHEPPlaybackController", () => {
     });
 
     lastPeer().updateStates(ICE_FAILED);
-    // Covers the 2 s retry interval before the next offer.
+    // 次のオファー送信までの 2 秒間のリトライ間隔を検証する。
     await vi.advanceTimersByTimeAsync(2_000);
     await vi.waitFor(() => {
       expect(countPosts(requests)).toBe(3);
@@ -273,9 +282,9 @@ describe("WHEPPlaybackController", () => {
     expect(snapshots.at(-1)?.playbackState.phase).toBe("reconnecting");
   });
 
-  it("waits for the publisher on an initial load that gets 503", async () => {
+  it("waits for the publisher on an initial load that gets 409", async () => {
     const requests = mockPlayEndpoint((postIndex) =>
-      postIndex < 2 ? 503 : 201,
+      postIndex < 2 ? 409 : 201,
     );
     const { controller, snapshots } = createController();
 
@@ -285,7 +294,7 @@ describe("WHEPPlaybackController", () => {
       isLoading: false,
       playbackState: { phase: "reconnecting", resourceUserId: "alice" },
     });
-    // Offers are retried at a fixed 2 s interval, without backing off.
+    // オファーはバックオフせず、固定の 2 秒間隔でリトライされる。
     await vi.advanceTimersByTimeAsync(1_999);
     expect(countPosts(requests)).toBe(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -324,7 +333,7 @@ describe("WHEPPlaybackController", () => {
   it("keeps reconnecting through the publisher's 60 second grace period", async () => {
     const publisherBackAt = Date.now() + 3_000 + 60_000;
     const requests = mockPlayEndpoint((postIndex) =>
-      postIndex === 0 || Date.now() >= publisherBackAt ? 201 : 503,
+      postIndex === 0 || Date.now() >= publisherBackAt ? 201 : 409,
     );
     const { controller, snapshots } = createController();
 
@@ -336,7 +345,7 @@ describe("WHEPPlaybackController", () => {
     expect(snapshots.at(-1)?.playbackState.phase).toBe("reconnecting");
     const postsDuringGrace = countPosts(requests);
 
-    // Covers the 2 s retry interval once the publisher is back.
+    // 配信者が戻った後の 2 秒間のリトライ間隔を検証する。
     await vi.advanceTimersByTimeAsync(3_000);
     await vi.waitFor(() => {
       expect(countPosts(requests)).toBeGreaterThan(postsDuringGrace);
@@ -348,8 +357,8 @@ describe("WHEPPlaybackController", () => {
     expect(console.error).not.toHaveBeenCalled();
   });
 
-  it("gives up with an error when the server stays unavailable", async () => {
-    mockPlayEndpoint((postIndex) => (postIndex === 0 ? 201 : 503));
+  it("gives up with an error when the publisher never reconnects", async () => {
+    mockPlayEndpoint((postIndex) => (postIndex === 0 ? 201 : 409));
     const { controller, snapshots } = createController();
 
     await controller.load("alice");

@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   type WHEPConnectionStatus,
   WHEPSession,
@@ -48,7 +56,7 @@ class FakeMediaStream extends EventTarget {
     return [...this.tracks];
   }
 
-  // Like the browser API, addTrack() itself does not dispatch "addtrack".
+  // ブラウザの API と同様、addTrack() 自体は "addtrack" イベントを発火しない。
   addTrack(track: FakeTrack): void {
     if (!this.tracks.includes(track)) {
       this.tracks.push(track);
@@ -205,9 +213,7 @@ function createSession({
     videoElement,
   });
   const pc = FakePeerConnection.instances.at(-1);
-  if (pc === undefined) {
-    throw new Error("Expected the session to create a peer connection");
-  }
+  assert.isDefined(pc, "Expected the session to create a peer connection");
   return { pc, session, statuses, streams, videoElement };
 }
 
@@ -369,8 +375,9 @@ describe("WHEPSession", () => {
   it.each([
     [404, "resource_not_found"],
     [403, "client_request_error"],
-    [503, "resource_unavailable"],
+    [409, "resource_unavailable"],
     [502, "server_request_error"],
+    [503, "server_request_error"],
     [200, "unexpected_response"],
   ] as const)(
     "fails with %i offer responses as %s without a session to delete",

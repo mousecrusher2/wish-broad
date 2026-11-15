@@ -10,9 +10,11 @@ type DiscordWebhookErrorKind =
 
 const REDACTED = "[redacted]";
 
-// Discord webhook URLs are `/api[/vN]/webhooks/{id}/{token}[/...]`, and the
-// token alone authorizes posting and deleting channel messages. Errors are
-// logged with their endpoint, so they only ever carry this redacted form.
+/**
+ * Webhook URL の token 部分を伏字にする。URL の形式は `/api[/vN]/webhooks/{id}/{token}[/...]`
+ * で、token だけでチャンネルへの投稿と削除ができる。エラーログにはエンドポイントが記録される
+ * ため、ログには必ずこの形式だけを含める。
+ */
 function redactWebhookUrl(webhookUrl: string): string {
   let url: URL;
   try {
@@ -57,10 +59,10 @@ export class DiscordWebhookError extends Error {
     this.statusText = options.statusText;
   }
 
-  /** Whether sending the same request again later could succeed. */
+  /** 同じリクエストを後で再送した場合に成功する可能性があるかどうか。 */
   isRetryable(): boolean {
     if (this.kind !== "http_error") {
-      // The request failed or timed out before Discord answered.
+      // Discord の応答前にリクエストが失敗またはタイムアウトした。
       return true;
     }
 
@@ -80,8 +82,7 @@ function getErrorMessage(error: unknown): string {
 
 function createWebhookExecutionEndpoint(webhookUrl: string): string {
   const url = new URL(webhookUrl);
-  // wait=true is required because the returned message id is what lets us delete
-  // best-effort start notifications when the matching live row is removed.
+  // 配信の終了時に開始通知を削除するにはメッセージ ID が必要で、wait=true のときだけ返される。
   url.searchParams.set("wait", "true");
   return url.toString();
 }
@@ -118,8 +119,7 @@ function parseMessageId(rawMessageId: unknown): bigint | null {
 }
 
 /**
- * @throws {DiscordWebhookError} When the request fails or times out before
- * Discord answers.
+ * @throws {DiscordWebhookError} Discord の応答前にリクエストが失敗またはタイムアウトした場合。
  */
 async function fetchDiscordWebhook(
   endpoint: string,
@@ -140,11 +140,11 @@ async function fetchDiscordWebhook(
 }
 
 /**
- * Post the live start message to the Discord webhook.
+ * 配信開始メッセージを Discord Webhook に投稿する。
  *
- * @returns The posted message id, which is needed to delete it later.
- * @throws {DiscordWebhookError} When the request fails, Discord rejects it, or
- * the response does not carry a valid message id.
+ * @returns 投稿されたメッセージ ID（後で削除する際に必要）。
+ * @throws {DiscordWebhookError} リクエストに失敗したか、Discord に拒否されたか、
+ * レスポンスに有効なメッセージ ID が含まれていなかった場合。
  */
 export async function sendLiveStartedNotification(
   env: NotificationsEnv,
@@ -227,10 +227,10 @@ export async function sendLiveStartedNotification(
 }
 
 /**
- * Delete a previously posted live start message.
+ * 以前に投稿した配信開始メッセージを削除する。
  *
- * @throws {DiscordWebhookError} When the request fails or Discord rejects it;
- * `isRetryable()` tells whether trying again later could succeed.
+ * @throws {DiscordWebhookError} リクエストに失敗したか Discord に拒否された場合。
+ * 後で再試行すれば成功する可能性があるかは `isRetryable()` で判定できる。
  */
 export async function deleteLiveStartedNotification(
   env: NotificationsEnv,

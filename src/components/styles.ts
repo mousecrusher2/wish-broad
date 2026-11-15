@@ -1,13 +1,12 @@
-// Shared Tailwind class sets so every screen uses one radius, spacing, and
-// contrast scale.
+// すべての画面で統一された角丸・余白・コントラストスケールを使うための
+// 共通 Tailwind クラスセット。
 //
-// Radius: page surfaces rounded-2xl, inset cards rounded-xl, controls
-// rounded-lg, rows inside an inset list rounded-md.
-// Size: controls keep their label at roughly 40% of their height, so text
-// reads clearly without the control growing (lg 44px/16px, md 40px/15px,
-// sm 32px/14px).
-// Contrast: text stays at WCAG AA (4.5:1) and input borders at 3:1 against the
-// dark surfaces they sit on.
+// 角丸: ページサーフェスは rounded-2xl、インセットカードは rounded-xl、コントロールは
+// rounded-lg、インセットリスト内の行は rounded-md。
+// サイズ: コントロールのラベル文字高を高さのおおよそ 40% に保ち、コントロールを大きくせずに
+// テキストを読みやすくする（lg 44px/16px、md 40px/15px、sm 32px/14px）。
+// コントラスト: 背景のダークサーフェスに対してテキストは WCAG AA (4.5:1)、入力欄の枠線は
+// 3:1 を維持する。
 
 const focusRingClasses =
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300";

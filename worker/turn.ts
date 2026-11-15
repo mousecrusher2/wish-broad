@@ -90,15 +90,18 @@ function toUrlList(urls: string | string[]): string[] {
   return Array.isArray(urls) ? urls : [urls];
 }
 
-// STUN and TURN URIs are `scheme:host[:port][?transport=udp|tcp]` (RFC 7064,
-// RFC 7065), so the port, when present, comes right before the query or the
-// end. An IPv6 host ending in 53 is followed by "]" and does not match.
+/**
+ * ポート 53 を指す STUN / TURN URI。URI の形式は `scheme:host[:port][?transport=udp|tcp]`
+ * （RFC 7064、RFC 7065）であるため、ポートはクエリ文字列または末尾の直前に現れる。
+ * 53 で終わる IPv6 ホストは直後に "]" が続くため一致しない。
+ */
 const PORT_53_PATTERN = /:0*53(?:\?|$)/u;
 
+/**
+ * ブラウザがブロックするポート 53 の URL を取り除く（理由は docs/architecture.md の
+ * 「WHEPクライアントの設計判断」）。URL が残らなければ null を返す。
+ */
 function filterIceServerUrls(iceServer: RawIceServer): TurnIceServer | null {
-  // Cloudflare returns primary and alternate TURN ports, but browsers are known
-  // to block port 53. Because this client waits for full ICE gathering instead
-  // of using trickle ICE, keep blocked candidates out to avoid setup timeouts.
   const urls = toUrlList(iceServer.urls).filter((url) => {
     return !PORT_53_PATTERN.test(url);
   });
@@ -114,8 +117,7 @@ function filterIceServerUrls(iceServer: RawIceServer): TurnIceServer | null {
 }
 
 /**
- * @throws {TurnApiError} When the request fails or times out before Cloudflare
- * answers.
+ * @throws {TurnApiError} Cloudflare の応答前にリクエストが失敗またはタイムアウトした場合。
  */
 async function fetchTurnCredentials(
   endpoint: string,
@@ -140,8 +142,8 @@ async function fetchTurnCredentials(
 }
 
 /**
- * @throws {TurnApiError} When Cloudflare answers with an HTTP error or a body
- * that is not the expected JSON.
+ * @throws {TurnApiError} Cloudflare が HTTP エラーを返したか、期待する JSON ではない
+ * ボディを返した場合。
  */
 async function parseTurnCredentialsResponse(
   endpoint: string,
@@ -189,10 +191,10 @@ async function parseTurnCredentialsResponse(
 }
 
 /**
- * Generate short-lived TURN credentials for one viewer.
+ * 1 人の視聴者向けに短命な TURN クレデンシャルを生成する。
  *
- * @throws {TurnApiError} When the credentials cannot be generated or contain
- * no ICE server that browsers can use.
+ * @throws {TurnApiError} クレデンシャルを生成できないか、ブラウザが利用可能な
+ * ICE サーバーが 1 つも含まれていなかった場合。
  */
 export async function generateTurnIceServers(
   env: TurnEnv,

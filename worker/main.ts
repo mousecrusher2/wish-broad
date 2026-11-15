@@ -1,25 +1,8 @@
-// Worker entrypoint. Routes live in ./index; this module also exports the
-// Workflow classes Wrangler binds, which need the `cloudflare:workers` runtime
-// module and therefore stay out of the Node-based route tests.
-import {
-  WorkflowEntrypoint,
-  type WorkflowEvent,
-  type WorkflowStep,
-} from "cloudflare:workers";
+// Worker のエントリーポイント。Wrangler がバインドするクラスとルーティング（./index）を
+// 再エクスポートするだけで、処理は書かない。
 import app from "./index";
-import { type LiveEndParams, runLiveEnd } from "./live-end";
-import type { Bindings } from "./types";
 
-export class LiveEndWorkflow extends WorkflowEntrypoint<
-  Bindings,
-  LiveEndParams
-> {
-  override async run(
-    event: Readonly<WorkflowEvent<LiveEndParams>>,
-    step: WorkflowStep,
-  ): Promise<void> {
-    await runLiveEnd(this.env, event.payload, step);
-  }
-}
+export { LiveEffects } from "./live-end";
+export { LiveState } from "./live-state";
 
 export default app;

@@ -1,111 +1,73 @@
-import { endLive } from "./database";
-import { createErrorLogFields, logInfo, logWarn } from "./logger";
+import { WorkerEntrypoint } from "cloudflare:workers";
+import type { NotificationDeleteJob } from "./live-state";
+import { createErrorLogFields, logWarn } from "./logger";
 import {
   deleteLiveStartedNotification,
   DiscordWebhookError,
 } from "./notifications";
 import type { Bindings } from "./types";
 
-// OBS sends DELETE before every reconnect, so a broadcast outlives each ingest
-// session by this long. A new ingest within the period resumes the broadcast
-// without another start notification.
+/**
+ * インジェストの DELETE 後も配信を維持する再接続猶予期間。この期間内の新しいインジェストは
+ * 開始通知を送らずに配信を再開する（docs/architecture.md「インジェストのライフサイクル」）。
+ */
 export const LIVE_RECONNECT_GRACE_MS = 60_000;
-
-export type LiveEndParams = {
-  graceExpiresAt: number;
-  sessionId: string;
-  userId: string;
-};
-
-// The subset of Workflows' WorkflowStep that ending a live needs. Step results
-// are persisted, so each callback returns plain serializable values.
-type LiveEndStep = {
-  do<T extends string | null>(
-    name: string,
-    callback: () => Promise<T>,
-  ): Promise<T>;
-  sleepUntil(name: string, timestamp: number): Promise<void>;
-};
 
 type LiveEndEnv = Pick<
   Bindings,
-  "LIVE_DB" | "LOG_LEVEL" | "NOTIFICATIONS_DISCORD_WEBHOOK_URL"
+  "ENVIRONMENT" | "LOG_LEVEL" | "NOTIFICATIONS_DISCORD_WEBHOOK_URL"
 >;
 
-/**
- * Schedules the end of a broadcast for when its reconnect grace period passes.
- * This is the only place that knows the timer is a Workflow instance.
- */
-export async function scheduleLiveEnd(
-  env: Pick<Bindings, "LIVE_END_WORKFLOW">,
-  params: LiveEndParams,
-): Promise<void> {
-  await env.LIVE_END_WORKFLOW.create({ params });
+/** 削除できたか、再試行しても成功しない失敗だった場合は true を返す。失敗はログ出力する。 */
+async function tryDeleteNotification(
+  env: LiveEndEnv,
+  job: NotificationDeleteJob,
+  canRetry: boolean,
+): Promise<boolean> {
+  try {
+    await deleteLiveStartedNotification(env, BigInt(job.messageId));
+    return true;
+  } catch (error: unknown) {
+    const retryable =
+      !(error instanceof DiscordWebhookError) || error.isRetryable();
+    logWarn(env, "live_notification.delete_failed", {
+      ...createErrorLogFields(error),
+      messageId: job.messageId,
+      userId: job.userId,
+      willRetry: canRetry && retryable,
+    });
+    return !retryable;
+  }
 }
 
 /**
- * Body of the live-end Workflow. A resumed broadcast is not cancelled here:
- * resuming changes the row's session and clears its grace deadline, so the
- * compare-and-delete below no longer matches and the instance ends quietly.
+ * 終了した配信の開始通知を Discord から削除する。ベストエフォートのため、ネットワークエラー、
+ * タイムアウト、429、5xx で失敗した削除をすぐに 1 回だけ再試行し、それでも失敗したら諦める。
+ * waitUntil 内で実行されるため、すべての失敗はスローせずログ出力する。
  */
-export async function runLiveEnd(
+export async function runNotificationDeletes(
   env: LiveEndEnv,
-  params: LiveEndParams,
-  step: LiveEndStep,
+  jobs: readonly NotificationDeleteJob[],
 ): Promise<void> {
-  const { graceExpiresAt, sessionId, userId } = params;
-
-  await step.sleepUntil("wait for the publisher to reconnect", graceExpiresAt);
-
-  const messageId = await step.do("end the live", async () => {
-    const ended = await endLive(env.LIVE_DB, {
-      graceExpiresAt,
-      sessionId,
-      userId,
-    });
-    if (ended === null) {
-      return null;
-    }
-
-    logInfo(env, "live.ended", {
-      reason: "reconnect_grace_expired",
-      sessionId,
-      userId,
-    });
-    // bigint is not a Workflow step result type; keep the snowflake as text.
-    return ended.notificationMessageId?.toString() ?? null;
-  });
-  if (messageId === null) {
-    return;
-  }
-
-  try {
-    await step.do("delete the start notification", async () => {
-      try {
-        await deleteLiveStartedNotification(env, BigInt(messageId));
-        return "deleted";
-      } catch (error: unknown) {
-        // Throwing lets Workflows retry the step with backoff; failures that a
-        // retry cannot fix, such as an already deleted message, end here.
-        if (!(error instanceof DiscordWebhookError) || error.isRetryable()) {
-          throw error;
-        }
-        logWarn(env, "live_notification.delete_failed", {
-          ...createErrorLogFields(error),
-          messageId,
-          sessionId,
-          userId,
-        });
-        return "failed";
+  await Promise.all(
+    jobs.map(async (job) => {
+      if (!(await tryDeleteNotification(env, job, true))) {
+        await tryDeleteNotification(env, job, false);
       }
-    });
-  } catch (error: unknown) {
-    // Retries are exhausted. The row is already gone, so only log it.
-    logWarn(env, "live_notification.delete_failed", {
-      ...createErrorLogFields(error),
-      messageId,
-      sessionId,
-      userId,
-    });
+    }),
+  );
+}
+
+/**
+ * LiveState オブジェクトが開始するが完了を待ってはならない処理群。オブジェクトは
+ * `ctx.exports` を通じてこのエントリーポイントを呼び出し、インターネットからは直接ルーティングされない。
+ */
+export class LiveEffects extends WorkerEntrypoint<Bindings> {
+  /**
+   * 即座に返却し、waitUntil 内で通知を削除する。呼び出し元のオブジェクトは Discord の
+   * 応答を待たない。
+   */
+  deleteStartNotifications(jobs: NotificationDeleteJob[]): void {
+    this.ctx.waitUntil(runNotificationDeletes(this.env, jobs));
   }
 }

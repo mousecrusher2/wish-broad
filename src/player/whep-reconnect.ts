@@ -1,26 +1,26 @@
 import { WHEPSessionError, type WHEPSessionSnapshot } from "./WHEPClient";
 
-// The Worker states whether a broadcast still exists (503 while the publisher
-// reconnects, with `Retry-After: 2`; 404 once it ended), so the client does not
-// back off to guess; it retries at the same fixed interval.
+// 以下の値の根拠は docs/architecture.md の「フロントエンドのリカバリー」を参照。
+
+/** 再接続のリトライ間隔。Worker の `Retry-After` と同じ固定値で、バックオフしない。 */
 export const WHEP_RECONNECT_DELAY_MS = 2_000;
 
-// Recovery is viewer-driven because the Worker does not continuously poll the
-// SFU. The Worker answers POST /play with 404 once the 60-second publisher
-// reconnect grace period (worker/live-end.ts) passes, even if the scheduled end
-// never ran, so playback normally ends there. This window is only a safety net
-// against a server that keeps failing or answering 503, so a broken stream does
-// not poll forever. It must outlast that grace period.
+/**
+ * 再接続を諦めるまでの時間。Worker の配信者再接続猶予期間
+ * （`LIVE_RECONNECT_GRACE_MS`、worker/live-end.ts）より長くなければならない。
+ */
 export const WHEP_RECONNECT_WINDOW_MS = 75_000;
 
-// Receiver stats are the source of truth for media flow. Wait long enough for
-// all expected inbound RTP receivers to appear before declaring the WHEP session
-// incomplete and replacing it.
+/**
+ * 期待されるすべての受信 RTP レシーバーが統計情報に現れるまで待つ時間。過ぎたら
+ * セッションを不完全とみなして作り直す。
+ */
 export const WHEP_TRACK_DISCOVERY_GRACE_MS = 15_000;
 
-// Once a session was connected, let the browser report a stable disconnected or
-// failed state before replacing the WHEP session. Media stalls are handled by the
-// shorter bytesReceived monitor above this layer.
+/**
+ * 接続済みのセッションが disconnected / failed になってから置き換えるまでの待ち時間。
+ * メディアの停止は、より短い間隔の bytesReceived 監視が別に検知する。
+ */
 export const WHEP_SESSION_RECOVERY_GRACE_MS = 3_000;
 
 type WHEPReconnectDisposition = "ended" | "error" | "retry";

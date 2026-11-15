@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { surfaceClasses } from "./styles";
 
-// Full-screen card used by the login, auth loading, and auth error screens.
+/** ログイン画面、認証読み込み画面、および認証エラー画面で使用される全画面カード。 */
 export function CenteredCard({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <div className="mx-auto flex min-h-screen max-w-xl items-center justify-center px-4 py-16 sm:px-6">

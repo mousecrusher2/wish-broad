@@ -126,7 +126,7 @@ describe("turn-credentials", () => {
         fetchTurnIceServers(new AbortController().signal),
       ).resolves.toBeNull();
 
-      // oxlint-disable vitest/no-conditional-expect -- The expected console call shape depends on the validation branch.
+      // oxlint-disable vitest/no-conditional-expect -- 期待される console 呼び出しの形式が検証分岐によって異なるため。
       if (warning === null) {
         expect(warn).not.toHaveBeenCalled();
       } else if (warning.endsWith(":")) {

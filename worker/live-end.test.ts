@@ -1,222 +1,183 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DiscordWebhookError } from "./notifications";
-
-const mocks = vi.hoisted(() => ({
-  deleteLiveStartedNotification: vi.fn<() => Promise<unknown>>(),
-  endLive:
-    vi.fn<() => Promise<{ notificationMessageId: bigint | null } | null>>(),
-}));
-
-vi.mock("./database", () => ({ endLive: mocks.endLive }));
-vi.mock("./notifications", async () => ({
-  ...(await vi.importActual<typeof import("./notifications")>(
-    "./notifications",
-  )),
-  deleteLiveStartedNotification: mocks.deleteLiveStartedNotification,
-}));
-
 import {
-  LIVE_RECONNECT_GRACE_MS,
-  type LiveEndParams,
-  runLiveEnd,
-  scheduleLiveEnd,
-} from "./live-end";
+  reset,
+  runDurableObjectAlarm,
+  runInDurableObject,
+} from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
+import {
+  afterEach,
+  assert,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
+import { LIVE_RECONNECT_GRACE_MS, runNotificationDeletes } from "./live-end";
+import { getLiveState } from "./live-state";
 
-const params = {
-  graceExpiresAt: 1_700_000_060_000,
-  sessionId: "session-1",
-  userId: "user-1",
-};
+/** 実際のアラームが自動発火しないよう、テストの時計は遠い未来に置く。 */
+const NOW = Date.UTC(2100, 0, 1);
 
-function failUnexpectedAccess(): never {
-  throw new Error("Unexpected access in tests");
+const WEBHOOK_URL = env.NOTIFICATIONS_DISCORD_WEBHOOK_URL;
+
+const JOB = { messageId: "9", userId: "user-1" };
+
+function getRequestUrl(input: RequestInfo | URL): string {
+  return input instanceof Request ? input.url : input.toString();
 }
 
-function createEnv() {
-  return {
-    // endLive is mocked, so the database itself is never touched.
-    // oxlint-disable-next-line typescript/consistent-type-assertions, typescript/no-unsafe-type-assertion -- An opaque handle passed through to the mocked endLive.
-    LIVE_DB: {} as D1Database,
-    LOG_LEVEL: "info",
-    NOTIFICATIONS_DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/1/t",
-  };
-}
-
-function createWorkflowInstance(): WorkflowInstance {
-  return {
-    delete: failUnexpectedAccess,
-    id: "instance-1",
-    pause: failUnexpectedAccess,
-    restart: failUnexpectedAccess,
-    resume: failUnexpectedAccess,
-    sendEvent: failUnexpectedAccess,
-    status: failUnexpectedAccess,
-    subscribe: failUnexpectedAccess,
-    terminate: failUnexpectedAccess,
-  };
-}
-
-// Mirrors Workflows: each step runs its callback once and records the result,
-// and a throwing callback rejects the step after its retries are exhausted.
-function createStep() {
-  const calls: string[] = [];
-  const step = {
-    async do<T extends string | null>(
-      name: string,
-      callback: () => Promise<T>,
-    ): Promise<T> {
-      calls.push(`do:${name}`);
-      return callback();
-    },
-    async sleepUntil(name: string, timestamp: number): Promise<void> {
-      calls.push(`sleepUntil:${name}:${String(timestamp)}`);
-    },
-  };
-  return { calls, step };
-}
-
-function discordError(status: number): DiscordWebhookError {
-  return new DiscordWebhookError("Discord webhook request failed", {
-    endpoint: "https://discord.com/api/webhooks/1/t/messages/9",
-    kind: "http_error",
-    status,
+function getDeletedMessageUrls(fetchSpy: MockInstance<typeof fetch>): string[] {
+  return fetchSpy.mock.calls.map(([input, init]) => {
+    expect(init?.method).toBe("DELETE");
+    return getRequestUrl(input);
   });
 }
 
-describe("live end workflow", () => {
+describe("live end", () => {
+  let fetchSpy: MockInstance<typeof fetch>;
+  // テストランナーの console はアクセスのたびに別の関数を返すため、スパイは戻り値で参照する。
+  let warn: MockInstance<Console["warn"]>;
+
   beforeEach(() => {
-    mocks.endLive.mockReset();
-    mocks.deleteLiveStartedNotification.mockReset();
-    mocks.deleteLiveStartedNotification.mockResolvedValue(undefined);
+    vi.setSystemTime(NOW);
+    // Discord Webhook の DELETE に成功を返す。
+    fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(null, { status: 204 }));
     vi.spyOn(console, "info").mockImplementation(() => undefined);
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await reset();
   });
 
   it("uses a one minute grace period", () => {
     expect(LIVE_RECONNECT_GRACE_MS).toBe(60_000);
   });
 
-  it("schedules one Workflow instance with the grace parameters", async () => {
-    const create =
-      vi.fn<
-        (
-          options?: WorkflowInstanceCreateOptions<LiveEndParams>,
-        ) => Promise<WorkflowInstance>
-      >();
-    create.mockResolvedValue(createWorkflowInstance());
-
-    await scheduleLiveEnd(
-      {
-        LIVE_END_WORKFLOW: {
-          create,
-          createBatch: failUnexpectedAccess,
-          deleteBatch: failUnexpectedAccess,
-          get: failUnexpectedAccess,
-        },
-      },
-      params,
-    );
-
-    expect(create).toHaveBeenCalledExactlyOnceWith({ params });
-  });
-
-  it("ends the live after the grace deadline and deletes its notification", async () => {
-    const env = createEnv();
-    const { calls, step } = createStep();
-    mocks.endLive.mockResolvedValue({
-      notificationMessageId: 1_300_000_000_000_000_123n,
-    });
-
-    await runLiveEnd(env, params, step);
-
-    expect(calls).toEqual([
-      "sleepUntil:wait for the publisher to reconnect:1700000060000",
-      "do:end the live",
-      "do:delete the start notification",
+  it("deletes each notification", async () => {
+    // 実際の Discord snowflake と同様、Number.MAX_SAFE_INTEGER より大きい値。
+    await runNotificationDeletes(env, [
+      { messageId: "1300000000000000123", userId: "user-1" },
+      { messageId: "9", userId: "user-2" },
     ]);
-    expect(mocks.endLive).toHaveBeenCalledWith(env.LIVE_DB, params);
-    expect(mocks.deleteLiveStartedNotification).toHaveBeenCalledWith(
-      env,
-      1_300_000_000_000_000_123n,
-    );
-    expect(console.info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "live.ended",
-        reason: "reconnect_grace_expired",
-        sessionId: "session-1",
-        userId: "user-1",
-      }),
-    );
-  });
 
-  it("does nothing more when the publisher resumed the broadcast", async () => {
-    const { calls, step } = createStep();
-    mocks.endLive.mockResolvedValue(null);
-
-    await runLiveEnd(createEnv(), params, step);
-
-    expect(calls).toEqual([
-      "sleepUntil:wait for the publisher to reconnect:1700000060000",
-      "do:end the live",
+    expect(getDeletedMessageUrls(fetchSpy)).toEqual([
+      `${WEBHOOK_URL}/messages/1300000000000000123`,
+      `${WEBHOOK_URL}/messages/9`,
     ]);
-    expect(mocks.deleteLiveStartedNotification).not.toHaveBeenCalled();
-    expect(console.info).not.toHaveBeenCalled();
-  });
-
-  it("skips notification cleanup when the broadcast never stored one", async () => {
-    const { calls, step } = createStep();
-    mocks.endLive.mockResolvedValue({ notificationMessageId: null });
-
-    await runLiveEnd(createEnv(), params, step);
-
-    expect(calls).toEqual([
-      "sleepUntil:wait for the publisher to reconnect:1700000060000",
-      "do:end the live",
-    ]);
-    expect(mocks.deleteLiveStartedNotification).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it.each([429, 500, 503])(
-    "lets Workflows retry a notification delete that failed with %i",
+    "retries a delete that failed with %i once",
     async (status) => {
-      const { step } = createStep();
-      const doSpy = vi.spyOn(step, "do");
-      mocks.endLive.mockResolvedValue({ notificationMessageId: 9n });
-      mocks.deleteLiveStartedNotification.mockRejectedValue(
-        discordError(status),
+      fetchSpy.mockImplementationOnce(
+        async () => new Response(null, { status }),
       );
 
-      await runLiveEnd(createEnv(), params, step);
+      await runNotificationDeletes(env, [JOB]);
 
-      await expect(doSpy.mock.results[1]?.value).rejects.toBeInstanceOf(
-        DiscordWebhookError,
-      );
-      expect(console.warn).toHaveBeenCalledExactlyOnceWith(
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
+          errorKind: "http_error",
           event: "live_notification.delete_failed",
           messageId: "9",
-          sessionId: "session-1",
           userId: "user-1",
+          willRetry: true,
         }),
       );
     },
   );
 
-  it("gives up without retrying when Discord rejects the delete", async () => {
-    const { step } = createStep();
-    const doSpy = vi.spyOn(step, "do");
-    mocks.endLive.mockResolvedValue({ notificationMessageId: 9n });
-    mocks.deleteLiveStartedNotification.mockRejectedValue(discordError(404));
+  it("gives up when the retry also times out", async () => {
+    fetchSpy.mockRejectedValue(new DOMException("aborted", "AbortError"));
 
-    await runLiveEnd(createEnv(), params, step);
+    await runNotificationDeletes(env, [JOB]);
 
-    await expect(doSpy.mock.results[1]?.value).resolves.toBe("failed");
-    expect(console.warn).toHaveBeenCalledExactlyOnceWith(
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
-        endpoint: "https://discord.com/api/webhooks/1/[redacted]/messages/9",
+        errorKind: "request_timeout",
         event: "live_notification.delete_failed",
-        messageId: "9",
+        willRetry: true,
       }),
     );
+    expect(warn).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        errorKind: "request_timeout",
+        event: "live_notification.delete_failed",
+        willRetry: false,
+      }),
+    );
+  });
+
+  it("does not retry a delete that Discord rejects", async () => {
+    fetchSpy.mockImplementation(
+      async () => new Response("Unknown Message", { status: 404 }),
+    );
+
+    await runNotificationDeletes(env, [JOB]);
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        endpoint: "https://discord.com/api/webhooks/123/[redacted]/messages/9",
+        event: "live_notification.delete_failed",
+        messageId: "9",
+        willRetry: false,
+      }),
+    );
+  });
+
+  it("returns to the live state before Discord answers", async () => {
+    let respond!: (response: Response) => void;
+    fetchSpy.mockReturnValue(
+      new Promise<Response>((resolve) => {
+        respond = resolve;
+      }),
+    );
+
+    await exports.LiveEffects.deleteStartNotifications([JOB]);
+
+    // オブジェクトは Discord の応答を待たずに次の処理へ進める。
+    await vi.waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledOnce();
+    });
+    respond(new Response(null, { status: 204 }));
+  });
+
+  it("deletes an ended broadcast's notification once the alarm ends it", async () => {
+    const liveState = getLiveState(env);
+    const broadcastId = await liveState.insertLive("user-1", "session-1", []);
+    assert.isNotNull(broadcastId, "Expected a new broadcast");
+    await liveState.setLiveNotificationMessageId("user-1", broadcastId, "9");
+    await liveState.startLiveReconnectGrace(
+      "user-1",
+      "session-1",
+      LIVE_RECONNECT_GRACE_MS,
+    );
+
+    vi.setSystemTime(NOW + LIVE_RECONNECT_GRACE_MS);
+    await expect(runDurableObjectAlarm(liveState)).resolves.toBe(true);
+
+    await vi.waitFor(() => {
+      expect(getDeletedMessageUrls(fetchSpy)).toEqual([
+        `${WEBHOOK_URL}/messages/9`,
+      ]);
+    });
+    await expect(liveState.getLive("user-1")).resolves.toBeNull();
+    await expect(
+      runInDurableObject(liveState, async (_instance, state) =>
+        state.storage.getAlarm(),
+      ),
+    ).resolves.toBeNull();
   });
 });
