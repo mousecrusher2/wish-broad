@@ -1,24 +1,29 @@
+// Discord OAuth によるログインとログアウト（docs/architecture.md「認証とトークン」）。
+import type { Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { csrf } from "hono/csrf";
 import { sign } from "hono/jwt";
-import { Context } from "hono";
 import {
   buildDiscordAuthorizationUrl,
   createOAuthState,
   DiscordApiError,
   type DiscordGuildMember,
-  DISCORD_STATE_COOKIE_NAME,
-  DISCORD_STATE_MAX_AGE_SECONDS,
   exchangeCodeForToken,
   getDiscordErrorMessage,
   getGuildMember,
   revokeAccessToken,
 } from "../clients/discord-oauth";
 import { calcJwtTimestamps, JWT_DURATION_SECONDS } from "../lib/jwt-utils";
-import { getLiveState } from "../state/live-state";
-import { Bindings, JWTPayload } from "../types";
 import { createErrorLogFields, logError, logWarn } from "../lib/logger";
+import { AUTH_COOKIE_NAME } from "../middleware/app-jwt";
+import { getLiveState } from "../state/live-state";
+import type { AppEnv, Bindings, JWTPayload } from "../types";
+import { createApp } from "./create-app";
 
-type ContextWithBindings = { Bindings: Bindings };
+const DISCORD_STATE_COOKIE_NAME = "discord_oauth_state";
+const DISCORD_STATE_MAX_AGE_SECONDS = 60 * 10;
+
+export const authRoutes = createApp();
 
 function isProductionEnvironment(env: Pick<Bindings, "ENVIRONMENT">): boolean {
   return env.ENVIRONMENT === "production";
@@ -40,9 +45,7 @@ function getDiscordStateCookieOptions(env: Pick<Bindings, "ENVIRONMENT">): {
   };
 }
 
-function getDiscordRedirectUri<E extends ContextWithBindings>(
-  c: Context<E>,
-): string {
+function getDiscordRedirectUri(c: Context<AppEnv>): string {
   const url = new URL(c.req.url);
   url.hash = "";
   url.pathname = "/login/callback";
@@ -62,8 +65,8 @@ function isGuildMembershipLookupFailure(
   );
 }
 
-async function issueDiscordLoginJwt<E extends ContextWithBindings>(
-  c: Context<E>,
+async function issueDiscordLoginJwt(
+  c: Context<AppEnv>,
   member: DiscordGuildMember,
 ): Promise<Response> {
   const displayName =
@@ -83,7 +86,7 @@ async function issueDiscordLoginJwt<E extends ContextWithBindings>(
   };
   const jwtToken = await sign(payload, c.env.JWT_SECRET, "HS256");
 
-  setCookie(c, "authtoken", jwtToken, {
+  setCookie(c, AUTH_COOKIE_NAME, jwtToken, {
     expires: new Date(Date.now() + JWT_DURATION_SECONDS.ONE_DAY * 1000),
     httpOnly: true,
     secure: isProductionEnvironment(c.env),
@@ -93,17 +96,22 @@ async function issueDiscordLoginJwt<E extends ContextWithBindings>(
   return c.redirect("/");
 }
 
-export function clearAuthCookie<E extends ContextWithBindings>(
-  c: Context<E>,
-): void {
-  deleteCookie(c, "authtoken", {
-    secure: isProductionEnvironment(c.env),
-  });
+/**
+ * アクセストークンを失効させ、失敗はログ出力だけで済ませる。`finally` 内で呼ぶため、
+ * スローするとログインのレスポンスがエラーで置き換わってしまう。
+ */
+async function revokeAccessTokenQuietly(
+  env: Bindings,
+  accessToken: string,
+): Promise<void> {
+  try {
+    await revokeAccessToken(env, accessToken);
+  } catch (error: unknown) {
+    logWarn(env, "discord.oauth_revoke_failed", createErrorLogFields(error));
+  }
 }
 
-export function startDiscordLogin<E extends ContextWithBindings>(
-  c: Context<E>,
-): Response {
+authRoutes.get("/login", (c) => {
   const state = createOAuthState();
   setCookie(
     c,
@@ -114,11 +122,9 @@ export function startDiscordLogin<E extends ContextWithBindings>(
   return c.redirect(
     buildDiscordAuthorizationUrl(c.env, getDiscordRedirectUri(c), state),
   );
-}
+});
 
-export async function completeDiscordLogin<E extends ContextWithBindings>(
-  c: Context<E>,
-): Promise<Response> {
+authRoutes.get("/login/callback", async (c) => {
   const authorizationCode = c.req.query("code");
   const returnedState = c.req.query("state");
   const discordError = c.req.query("error");
@@ -192,19 +198,11 @@ export async function completeDiscordLogin<E extends ContextWithBindings>(
   } finally {
     await revokeAccessTokenQuietly(c.env, accessToken);
   }
-}
+});
 
-/**
- * アクセストークンを失効させ、失敗はログ出力だけで済ませる。`finally` 内で呼ぶため、
- * スローするとログインのレスポンスがエラーで置き換わってしまう。
- */
-async function revokeAccessTokenQuietly(
-  env: Bindings,
-  accessToken: string,
-): Promise<void> {
-  try {
-    await revokeAccessToken(env, accessToken);
-  } catch (error: unknown) {
-    logWarn(env, "discord.oauth_revoke_failed", createErrorLogFields(error));
-  }
-}
+authRoutes.post("/logout", csrf(), async (c) => {
+  deleteCookie(c, AUTH_COOKIE_NAME, {
+    secure: isProductionEnvironment(c.env),
+  });
+  return c.redirect("/");
+});

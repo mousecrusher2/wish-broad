@@ -67,7 +67,11 @@ type CloseTracksResponse = {
   tracks?: ClosedTrack[] | undefined;
 };
 
-type SfuNegotiationClientStatus = 400 | 415 | 422 | 504;
+/** ネゴシエーションの失敗のうち、SFU の応答をそのまま WHIP / WHEP クライアントへ返すもの。 */
+export type SfuNegotiationClientError = {
+  status: 400 | 415 | 422 | 504;
+  text: string;
+};
 
 type SfuApiErrorKind =
   | "request_failed"
@@ -110,9 +114,10 @@ export class SfuApiError extends Error {
     return this.kind === "session_not_found";
   }
 
+  /** クライアントへそのまま返すべき失敗でなければ null を返す。 */
   toNegotiationClientError(
     fallbackText: string,
-  ): { status: SfuNegotiationClientStatus; text: string } | null {
+  ): SfuNegotiationClientError | null {
     const text =
       typeof this.responseBody === "string" && this.responseBody.length > 0
         ? this.responseBody
@@ -131,13 +136,6 @@ export class SfuApiError extends Error {
     }
 
     return null;
-  }
-}
-
-export class LiveNotFoundError extends Error {
-  constructor(liveId: string) {
-    super(`Live stream not found: ${liveId}`);
-    this.name = "LiveNotFoundError";
   }
 }
 
@@ -448,9 +446,8 @@ async function createIngestTracks(
 /**
  * 保存されたインジェストトラックロケーターに再生セッションをアタッチする。
  *
- * SDP オファーを渡すと SFU が直接アンサーを返す場合があるほか、SFU が
- * カウンターオファーを返す場合もあり、その際は WHEP ルートが `renegotiateSession`
- * を通じてアンサーを送信する。
+ * SFU はオファーに対して直接アンサーを返す場合のほか、カウンターオファーを返す場合もあり、
+ * その際はクライアントが `renegotiateSession` を通じてアンサーを送信する。
  *
  * @throws {SfuApiError} トラックネゴシエーションエラーの報告を含め、SFU が
  * トラックをアタッチできなかった場合。
@@ -458,22 +455,16 @@ async function createIngestTracks(
 async function connectToTracks(
   env: SfuEnv,
   sessionId: string,
-  tracks: TrackLocator[],
-  sdpOffer?: string,
+  tracks: readonly TrackLocator[],
+  sdpOffer: string,
 ): Promise<NewTracksResponse> {
-  const normalizedTracks = tracks.map((track) => normalizeTrackLocator(track));
-  const body =
-    sdpOffer && sdpOffer.trim().length > 0
-      ? {
-          sessionDescription: {
-            type: "offer",
-            sdp: sdpOffer,
-          },
-          tracks: normalizedTracks,
-        }
-      : {
-          tracks: normalizedTracks,
-        };
+  const body = {
+    sessionDescription: {
+      type: "offer",
+      sdp: sdpOffer,
+    },
+    tracks: tracks.map((track) => normalizeTrackLocator(track)),
+  };
 
   const endpoint = `https://rtc.live.cloudflare.com/v1/apps/${env.CALLS_APP_ID}/sessions/${sessionId}/tracks/new`;
   const response = await requestSfuJson(
@@ -551,13 +542,11 @@ export async function renegotiateSession(
 export async function closeTracks(
   env: SfuEnv,
   sessionId: string,
-  tracks: SfuTrack[],
+  mids: readonly string[],
 ): Promise<CloseTracksResponse> {
   const body = {
     force: true,
-    tracks: tracks.map((track) => ({
-      mid: track.mid,
-    })),
+    tracks: mids.map((mid) => ({ mid })),
   };
 
   const endpoint = `https://rtc.live.cloudflare.com/v1/apps/${env.CALLS_APP_ID}/sessions/${sessionId}/tracks/close`;
@@ -610,9 +599,8 @@ export async function isSessionActive(
  * @throws {SfuApiError} SFU がセッションのネゴシエーションに失敗したか、
  * 使用できないインジェストレスポンスを返した場合。
  */
-export async function startIngest(
+export async function createIngestSession(
   env: SfuEnv,
-  _liveId: string,
   sdpOffer: string,
 ): Promise<IngestSession> {
   const { sessionId } = await createSession(env);
@@ -667,20 +655,14 @@ export async function startIngest(
 /**
  * 保存済みのインジェストトラックに対して視聴者用再生セッションを 1 つ開始する。
  *
- * @throws {LiveNotFoundError} 配信に保存されたトラックが存在しない場合。
  * @throws {SfuApiError} SFU がセッションのネゴシエーションに失敗したか、
  * 使用できない再生レスポンスを返した場合。
  */
-export async function startPlay(
+export async function createPlaybackSession(
   env: SfuEnv,
-  liveId: string,
-  tracks: TrackLocator[],
-  sdpOffer?: string,
+  tracks: readonly TrackLocator[],
+  sdpOffer: string,
 ): Promise<PlaybackSession> {
-  if (tracks.length === 0) {
-    throw new LiveNotFoundError(liveId);
-  }
-
   const { sessionId } = await createSession(env);
   const tracksResponse = await connectToTracks(
     env,

@@ -30,8 +30,6 @@ export type DiscordOAuthToken = {
 
 const DISCORD_OAUTH_SCOPE = "guilds.members.read";
 
-export const DISCORD_STATE_COOKIE_NAME = "discord_oauth_state";
-export const DISCORD_STATE_MAX_AGE_SECONDS = 60 * 10;
 const DISCORD_FETCH_TIMEOUT_MS = 10_000;
 
 type DiscordApiErrorKind =

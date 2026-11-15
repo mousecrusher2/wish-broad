@@ -1,12 +1,11 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   closeTracks,
+  createIngestSession,
+  createPlaybackSession,
   isSessionActive,
-  LiveNotFoundError,
   renegotiateSession,
   SfuApiError,
-  startIngest,
-  startPlay,
 } from "./sfu";
 
 const env = { CALLS_APP_ID: "app-id", CALLS_APP_SECRET: "app-secret" };
@@ -25,6 +24,7 @@ const tracks = [
     trackName: "video",
   },
 ];
+const mids = tracks.map((track) => track.mid);
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
@@ -75,7 +75,7 @@ describe("SFU API", () => {
       }),
     );
 
-    const result = await startIngest(env, "live-id", "offer-sdp");
+    const result = await createIngestSession(env, "offer-sdp");
 
     expect(result).toEqual({
       sessionId: "playback",
@@ -155,7 +155,7 @@ describe("SFU API", () => {
       .mockResolvedValueOnce(sessionResponse())
       .mockResolvedValueOnce(jsonResponse(body));
 
-    const error = await catchSfuError(startIngest(env, "live-id", "offer"));
+    const error = await catchSfuError(createIngestSession(env, "offer"));
     expect(error).toBeInstanceOf(SfuApiError);
     expect(error.kind).toBe(kind);
     expect(error.message).toBe(
@@ -170,9 +170,7 @@ describe("SFU API", () => {
 
   it("rejects malformed session and ingest response schemas", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonResponse({}));
-    const badSession = await catchSfuError(
-      startIngest(env, "live-id", "offer"),
-    );
+    const badSession = await catchSfuError(createIngestSession(env, "offer"));
     expect(badSession.kind).toBe("invalid_response_schema");
     expect(badSession.responseBody).toMatchObject({ responseBody: {} });
 
@@ -180,7 +178,7 @@ describe("SFU API", () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(sessionResponse())
       .mockResolvedValueOnce(jsonResponse({ tracks: "not-an-array" }));
-    const badTracks = await catchSfuError(startIngest(env, "live-id", "offer"));
+    const badTracks = await catchSfuError(createIngestSession(env, "offer"));
     expect(badTracks.kind).toBe("invalid_response_schema");
     expect(badTracks.responseBody).toMatchObject({
       responseBody: { tracks: "not-an-array" },
@@ -192,9 +190,7 @@ describe("SFU API", () => {
       .mockResolvedValueOnce(new Response("not json"))
       .mockRejectedValueOnce(new TypeError("network down"));
 
-    const invalidJson = await catchSfuError(
-      startIngest(env, "live-id", "offer"),
-    );
+    const invalidJson = await catchSfuError(createIngestSession(env, "offer"));
     expect(invalidJson.kind).toBe("invalid_response_json");
     expect(invalidJson.responseBody).toHaveProperty(
       "error",
@@ -202,7 +198,7 @@ describe("SFU API", () => {
     );
 
     const requestFailed = await catchSfuError(
-      startIngest(env, "live-id", "offer"),
+      createIngestSession(env, "offer"),
     );
     expect(requestFailed.kind).toBe("request_failed");
   });
@@ -213,7 +209,7 @@ describe("SFU API", () => {
       .mockResolvedValueOnce(sessionResponse())
       .mockResolvedValueOnce(trackResponse());
 
-    const result = await startPlay(env, "live-id", tracks, "viewer-offer");
+    const result = await createPlaybackSession(env, tracks, "viewer-offer");
 
     expect(result).toEqual({
       sessionId: "playback",
@@ -244,35 +240,6 @@ describe("SFU API", () => {
         "Content-Type": "application/json",
       },
     });
-  });
-
-  it("omits blank SDP offers and returns not found for an empty live", async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(sessionResponse())
-      .mockResolvedValueOnce(trackResponse());
-
-    await startPlay(env, "live-id", tracks, "  ");
-    expect(JSON.parse(requestBody(fetchSpy.mock.calls[1]?.[1]))).toEqual({
-      tracks: tracks.map(({ location, sessionId, trackName }) => ({
-        location,
-        sessionId,
-        trackName,
-      })),
-    });
-    expect(fetchSpy.mock.calls[1]?.[0]).toBe(`${baseUrl}/playback/tracks/new`);
-    expect(fetchSpy.mock.calls[1]?.[1]).toMatchObject({
-      method: "POST",
-      headers: {
-        Authorization: "Bearer app-secret",
-        "Content-Type": "application/json",
-      },
-    });
-
-    await expect(startPlay(env, "gone-live", [])).rejects.toBeInstanceOf(
-      LiveNotFoundError,
-    );
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -338,7 +305,9 @@ describe("SFU API", () => {
         .mockResolvedValueOnce(sessionResponse())
         .mockResolvedValueOnce(trackResponse(body));
 
-      const error = await catchSfuError(startPlay(env, "live-id", tracks));
+      const error = await catchSfuError(
+        createPlaybackSession(env, tracks, "viewer-offer"),
+      );
       expect(error.kind).toBe(kind);
       const messages: Record<string, string> = {
         "missing SDP": "SFU response did not include SDP for playback",
@@ -479,7 +448,7 @@ describe("SFU API", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(jsonResponse({ tracks: [{ mid: "audio-mid" }] }));
 
-    expect(await closeTracks(env, "session-1", tracks)).toEqual({
+    expect(await closeTracks(env, "session-1", mids)).toEqual({
       tracks: [{ mid: "audio-mid" }],
     });
     expect(fetchSpy).toHaveBeenCalledWith(
@@ -502,7 +471,7 @@ describe("SFU API", () => {
       jsonResponse({ tracks: "bad" }),
     );
     const schemaError = await catchSfuError(
-      closeTracks(env, "session-1", tracks),
+      closeTracks(env, "session-1", mids),
     );
     expect(schemaError.kind).toBe("invalid_response_schema");
     expect(schemaError.responseBody).toMatchObject({
@@ -513,9 +482,7 @@ describe("SFU API", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("invalid-json"),
     );
-    const jsonError = await catchSfuError(
-      closeTracks(env, "session-1", tracks),
-    );
+    const jsonError = await catchSfuError(closeTracks(env, "session-1", mids));
     expect(jsonError.kind).toBe("invalid_response_json");
 
     vi.restoreAllMocks();
@@ -523,7 +490,7 @@ describe("SFU API", () => {
       new TypeError("close offline"),
     );
     const requestError = await catchSfuError(
-      closeTracks(env, "session-1", tracks),
+      closeTracks(env, "session-1", mids),
     );
     expect(requestError).toMatchObject({
       kind: "request_failed",

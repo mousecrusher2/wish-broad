@@ -5,5 +5,5 @@
     "types": ["@cloudflare/workers-types", "vite/client"]
   },
   "include": ["worker", "shared", "worker-configuration.d.ts"],
-  "exclude": ["worker/**/*.test.ts"]
+  "exclude": ["worker/**/*.test.ts", "worker/testing"]
 }
