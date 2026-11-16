@@ -11,9 +11,6 @@
       "custom_domain": true,
     },
   ],
-  // "compatibility_flags": [
-  //   "nodejs_compat"
-  // ],
   "secrets": {
     "required": [
       "AUTHORIZED_GUILD_ID",
@@ -28,10 +25,6 @@
       "TURN_KEY_ID",
     ],
   },
-  // "vars": {
-  //   "AUTHORIZED_GUILD_ID": "your-discord-guild-id-here",
-  //   "ENVIRONMENT": "development"
-  // },
   "vars": {
     "ENVIRONMENT": "production",
     "LOG_LEVEL": "info",
