@@ -32,7 +32,7 @@ describe("stall-monitor", () => {
     const initial = createStallMonitorState(2);
 
     const partial = observeReceiverStats(initial, [videoStat(100)]);
-    expect(partial).toEqual({ stalled: false, state: initial });
+    expect(partial).toEqual({ flowing: false, stalled: false, state: initial });
 
     const discovered = observeReceiverStats(partial.state, [
       videoStat(100),
@@ -93,6 +93,24 @@ describe("stall-monitor", () => {
         [videoStat(100)],
       ]),
     ).toEqual([false, false, false, true]);
+  });
+
+  it("reports media flowing only once every monitored receiver grows", () => {
+    const statsPerTick = [
+      [videoStat(100), audioStat(50)],
+      [videoStat(200), audioStat(50)],
+      [videoStat(300), audioStat(60)],
+      [videoStat(300), audioStat(70)],
+    ];
+    let state = createStallMonitorState(2);
+    const flowing = statsPerTick.map((receiverStats) => {
+      const observation = observeReceiverStats(state, receiverStats);
+      state = observation.state;
+      return observation.flowing;
+    });
+
+    // 揃った最初の読み取りは比較対象がなく、片方しか増えていない読み取りも流れているとはみなさない。
+    expect(flowing).toEqual([false, false, true, false]);
   });
 
   it("only monitors the receivers present when discovery finished", () => {

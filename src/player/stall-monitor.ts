@@ -30,14 +30,16 @@ export function createStallMonitorState(
 /**
  * `WHEP_STALL_POLL_INTERVAL_MS` ごとに読み取った統計情報を反映した次の状態を返す。`stalled` は
  * 監視中のレシーバーのいずれかが bytesReceived を `WHEP_PLAYBACK_STALL_MS` 以上増やさなかった場合に true。
+ * `flowing` は監視中のすべてのレシーバーが前回の読み取りから bytesReceived を増やした場合に true で、
+ * レシーバーが揃った最初の読み取りでは比較対象がないため false。
  */
 export function observeReceiverStats(
   state: StallMonitorState,
   receiverStats: readonly WHEPInboundReceiverStat[],
-): { stalled: boolean; state: StallMonitorState } {
+): { flowing: boolean; stalled: boolean; state: StallMonitorState } {
   if (state.receivers === null) {
     if (receiverStats.length < state.expectedTrackCount) {
-      return { stalled: false, state };
+      return { flowing: false, stalled: false, state };
     }
 
     const receivers = new Map(
@@ -46,11 +48,12 @@ export function observeReceiverStats(
         { bytesReceived: stat.bytesReceived, stalledForMs: 0 },
       ]),
     );
-    return { stalled: false, state: { ...state, receivers } };
+    return { flowing: false, stalled: false, state: { ...state, receivers } };
   }
 
   const statsById = new Map(receiverStats.map((stat) => [stat.id, stat]));
   const receivers = new Map<string, ReceiverProgress>();
+  let flowing = true;
   let stalled = false;
   for (const [id, previous] of state.receivers) {
     const stat = statsById.get(id);
@@ -64,8 +67,9 @@ export function observeReceiverStats(
       bytesReceived: stat?.bytesReceived ?? previous.bytesReceived,
       stalledForMs,
     });
+    flowing &&= progressed;
     stalled ||= stalledForMs >= WHEP_PLAYBACK_STALL_MS;
   }
 
-  return { stalled, state: { ...state, receivers } };
+  return { flowing, stalled, state: { ...state, receivers } };
 }

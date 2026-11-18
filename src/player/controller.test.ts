@@ -458,4 +458,124 @@ describe("WHEPPlaybackController", () => {
       new Error("WHEP reconnect window expired"),
     );
   });
+
+  it("gives up when reconnected sessions connect but never receive media", async () => {
+    const requests = mockPlayEndpoint();
+    onRemoteDescription = (pc) => {
+      pc.updateStates(ICE_CONNECTED);
+    };
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+    // レシーバーが揃わないまま約 15 秒ごとに作り直し、最初の作り直しから 75 秒で諦める。
+    await vi.advanceTimersByTimeAsync(15_000 + 70_000);
+    expect(snapshots.at(-1)?.playbackState.phase).not.toBe("error");
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(snapshots.at(-1)?.playbackState.phase).toBe("error");
+    expect(console.error).toHaveBeenCalledWith(
+      "WHEP playback failed:",
+      new Error("WHEP reconnect window expired"),
+    );
+    const postsAtGiveUp = countPosts(requests);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(countPosts(requests)).toBe(postsAtGiveUp);
+  });
+
+  it("restarts the reconnect window once media flows on a reconnected session", async () => {
+    const requests = mockPlayEndpoint();
+    let bytesReceived = 0;
+    let mediaFlowing = true;
+    onRemoteDescription = (pc) => {
+      pc.readInboundBytes = () => {
+        if (mediaFlowing) {
+          bytesReceived += 100;
+        }
+        return bytesReceived;
+      };
+      pc.updateStates(ICE_CONNECTED);
+    };
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+    await vi.advanceTimersByTimeAsync(2_000);
+    mediaFlowing = false;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.waitFor(() => {
+      expect(countPosts(requests)).toBe(2);
+    });
+
+    // 置き換えたセッションで最初の時間枠（75 秒）を過ぎるまでメディアが流れた後、再び止まる。
+    mediaFlowing = true;
+    await vi.advanceTimersByTimeAsync(90_000);
+    mediaFlowing = false;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.waitFor(() => {
+      expect(countPosts(requests)).toBe(3);
+    });
+
+    expect(snapshots.at(-1)?.playbackState.phase).not.toBe("error");
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("waits out a grace period that starts after media-less reconnects", async () => {
+    const startedAt = Date.now();
+    // 配信者が DELETE なしで落ち、SFU が回収するまでは 201 だがメディアは届かない。
+    // その後 Worker が猶予期間を始めて 409 を返し、猶予期間の終了後は 404 を返す。
+    mockPlayEndpoint((postIndex) => {
+      const elapsed = Date.now() - startedAt;
+      if (postIndex === 0 || elapsed < 40_000) {
+        return 201;
+      }
+      return elapsed < 110_000 ? 409 : 404;
+    });
+    let bytesReceived = 0;
+    onRemoteDescription = (pc) => {
+      if (FakePeerConnection.instances.length === 1) {
+        pc.readInboundBytes = () => {
+          if (Date.now() - startedAt < 2_000) {
+            bytesReceived += 100;
+          }
+          return bytesReceived;
+        };
+      }
+      pc.updateStates(ICE_CONNECTED);
+    };
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+    await vi.advanceTimersByTimeAsync(115_000);
+
+    expect(snapshots.at(-1)?.playbackState.phase).toBe("ended");
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("does not give up at once when a session that connected while hidden fails later", async () => {
+    const requests = mockPlayEndpoint();
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+    const first = lastPeer();
+    first.updateStates(ICE_CONNECTED);
+    first.updateStates(ICE_FAILED);
+    // ここから再接続の時間枠が始まり、置き換えたセッションは非表示の間に接続する。
+    Object.assign(document, { visibilityState: "hidden" });
+    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.waitFor(() => {
+      expect(lastPeer()).not.toBe(first);
+      expect(lastPeer().remoteDescriptionApplied).toBe(true);
+    });
+    lastPeer().updateStates(ICE_CONNECTED);
+
+    // 時間枠（75 秒）を過ぎてから ICE が失敗しても、すぐには諦めずに再接続する。
+    await vi.advanceTimersByTimeAsync(100_000);
+    lastPeer().updateStates(ICE_FAILED);
+    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.waitFor(() => {
+      expect(countPosts(requests)).toBe(3);
+    });
+
+    expect(snapshots.at(-1)?.playbackState.phase).not.toBe("error");
+    expect(console.error).not.toHaveBeenCalled();
+  });
 });

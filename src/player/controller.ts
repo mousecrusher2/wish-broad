@@ -99,10 +99,16 @@ function createTerminalPlaybackState(
 export class WHEPPlaybackController {
   private attemptAbortController: AbortController | null = null;
   private attemptId: AttemptId = Symbol("WHEP playback attempt");
+  /** 直近のオファーが 409（配信者の再接続待ち）で拒否され、その後まだオファーが受け入れられていない。 */
+  private awaitingPublisher = false;
   private disposed = false;
   private loadingAttemptId: AttemptId | null = null;
   private pendingAttempt: PendingAttempt | null = null;
   private playbackMonitor: PlaybackMonitorState | null = null;
+  /**
+   * 再接続を諦める時刻。数え始めと数え直しの条件は docs/architecture.md の
+   * 「フロントエンドのリカバリー」を参照。
+   */
   private reconnectDeadlineAt: number | null = null;
   private reconnectTimerId: number | null = null;
   private recoveryTimerId: number | null = null;
@@ -275,6 +281,7 @@ export class WHEPPlaybackController {
 
   private resetRuntime(): void {
     this.bumpAttemptId();
+    this.awaitingPublisher = false;
     this.pendingAttempt = null;
     this.loadingAttemptId = null;
     this.clearPlaybackMonitor();
@@ -319,6 +326,10 @@ export class WHEPPlaybackController {
     // すでに配信者の再接続待ちとなっている配信を初回読み込みした場合でも、
     // 配信者の再接続を待機する。
     if (isUnavailableError(error)) {
+      if (!this.awaitingPublisher) {
+        this.awaitingPublisher = true;
+        this.reconnectDeadlineAt = null;
+      }
       this.queueReconnect(resourceUserId);
       return;
     }
@@ -349,7 +360,7 @@ export class WHEPPlaybackController {
   private handleConnected(resourceUserId: string, session: WHEPSession): void {
     const currentAttemptId = this.attemptId;
     this.clearRecoveryTimer();
-    this.clearReconnectState();
+    this.clearReconnectTimer();
     this.updatePlaybackState(
       createConnectedPlaybackState(
         resourceUserId,
@@ -492,6 +503,7 @@ export class WHEPPlaybackController {
       if (!shouldPoll) {
         stopInterval();
         clearDiscoveryTimeout();
+        this.reconnectDeadlineAt = null;
         return;
       }
 
@@ -550,6 +562,9 @@ export class WHEPPlaybackController {
           playbackMonitor.stall = observation.state;
           if (observation.state.receivers !== null) {
             clearDiscoveryTimeout();
+          }
+          if (observation.flowing) {
+            this.reconnectDeadlineAt = null;
           }
           if (!observation.stalled) {
             return;
@@ -675,6 +690,7 @@ export class WHEPPlaybackController {
       }
 
       signalingCompleted = true;
+      this.awaitingPublisher = false;
       const { status } = session.getSnapshot();
       if (status === "connected") {
         sessionWasConnected = true;
