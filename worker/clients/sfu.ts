@@ -388,6 +388,29 @@ async function requestSfuJson<TOutput>(
 }
 
 /**
+ * `tracks/new` の応答が報告したトラックネゴシエーションエラーを拒否する。SFU はトラックの一括操作で、
+ * 失敗した項目を含んだまま 200 を返すことがある。
+ *
+ * @throws {SfuApiError} 応答全体または個々のトラックがエラーを報告している場合。
+ */
+function assertNoTrackNegotiationErrors(
+  endpoint: string,
+  response: NewTracksResponse,
+): void {
+  const hasTrackNegotiationErrors =
+    !!response.errorCode ||
+    !!response.errorDescription ||
+    !!response.tracks?.some((track) => !!track.errorCode);
+  if (hasTrackNegotiationErrors) {
+    throw new SfuApiError("SFU returned track negotiation errors", {
+      endpoint,
+      kind: "track_negotiation_error",
+      responseBody: response,
+    });
+  }
+}
+
+/**
  * SFU セッションを作成する。
  *
  * インジェストセッションは後で LiveState に保存される。再生セッションは
@@ -413,7 +436,8 @@ async function createSession(env: SfuEnv): Promise<NewSessionResponse> {
  * `autoDiscover` を使うことで、Worker 側で個別のトラック名を事前宣言しなくても
  * OBS が音声/映像トラックをオファーできるようになる。
  *
- * @throws {SfuApiError} SFU がトラックを作成できなかった場合。
+ * @throws {SfuApiError} トラックネゴシエーションエラーの報告を含め、SFU が
+ * トラックを作成できなかった場合。
  */
 async function createIngestTracks(
   env: SfuEnv,
@@ -429,7 +453,7 @@ async function createIngestTracks(
   };
 
   const endpoint = `https://rtc.live.cloudflare.com/v1/apps/${env.CALLS_APP_ID}/sessions/${sessionId}/tracks/new`;
-  return requestSfuJson(
+  const response = await requestSfuJson(
     endpoint,
     {
       method: "POST",
@@ -441,6 +465,8 @@ async function createIngestTracks(
     },
     getNewTracksResponseSchema(),
   );
+  assertNoTrackNegotiationErrors(endpoint, response);
+  return response;
 }
 
 /**
@@ -479,17 +505,7 @@ async function connectToTracks(
     },
     getNewTracksResponseSchema(),
   );
-  const hasTrackNegotiationErrors =
-    !!response.errorCode ||
-    !!response.errorDescription ||
-    !!response.tracks?.some((track) => !!track.errorCode);
-  if (hasTrackNegotiationErrors) {
-    throw new SfuApiError("SFU returned track negotiation errors", {
-      endpoint,
-      kind: "track_negotiation_error",
-      responseBody: response,
-    });
-  }
+  assertNoTrackNegotiationErrors(endpoint, response);
   return response;
 }
 

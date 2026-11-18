@@ -150,6 +150,35 @@ describe("SFU API", () => {
       },
       "invalid_sfu_response",
     ],
+    [
+      "track error",
+      {
+        errorCode: "bad_track",
+        sessionDescription: { sdp: "answer", type: "answer" },
+        tracks: [{ mid: "0", trackName: "audio" }],
+      },
+      "track_negotiation_error",
+    ],
+    [
+      "track description error",
+      {
+        errorDescription: "could not publish",
+        sessionDescription: { sdp: "answer", type: "answer" },
+        tracks: [{ mid: "0", trackName: "audio" }],
+      },
+      "track_negotiation_error",
+    ],
+    [
+      "individual track error",
+      {
+        sessionDescription: { sdp: "answer", type: "answer" },
+        tracks: [
+          { mid: "0", trackName: "audio" },
+          { mid: "1", trackName: "video", errorCode: "bad_track" },
+        ],
+      },
+      "track_negotiation_error",
+    ],
   ] as const)("rejects ingest response with %s", async (_name, body, kind) => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(sessionResponse())
@@ -158,13 +187,17 @@ describe("SFU API", () => {
     const error = await catchSfuError(createIngestSession(env, "offer"));
     expect(error).toBeInstanceOf(SfuApiError);
     expect(error.kind).toBe(kind);
-    expect(error.message).toBe(
-      _name === "too many tracks"
-        ? "WHIP does not allow more than two ingest tracks"
-        : _name === "missing MID"
-          ? "SFU response did not include track MID"
-          : "SFU response did not include ingest tracks or SDP",
-    );
+    const messages: Record<string, string> = {
+      "no tracks": "SFU response did not include ingest tracks or SDP",
+      "empty tracks": "SFU response did not include ingest tracks or SDP",
+      "missing SDP": "SFU response did not include ingest tracks or SDP",
+      "missing MID": "SFU response did not include track MID",
+      "too many tracks": "WHIP does not allow more than two ingest tracks",
+      "track error": "SFU returned track negotiation errors",
+      "track description error": "SFU returned track negotiation errors",
+      "individual track error": "SFU returned track negotiation errors",
+    };
+    expect(error.message).toBe(messages[_name]);
     expect(error.endpoint).toBe(`${baseUrl}/playback/tracks/new`);
   });
 
