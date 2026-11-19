@@ -164,4 +164,24 @@ describe("WHEP signaling", () => {
       stage: "patch",
     });
   });
+
+  it("does not map a 404 answer response to the end of the live", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("WHEP session not found", { status: 404 }),
+    );
+
+    const error = await patchWhepAnswer(
+      SESSION_URL,
+      "local-answer",
+      new AbortController().signal,
+    ).catch((patchError: unknown) => patchError);
+
+    assert.instanceOf(error, WHEPSessionError);
+    expect(error).toMatchObject({
+      kind: "session_not_found",
+      retryable: true,
+      stage: "patch",
+    });
+    expect(error.isNotFound()).toBe(false);
+  });
 });

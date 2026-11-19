@@ -24,6 +24,15 @@ describe("reconnect-policy", () => {
     ).toBe("ended");
     expect(
       resolveReconnectDisposition(
+        new WHEPSessionError("unusable session URL", {
+          kind: "session_not_found",
+          responseText: undefined,
+          stage: "patch",
+        }),
+      ),
+    ).toBe("retry");
+    expect(
+      resolveReconnectDisposition(
         new WHEPSessionError("waiting for the publisher", {
           kind: "resource_unavailable",
           responseText: undefined,

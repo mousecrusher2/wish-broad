@@ -329,67 +329,73 @@ describe("WHEPPlaybackController", () => {
     expect(snapshots.at(-1)?.playbackState.phase).toBe("reconnecting");
   });
 
-  it("ends an initial load with an error when the counter-offer answer is rejected after ICE connects", async () => {
-    const requests = mockPlayEndpoint(406, 400);
-    // ICE はアンサーの PATCH が返るより先に接続しうる。
-    onRemoteDescription = (pc, description) => {
-      if (description.type === "offer") {
-        pc.updateStates(ICE_CONNECTED);
-      }
-    };
-    const { controller, snapshots } = createController();
+  it.each([400, 404])(
+    "ends an initial load with an error when the counter-offer answer gets %i after ICE connects",
+    async (answerStatus) => {
+      const requests = mockPlayEndpoint(406, answerStatus);
+      // ICE はアンサーの PATCH が返るより先に接続しうる。
+      onRemoteDescription = (pc, description) => {
+        if (description.type === "offer") {
+          pc.updateStates(ICE_CONNECTED);
+        }
+      };
+      const { controller, snapshots } = createController();
 
-    await controller.load("alice");
-    // 失敗したセッションを閉じたときの切断から、回復猶予後の再接続が始まってはならない。
-    await vi.advanceTimersByTimeAsync(10_000);
+      await controller.load("alice");
+      // 失敗したセッションを閉じたときの切断から、回復猶予後の再接続が始まってはならない。
+      await vi.advanceTimersByTimeAsync(10_000);
 
-    expect(snapshots.at(-1)).toMatchObject({
-      isLoading: false,
-      playbackState: { phase: "error", resourceUserId: "alice" },
-    });
-    expect(console.error).toHaveBeenCalledOnce();
-    expect(requests.map((request) => request.method)).toEqual([
-      "POST",
-      "PATCH",
-    ]);
-  });
-
-  it("retries once after the retry delay when a connected retry session's counter-offer answer fails", async () => {
-    const requests = mockPlayEndpoint(
-      (postIndex) => (postIndex === 1 ? 406 : 201),
-      502,
-    );
-    onRemoteDescription = (pc, description) => {
-      if (description.type === "offer") {
-        pc.updateStates(ICE_CONNECTED);
-      }
-    };
-    const { controller, snapshots } = createController();
-
-    await controller.load("alice");
-    lastPeer().updateStates(ICE_CONNECTED);
-    lastPeer().updateStates(ICE_FAILED);
-    // 回復猶予の後の再接続オファーに 406 が返り、ICE の接続後にアンサーの PATCH が 502 で失敗する。
-    await vi.advanceTimersByTimeAsync(3_000);
-    await vi.waitFor(() => {
+      expect(snapshots.at(-1)).toMatchObject({
+        isLoading: false,
+        playbackState: { phase: "error", resourceUserId: "alice" },
+      });
+      expect(console.error).toHaveBeenCalledOnce();
       expect(requests.map((request) => request.method)).toEqual([
-        "POST",
         "POST",
         "PATCH",
       ]);
-    });
+    },
+  );
 
-    // 次のオファーは 2 秒のリトライ間隔の後に 1 回だけ送る。失敗したセッションを閉じたときの
-    // 切断で始まる 3 秒の回復猶予からは送らない。
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(countPosts(requests)).toBe(2);
-    await vi.advanceTimersByTimeAsync(4_000);
-    expect(countPosts(requests)).toBe(3);
+  it.each([502, 404])(
+    "retries once after the retry delay when a connected retry session's counter-offer answer gets %i",
+    async (answerStatus) => {
+      const requests = mockPlayEndpoint(
+        (postIndex) => (postIndex === 1 ? 406 : 201),
+        answerStatus,
+      );
+      onRemoteDescription = (pc, description) => {
+        if (description.type === "offer") {
+          pc.updateStates(ICE_CONNECTED);
+        }
+      };
+      const { controller, snapshots } = createController();
 
-    lastPeer().updateStates(ICE_CONNECTED);
-    expect(snapshots.at(-1)?.playbackState.phase).toBe("connected");
-    expect(console.error).not.toHaveBeenCalled();
-  });
+      await controller.load("alice");
+      lastPeer().updateStates(ICE_CONNECTED);
+      lastPeer().updateStates(ICE_FAILED);
+      // 回復猶予の後の再接続オファーに 406 が返り、ICE の接続後にアンサーの PATCH が失敗する。
+      await vi.advanceTimersByTimeAsync(3_000);
+      await vi.waitFor(() => {
+        expect(requests.map((request) => request.method)).toEqual([
+          "POST",
+          "POST",
+          "PATCH",
+        ]);
+      });
+
+      // 次のオファーは 2 秒のリトライ間隔の後に 1 回だけ送る。失敗したセッションを閉じたときの
+      // 切断で始まる 3 秒の回復猶予からは送らない。
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(countPosts(requests)).toBe(2);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(countPosts(requests)).toBe(3);
+
+      lastPeer().updateStates(ICE_CONNECTED);
+      expect(snapshots.at(-1)?.playbackState.phase).toBe("connected");
+      expect(console.error).not.toHaveBeenCalled();
+    },
+  );
 
   it("replaces an established session whose ICE goes back to checking after the recovery grace", async () => {
     const requests = mockPlayEndpoint();

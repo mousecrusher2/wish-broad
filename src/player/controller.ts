@@ -316,8 +316,8 @@ export class WHEPPlaybackController {
     mode: AttemptMode,
     resourceUserId: string,
   ): void {
-    // Worker が 404 を返すのは配信が終了した場合のみであり、配信者の再接続待ちの間は
-    // 409 を返す。そのため 404 に対してはリトライしない。
+    // POST /play が 404 を返すのは配信が終了した場合のみであり、配信者の再接続待ちの間は
+    // 409 を返す。そのため POST の 404 に対してはリトライしない。
     if (isNotFoundError(error)) {
       this.finalizePlayback("ended", resourceUserId);
       return;

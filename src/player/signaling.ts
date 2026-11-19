@@ -5,6 +5,7 @@ type WHEPSessionRequestStage = "post" | "patch" | "local";
 
 type WHEPSessionErrorKind =
   | "resource_not_found"
+  | "session_not_found"
   | "resource_unavailable"
   | "client_request_error"
   | "server_request_error"
@@ -46,6 +47,7 @@ export class WHEPSessionError extends Error {
     this.stage = options.stage;
   }
 
+  /** 配信が終了している（POST /play が 404 を返した）場合に true を返す。 */
   isNotFound(): boolean {
     return this.kind === "resource_not_found";
   }
@@ -86,7 +88,8 @@ async function createResponseError(
   const responseText = await readResponseText(response);
   let kind: WHEPSessionErrorKind = "unexpected_response";
   if (response.status === 404) {
-    kind = "resource_not_found";
+    // 配信終了を表すのは POST の 404 だけ。PATCH の 404 はそのセッション URL を使えないことを表す。
+    kind = stage === "post" ? "resource_not_found" : "session_not_found";
   } else if (response.status === 409) {
     kind = "resource_unavailable";
   } else if (response.status >= 400 && response.status < 500) {
