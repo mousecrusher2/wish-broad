@@ -96,10 +96,7 @@ async function issueDiscordLoginJwt(
   return c.redirect("/");
 }
 
-/**
- * アクセストークンを失効させ、失敗はログ出力だけで済ませる。`finally` 内で呼ぶため、
- * スローするとログインのレスポンスがエラーで置き換わってしまう。
- */
+/** アクセストークンを失効させ、waitUntil 内で実行されるため失敗はスローせずログ出力する。 */
 async function revokeAccessTokenQuietly(
   env: Bindings,
   accessToken: string,
@@ -173,7 +170,7 @@ authRoutes.get("/login/callback", async (c) => {
   }
 
   // Discord のアクセストークンはサーバーへの所属確認にしか使わないため、ログインの成否に
-  // かかわらず確認後に失効させる（docs/architecture.md「認証とトークン」）。
+  // かかわらず確認後に、応答を待たせずに失効させる（docs/architecture.md「認証とトークン」）。
   try {
     let member: DiscordGuildMember;
     try {
@@ -196,7 +193,7 @@ authRoutes.get("/login/callback", async (c) => {
 
     return await issueDiscordLoginJwt(c, member);
   } finally {
-    await revokeAccessTokenQuietly(c.env, accessToken);
+    c.executionCtx.waitUntil(revokeAccessTokenQuietly(c.env, accessToken));
   }
 });
 

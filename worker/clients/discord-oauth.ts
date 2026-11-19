@@ -30,6 +30,10 @@ export type DiscordOAuthToken = {
 
 const DISCORD_OAUTH_SCOPE = "guilds.members.read";
 
+/**
+ * ログインのコールバックはユーザーを待たせたままトークン交換と所属確認を順に呼ぶため、
+ * 2 回分でも待たせすぎない長さにする。
+ */
 const DISCORD_FETCH_TIMEOUT_MS = 10_000;
 
 type DiscordApiErrorKind =

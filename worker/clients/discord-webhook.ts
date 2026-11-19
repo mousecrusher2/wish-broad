@@ -3,7 +3,11 @@ import type { Bindings } from "../types";
 
 type NotificationsEnv = Pick<Bindings, "NOTIFICATIONS_DISCORD_WEBHOOK_URL">;
 
-const DISCORD_WEBHOOK_TIMEOUT_MS = 5_000;
+/**
+ * 通知は waitUntil 内で送るため、待つ人はいない。通知の削除は最大 2 回試すので、2 回分が
+ * waitUntil の上限（応答後 30 秒）に収まる長さにする。
+ */
+const DISCORD_WEBHOOK_TIMEOUT_MS = 10_000;
 
 type DiscordWebhookErrorKind =
   "request_failed" | "request_timeout" | "http_error";

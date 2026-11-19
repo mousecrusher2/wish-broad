@@ -64,6 +64,11 @@ export class WHEPSessionError extends Error {
   }
 }
 
+// 以下の値の根拠は docs/architecture.md の「フロントエンドのリカバリー」を参照。
+// 時間切れは呼び出し元の `signal` に混ぜず、このリクエストだけを TimeoutError で失敗させる。
+const WHEP_OFFER_TIMEOUT_MS = 15_000;
+const WHEP_ANSWER_TIMEOUT_MS = 10_000;
+
 const SDP_REQUEST_HEADERS = {
   Accept: "application/sdp",
   "Content-Type": "application/sdp",
@@ -195,7 +200,8 @@ async function parseOfferResponse(
  *
  * @throws {WHEPSessionError} Worker がセッションを拒否したか、予期しない応答を返した場合。
  * 配信終了か配信者の再接続待ちかは `kind` で判別できる。
- * @throws {Error} リクエスト自体が失敗したか、`signal` で中断された場合。
+ * @throws {Error} リクエスト自体が失敗したか、時間切れになった（TimeoutError）か、
+ * `signal` で中断された場合。
  */
 export async function postWhepOffer(
   resourceUserId: string,
@@ -210,7 +216,10 @@ export async function postWhepOffer(
     method: "POST",
     headers: SDP_REQUEST_HEADERS,
     body: sdpOffer,
-    signal,
+    signal: AbortSignal.any([
+      signal,
+      AbortSignal.timeout(WHEP_OFFER_TIMEOUT_MS),
+    ]),
   });
   return parseOfferResponse(response, resourceUrl);
 }
@@ -219,7 +228,8 @@ export async function postWhepOffer(
  * 406 のカウンターオファーへのアンサーを WHEP セッションへ PATCH する。
  *
  * @throws {WHEPSessionError} Worker がアンサーを 204 で受け入れなかった場合。
- * @throws {Error} リクエスト自体が失敗したか、`signal` で中断された場合。
+ * @throws {Error} リクエスト自体が失敗したか、時間切れになった（TimeoutError）か、
+ * `signal` で中断された場合。
  */
 export async function patchWhepAnswer(
   sessionUrl: URL,
@@ -230,7 +240,10 @@ export async function patchWhepAnswer(
     method: "PATCH",
     headers: SDP_REQUEST_HEADERS,
     body: sdpAnswer,
-    signal,
+    signal: AbortSignal.any([
+      signal,
+      AbortSignal.timeout(WHEP_ANSWER_TIMEOUT_MS),
+    ]),
   });
   if (response.status !== 204) {
     throw await createResponseError(

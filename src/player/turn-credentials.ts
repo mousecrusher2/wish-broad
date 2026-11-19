@@ -10,10 +10,13 @@ const turnCredentialsResponseSchema = v.object({
   iceServers: v.array(turnIceServerSchema),
 });
 
+// 値の根拠は docs/architecture.md の「フロントエンドのリカバリー」を参照。
+const TURN_CREDENTIALS_TIMEOUT_MS = 8_000;
+
 /**
  * 認証済みの `/api/turn-credentials` から ICE サーバーを取得する。汎用 WHEP の OPTIONS/Link
- * 探索は使わない（docs/architecture.md「WHEPクライアントの設計判断」）。取得できなかった場合は
- * ログ出力して null を返し、呼び出し側は TURN なしで接続する。
+ * 探索は使わない（docs/architecture.md「WHEPクライアントの設計判断」）。時間切れを含めて
+ * 取得できなかった場合はログ出力して null を返し、呼び出し側は TURN なしで接続する。
  *
  * @throws {Error} `signal` が中断された場合（AbortError）。
  */
@@ -25,7 +28,10 @@ export async function fetchTurnIceServers(
     headers: {
       Accept: "application/json",
     },
-    signal,
+    signal: AbortSignal.any([
+      signal,
+      AbortSignal.timeout(TURN_CREDENTIALS_TIMEOUT_MS),
+    ]),
   }).catch((error: unknown) => {
     if (error instanceof Error && error.name === "AbortError") {
       throw error;

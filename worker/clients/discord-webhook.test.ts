@@ -320,7 +320,7 @@ describe("worker live start notifications", () => {
     });
   });
 
-  it("aborts webhook requests after five seconds", async () => {
+  it("aborts webhook requests after ten seconds", async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, "fetch").mockImplementation(
       (_input, init) =>
@@ -340,7 +340,7 @@ describe("worker live start notifications", () => {
         "https://example.com",
       ),
     );
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     const error = await pending;
     expect(error.kind).toBe("request_timeout");
     vi.useRealTimers();

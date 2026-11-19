@@ -69,6 +69,37 @@ describe("turn-credentials", () => {
     );
   });
 
+  it("gives up after 8 seconds without a response and continues without TURN", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const timeout = new AbortController();
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(timeout.signal);
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          signal?.addEventListener("abort", () => {
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new Error("abort"),
+            );
+          });
+        }),
+    );
+
+    const pending = fetchTurnIceServers(new AbortController().signal);
+    expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(8_000);
+    timeout.abort(new DOMException("signal timed out", "TimeoutError"));
+
+    await expect(pending).resolves.toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      "Failed to fetch TURN credentials:",
+      expect.objectContaining({ name: "TimeoutError" }),
+    );
+  });
+
   it("rethrows aborts so session disposal can stop startup", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(
       new DOMException("The operation was aborted", "AbortError"),

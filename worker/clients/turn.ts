@@ -53,6 +53,10 @@ export class TurnApiError extends Error {
 }
 
 const TURN_CREDENTIAL_TTL_SECONDS = 86_400;
+/**
+ * 視聴者は TURN を取得できなくても TURN なしで接続を続けるため、接続のたびに挟まる取得を
+ * 長く待たずに早めに諦める。
+ */
 const TURN_FETCH_TIMEOUT_MS = 5_000;
 
 function createRawIceServerSchema() {

@@ -1,3 +1,7 @@
+import {
+  createExecutionContext,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { verify } from "hono/jwt";
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
@@ -340,10 +344,15 @@ describe("auth routes", () => {
       }),
     );
 
-    const response = await requestLoginCallback({
-      code: "auth-code",
-      state: "oauth-state",
-    });
+    const executionContext = createExecutionContext();
+    const response = await fetchApp(
+      new Request(
+        "http://localhost/login/callback?code=auth-code&state=oauth-state",
+        { headers: { Cookie: "discord_oauth_state=oauth-state" } },
+      ),
+      executionContext,
+    );
+    await waitOnExecutionContext(executionContext);
 
     expect(response.status).toBe(302);
     expect(response.headers.get("set-cookie")).toContain("authtoken=");
@@ -355,6 +364,22 @@ describe("auth routes", () => {
         event: "discord.oauth_revoke_failed",
         statusText: "Bad Gateway",
       }),
+    );
+  });
+
+  it("responds to a login without waiting for Discord token revocation", async () => {
+    discordMocks.revokeAccessToken.mockReturnValue(new Promise(() => {}));
+
+    const response = await requestLoginCallback({
+      code: "auth-code",
+      state: "oauth-state",
+    });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("set-cookie")).toContain("authtoken=");
+    expect(discordMocks.revokeAccessToken).toHaveBeenCalledWith(
+      env,
+      "discord-access-token",
     );
   });
 

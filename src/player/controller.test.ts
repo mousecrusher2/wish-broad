@@ -158,10 +158,11 @@ function lastPeer(): FakePeerConnection {
 
 /**
  * `/play` を模擬する。オファーには `offerStatus` を返し、201 と 406 のときはセッションを作る。
+ * `offerStatus` が null を返したオファーには、リクエストが中断されるまで応答しない。
  * 406 のカウンターオファーへのアンサー（PATCH）には `answerStatus` を返す。
  */
 function mockPlayEndpoint(
-  offerStatus: number | ((postIndex: number) => number) = 201,
+  offerStatus: number | ((postIndex: number) => number | null) = 201,
   answerStatus = 204,
 ): RequestRecord[] {
   const requests: RequestRecord[] = [];
@@ -183,6 +184,16 @@ function mockPlayEndpoint(
     const status =
       typeof offerStatus === "number" ? offerStatus : offerStatus(postCount);
     postCount += 1;
+    if (status === null) {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        signal?.addEventListener("abort", () => {
+          reject(
+            signal.reason instanceof Error ? signal.reason : new Error("abort"),
+          );
+        });
+      });
+    }
     if (status !== 201 && status !== 406) {
       return new Response("unavailable", { status });
     }
@@ -198,6 +209,23 @@ function mockPlayEndpoint(
     });
   });
   return requests;
+}
+
+/** `AbortSignal.timeout` を差し替え、リクエストごとの時間切れを手動で起こせるようにする。 */
+function mockRequestTimeouts(): AbortController[] {
+  const timeouts: AbortController[] = [];
+  vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+    const timeout = new AbortController();
+    timeouts.push(timeout);
+    return timeout.signal;
+  });
+  return timeouts;
+}
+
+function expireLastRequest(timeouts: AbortController[]): void {
+  const timeout = timeouts.at(-1);
+  assert.isDefined(timeout, "Expected a request with a timeout");
+  timeout.abort(new DOMException("signal timed out", "TimeoutError"));
 }
 
 function countPosts(requests: RequestRecord[]): number {
@@ -396,6 +424,54 @@ describe("WHEPPlaybackController", () => {
       expect(console.error).not.toHaveBeenCalled();
     },
   );
+
+  it("ends an initial load with an error when the offer gets no response in time", async () => {
+    const requestTimeouts = mockRequestTimeouts();
+    const requests = mockPlayEndpoint(() => null);
+    const { controller, snapshots } = createController();
+
+    const loading = controller.load("alice");
+    await vi.waitFor(() => {
+      expect(countPosts(requests)).toBe(1);
+    });
+    expect(snapshots.at(-1)?.playbackState.phase).toBe("connecting");
+
+    expireLastRequest(requestTimeouts);
+    await loading;
+
+    expect(snapshots.at(-1)).toMatchObject({
+      isLoading: false,
+      playbackState: { phase: "error", resourceUserId: "alice" },
+    });
+    expect(console.error).toHaveBeenCalledOnce();
+  });
+
+  it("retries a reconnect whose offer gets no response in time", async () => {
+    const requestTimeouts = mockRequestTimeouts();
+    const requests = mockPlayEndpoint((postIndex) =>
+      postIndex === 1 ? null : 201,
+    );
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+    lastPeer().updateStates(ICE_CONNECTED);
+    lastPeer().updateStates(ICE_FAILED);
+    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.waitFor(() => {
+      expect(countPosts(requests)).toBe(2);
+    });
+
+    expireLastRequest(requestTimeouts);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() => {
+      expect(countPosts(requests)).toBe(3);
+      expect(lastPeer().remoteDescriptionApplied).toBe(true);
+    });
+    lastPeer().updateStates(ICE_CONNECTED);
+
+    expect(snapshots.at(-1)?.playbackState.phase).toBe("connected");
+    expect(console.error).not.toHaveBeenCalled();
+  });
 
   it("replaces an established session whose ICE goes back to checking after the recovery grace", async () => {
     const requests = mockPlayEndpoint();

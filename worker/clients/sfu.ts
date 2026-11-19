@@ -298,6 +298,11 @@ type TrackLocatorRequest = Pick<
 >;
 
 const WHIP_MAX_TRACK_COUNT = 2;
+/**
+ * SFU は接続済みのトランスポートが必要な操作で接続を最大 5 秒待つため、それより長くする。
+ * クライアントの /play のタイムアウトはこの値をもとに決めている
+ * （docs/architecture.md「フロントエンドのリカバリー」）。
+ */
 const SFU_FETCH_TIMEOUT_MS = 8_000;
 
 function getHeaders(env: SfuEnv): Record<string, string> {

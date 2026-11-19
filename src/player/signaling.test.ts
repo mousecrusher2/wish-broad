@@ -27,6 +27,21 @@ function sdpResponse(
   });
 }
 
+/** リクエストが中断されるまで応答しない fetch。 */
+function mockUnresponsiveFetch() {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(
+    async (_input, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        signal?.addEventListener("abort", () => {
+          reject(
+            signal.reason instanceof Error ? signal.reason : new Error("abort"),
+          );
+        });
+      }),
+  );
+}
+
 async function postOfferError(response: Response): Promise<WHEPSessionError> {
   vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
   const error: unknown = await postWhepOffer(
@@ -64,19 +79,75 @@ describe("WHEP signaling", () => {
       sdp: "remote-answer",
       sessionUrl: SESSION_URL,
     });
+    // signal は時間切れと合成した別のオブジェクトになるため、下の時間切れと中断のテストで確かめる。
     expect(fetchSpy).toHaveBeenCalledExactlyOnceWith(
       new URL(`${ORIGIN}/play/alice%2Fid`),
-      {
+      expect.objectContaining({
         body: "local-offer",
         headers: {
           Accept: "application/sdp",
           "Content-Type": "application/sdp",
         },
         method: "POST",
-        signal,
-      },
+      }),
     );
   });
+
+  it.each([
+    [
+      "an offer",
+      15_000,
+      () => postWhepOffer("alice", "local-offer", new AbortController().signal),
+    ],
+    [
+      "an answer",
+      10_000,
+      () =>
+        patchWhepAnswer(
+          SESSION_URL,
+          "local-answer",
+          new AbortController().signal,
+        ),
+    ],
+  ] as const)(
+    "gives up on %s with no response after %i ms",
+    async (_name, timeoutMs, request) => {
+      const timeout = new AbortController();
+      const timeoutSpy = vi
+        .spyOn(AbortSignal, "timeout")
+        .mockReturnValue(timeout.signal);
+      mockUnresponsiveFetch();
+
+      const pending = request();
+      expect(timeoutSpy).toHaveBeenCalledExactlyOnceWith(timeoutMs);
+      timeout.abort(new DOMException("signal timed out", "TimeoutError"));
+
+      await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+    },
+  );
+
+  it.each([
+    [
+      "an offer",
+      (signal: AbortSignal) => postWhepOffer("alice", "local-offer", signal),
+    ],
+    [
+      "an answer",
+      (signal: AbortSignal) =>
+        patchWhepAnswer(SESSION_URL, "local-answer", signal),
+    ],
+  ] as const)(
+    "still aborts %s when the caller's signal is aborted",
+    async (_name, request) => {
+      mockUnresponsiveFetch();
+      const caller = new AbortController();
+
+      const pending = request(caller.signal);
+      caller.abort();
+
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    },
+  );
 
   it("reads a 406 as a counter-offer and allows a missing track count", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(sdpResponse(406));
@@ -147,15 +218,17 @@ describe("WHEP signaling", () => {
     await expect(
       patchWhepAnswer(SESSION_URL, "local-answer", signal),
     ).resolves.toBeUndefined();
-    expect(fetchSpy).toHaveBeenCalledWith(SESSION_URL, {
-      body: "local-answer",
-      headers: {
-        Accept: "application/sdp",
-        "Content-Type": "application/sdp",
-      },
-      method: "PATCH",
-      signal,
-    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      SESSION_URL,
+      expect.objectContaining({
+        body: "local-answer",
+        headers: {
+          Accept: "application/sdp",
+          "Content-Type": "application/sdp",
+        },
+        method: "PATCH",
+      }),
+    );
     await expect(
       patchWhepAnswer(SESSION_URL, "local-answer", signal),
     ).rejects.toMatchObject({
