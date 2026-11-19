@@ -40,7 +40,10 @@ type FakeReceiver = {
   track: { id: string; kind: string };
 };
 
-let onRemoteDescription: (pc: FakePeerConnection) => void = () => undefined;
+let onRemoteDescription: (
+  pc: FakePeerConnection,
+  description: RTCSessionDescriptionInit,
+) => void = () => undefined;
 
 class FakeMediaStream extends EventTarget {
   getTracks(): MediaStreamTrack[] {
@@ -79,9 +82,15 @@ class FakePeerConnection extends EventTarget {
     this.localDescription = description;
   }
 
-  async setRemoteDescription(): Promise<void> {
+  async createAnswer(): Promise<RTCSessionDescriptionInit> {
+    return { sdp: "local-answer", type: "answer" };
+  }
+
+  async setRemoteDescription(
+    description: RTCSessionDescriptionInit,
+  ): Promise<void> {
     this.remoteDescriptionApplied = true;
-    onRemoteDescription(this);
+    onRemoteDescription(this, description);
   }
 
   close(): void {
@@ -143,8 +152,13 @@ function lastPeer(): FakePeerConnection {
   return pc;
 }
 
+/**
+ * `/play` を模擬する。オファーには `offerStatus` を返し、201 と 406 のときはセッションを作る。
+ * 406 のカウンターオファーへのアンサー（PATCH）には `answerStatus` を返す。
+ */
 function mockPlayEndpoint(
   offerStatus: number | ((postIndex: number) => number) = 201,
+  answerStatus = 204,
 ): RequestRecord[] {
   const requests: RequestRecord[] = [];
   let sessionCount = 0;
@@ -154,24 +168,29 @@ function mockPlayEndpoint(
     const method = init?.method ?? "GET";
     requests.push({ method, url });
 
+    if (method === "PATCH") {
+      return new Response(answerStatus === 204 ? null : "answer rejected", {
+        status: answerStatus,
+      });
+    }
     if (method !== "POST") {
       return new Response(null, { status: 200 });
     }
     const status =
       typeof offerStatus === "number" ? offerStatus : offerStatus(postCount);
     postCount += 1;
-    if (status !== 201) {
+    if (status !== 201 && status !== 406) {
       return new Response("unavailable", { status });
     }
 
     sessionCount += 1;
-    return new Response("remote-answer", {
+    return new Response(status === 406 ? "remote-offer" : "remote-answer", {
       headers: {
         "Content-Type": "application/sdp",
-        Location: `/play/alice/session-${String(sessionCount)}?mid=0`,
+        Location: `/play/alice/session-${String(sessionCount)}`,
         "Wish-Live-Track-Count": "1",
       },
-      status: 201,
+      status,
     });
   });
   return requests;
@@ -304,6 +323,68 @@ describe("WHEPPlaybackController", () => {
 
     expect(requests.map((request) => request.method)).not.toContain("DELETE");
     expect(snapshots.at(-1)?.playbackState.phase).toBe("reconnecting");
+  });
+
+  it("ends an initial load with an error when the counter-offer answer is rejected after ICE connects", async () => {
+    const requests = mockPlayEndpoint(406, 400);
+    // ICE はアンサーの PATCH が返るより先に接続しうる。
+    onRemoteDescription = (pc, description) => {
+      if (description.type === "offer") {
+        pc.updateStates(ICE_CONNECTED);
+      }
+    };
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+    // 失敗したセッションを閉じたときの切断から、回復猶予後の再接続が始まってはならない。
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(snapshots.at(-1)).toMatchObject({
+      isLoading: false,
+      playbackState: { phase: "error", resourceUserId: "alice" },
+    });
+    expect(console.error).toHaveBeenCalledOnce();
+    expect(requests.map((request) => request.method)).toEqual([
+      "POST",
+      "PATCH",
+    ]);
+  });
+
+  it("retries once after the retry delay when a connected retry session's counter-offer answer fails", async () => {
+    const requests = mockPlayEndpoint(
+      (postIndex) => (postIndex === 1 ? 406 : 201),
+      502,
+    );
+    onRemoteDescription = (pc, description) => {
+      if (description.type === "offer") {
+        pc.updateStates(ICE_CONNECTED);
+      }
+    };
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+    lastPeer().updateStates(ICE_CONNECTED);
+    lastPeer().updateStates(ICE_FAILED);
+    // 回復猶予の後の再接続オファーに 406 が返り、ICE の接続後にアンサーの PATCH が 502 で失敗する。
+    await vi.advanceTimersByTimeAsync(3_000);
+    await vi.waitFor(() => {
+      expect(requests.map((request) => request.method)).toEqual([
+        "POST",
+        "POST",
+        "PATCH",
+      ]);
+    });
+
+    // 次のオファーは 2 秒のリトライ間隔の後に 1 回だけ送る。失敗したセッションを閉じたときの
+    // 切断で始まる 3 秒の回復猶予からは送らない。
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(countPosts(requests)).toBe(2);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(countPosts(requests)).toBe(3);
+
+    lastPeer().updateStates(ICE_CONNECTED);
+    expect(snapshots.at(-1)?.playbackState.phase).toBe("connected");
+    expect(console.error).not.toHaveBeenCalled();
   });
 
   it("replaces the session once inbound media stops flowing", async () => {
