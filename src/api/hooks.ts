@@ -209,6 +209,22 @@ export async function revalidateLiveStreams(): Promise<void> {
   await mutateGlobal(liveStreamsKey);
 }
 
+/**
+ * 配信一覧を取得し直してキャッシュを置き換え、`userId` が配信中かを返す。
+ *
+ * @returns 一覧を取得できなかった場合は null。
+ */
+export async function fetchIsUserLive(userId: string): Promise<boolean | null> {
+  // 引数なしの mutate は表示中のフックがないと再取得しないため、取得した結果を直接渡す。
+  const liveStreams = await mutateGlobal(liveStreamsKey, loadLiveStreams(), {
+    revalidate: false,
+  });
+  if (liveStreams?.status !== "ready") {
+    return null;
+  }
+  return liveStreams.data.some((live) => live.owner.userId === userId);
+}
+
 export function useLiveToken() {
   const [overrideState, setOverrideState] = useState<LiveTokenState | null>(
     null,

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { useCurrentUser, useLiveToken } from "../../api/hooks";
+import { fetchIsUserLive, useCurrentUser, useLiveToken } from "../../api/hooks";
 import {
   buttonClasses,
   fieldLabelClasses,
@@ -14,6 +14,32 @@ type CopyStatus = "url" | "token" | null;
 const inlineFieldClasses = "flex flex-col gap-3 sm:flex-row";
 const copyButtonClasses = buttonClasses("secondary");
 const actionRowClasses = "flex flex-wrap gap-3";
+
+/** トークン再発行の確認文。`isLive` が null のときは、配信中かを確認できなかったことを表す。 */
+function getReissueConfirmationMessage(isLive: boolean | null): string {
+  const liveWarning =
+    "今のトークンはすぐに使えなくなるため、OBS で配信を停止しても配信がすぐには終了せず、一覧に残り続けて開始通知も消えません。";
+  let paragraphs: string[];
+  if (isLive === true) {
+    paragraphs = [
+      "⚠️ 現在配信中です。",
+      `${liveWarning}先に OBS で配信を停止してください。`,
+      "それでも新しいトークンを発行しますか？",
+    ];
+  } else if (isLive === null) {
+    paragraphs = [
+      "⚠️ 配信中かどうかを確認できませんでした。",
+      `配信中に発行し直すと、${liveWarning}`,
+      "それでも新しいトークンを発行しますか？",
+    ];
+  } else {
+    paragraphs = [
+      "新しいトークンを発行すると、今のトークンは使えなくなります。OBS の設定も新しいトークンに更新してください。",
+      "新しいトークンを発行しますか？",
+    ];
+  }
+  return paragraphs.join("\n\n");
+}
 
 function StreamingUrlSection({
   copyStatus,
@@ -149,7 +175,7 @@ function VisibleTokenField({
 function AvailableTokenState({
   token,
   showToken,
-  onCreateToken,
+  onReissueToken,
   onShowToken,
   onHideToken,
   copyStatus,
@@ -157,7 +183,7 @@ function AvailableTokenState({
 }: Readonly<{
   token: string | null;
   showToken: boolean;
-  onCreateToken: () => void;
+  onReissueToken: () => void;
   onShowToken: () => void;
   onHideToken: () => void;
   copyStatus: CopyStatus;
@@ -203,7 +229,7 @@ function AvailableTokenState({
           </button>
         )}
         <button
-          onClick={onCreateToken}
+          onClick={onReissueToken}
           className={buttonClasses("warning")}
           type="button"
         >
@@ -217,6 +243,7 @@ function AvailableTokenState({
 function TokenStateContent({
   state,
   onCreateToken,
+  onReissueToken,
   showToken,
   onShowToken,
   onHideToken,
@@ -225,6 +252,7 @@ function TokenStateContent({
 }: Readonly<{
   state: LiveTokenState;
   onCreateToken: () => void;
+  onReissueToken: () => void;
   showToken: boolean;
   onShowToken: () => void;
   onHideToken: () => void;
@@ -242,7 +270,7 @@ function TokenStateContent({
         <AvailableTokenState
           token={state.token}
           showToken={showToken}
-          onCreateToken={onCreateToken}
+          onReissueToken={onReissueToken}
           onShowToken={onShowToken}
           onHideToken={onHideToken}
           copyStatus={copyStatus}
@@ -260,6 +288,7 @@ function TokenSection({
   showToken,
   onRetry,
   onCreateToken,
+  onReissueToken,
   onShowToken,
   onHideToken,
   copyStatus,
@@ -270,6 +299,7 @@ function TokenSection({
   showToken: boolean;
   onRetry: () => void;
   onCreateToken: () => void;
+  onReissueToken: () => void;
   onShowToken: () => void;
   onHideToken: () => void;
   copyStatus: CopyStatus;
@@ -288,6 +318,7 @@ function TokenSection({
           state={state}
           showToken={showToken}
           onCreateToken={onCreateToken}
+          onReissueToken={onReissueToken}
           onShowToken={onShowToken}
           onHideToken={onHideToken}
           copyStatus={copyStatus}
@@ -321,6 +352,8 @@ export function OBSStreamingInfo({
   onClose: () => void;
 }>) {
   const { state, error, fetchTokenStatus, createToken } = useLiveToken();
+  const currentUserState = useCurrentUser();
+  const reissueCheckInFlightRef = useRef(false);
   const titleId = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [showToken, setShowToken] = useState(false);
@@ -361,6 +394,29 @@ export function OBSStreamingInfo({
     if (await createToken()) {
       setShowToken(true);
     }
+  };
+
+  const handleReissueToken = async () => {
+    if (reissueCheckInFlightRef.current) {
+      return;
+    }
+
+    reissueCheckInFlightRef.current = true;
+    try {
+      // 配信中に再発行すると、OBS の DELETE が新しいトークンで認証できず猶予期間が始まらない。
+      // キャッシュの一覧は古すぎることがあるため、取得し直してから判定する。
+      const isLive =
+        currentUserState.status === "ready"
+          ? await fetchIsUserLive(currentUserState.user.userId)
+          : null;
+      if (!window.confirm(getReissueConfirmationMessage(isLive))) {
+        return;
+      }
+    } finally {
+      reissueCheckInFlightRef.current = false;
+    }
+
+    await handleCreateToken();
   };
 
   return (
@@ -408,6 +464,9 @@ export function OBSStreamingInfo({
             }}
             onCreateToken={() => {
               void handleCreateToken();
+            }}
+            onReissueToken={() => {
+              void handleReissueToken();
             }}
             onShowToken={() => {
               setShowToken(true);
