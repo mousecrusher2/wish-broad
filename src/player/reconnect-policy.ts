@@ -1,5 +1,5 @@
 import { LIVE_RECONNECTING_RETRY_AFTER_SECONDS } from "../../shared/protocol";
-import type { WHEPSessionSnapshot } from "./session";
+import type { WHEPConnectionStatus, WHEPSessionSnapshot } from "./session";
 import { WHEPSessionError } from "./signaling";
 
 // 以下の値の根拠は docs/architecture.md の「フロントエンドのリカバリー」を参照。
@@ -21,7 +21,7 @@ export const WHEP_RECONNECT_WINDOW_MS = 75_000;
 export const WHEP_TRACK_DISCOVERY_GRACE_MS = 15_000;
 
 /**
- * 接続済みのセッションが disconnected / failed になってから置き換えるまでの待ち時間。
+ * 接続済みのセッションが connected でなくなってから置き換えるまでの待ち時間。
  * メディアの停止は、より短い間隔の bytesReceived 監視が別に検知する。
  */
 export const WHEP_SESSION_RECOVERY_GRACE_MS = 3_000;
@@ -48,7 +48,9 @@ export function resolveReconnectDisposition(
 export function shouldRecoverEstablishedSession(
   snapshot: WHEPSessionSnapshot,
 ): snapshot is WHEPSessionSnapshot & {
-  status: "disconnected" | "failed";
+  status: Exclude<WHEPConnectionStatus, "connected">;
 } {
-  return snapshot.status === "disconnected" || snapshot.status === "failed";
+  // ICE は同意確認に失敗すると、disconnected だけでなく checking にも戻りうる
+  // （W3C WebRTC の RTCIceTransportState）。そのため connected 以外をすべて回復対象にする。
+  return snapshot.status !== "connected";
 }

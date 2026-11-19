@@ -25,6 +25,10 @@ const ICE_CONNECTED = {
   connectionState: "connected",
   iceConnectionState: "connected",
 } as const;
+const ICE_CHECKING = {
+  connectionState: "connecting",
+  iceConnectionState: "checking",
+} as const;
 
 type ConnectionStates = Partial<{
   connectionState: RTCPeerConnectionState;
@@ -385,6 +389,44 @@ describe("WHEPPlaybackController", () => {
     lastPeer().updateStates(ICE_CONNECTED);
     expect(snapshots.at(-1)?.playbackState.phase).toBe("connected");
     expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it("replaces an established session whose ICE goes back to checking after the recovery grace", async () => {
+    const requests = mockPlayEndpoint();
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+    lastPeer().updateStates(ICE_CONNECTED);
+    // 同意確認に失敗した ICE は、disconnected ではなく checking に戻ることがある。
+    lastPeer().updateStates(ICE_CHECKING);
+
+    expect(snapshots.at(-1)?.playbackState).toMatchObject({
+      connectionStatus: "connecting",
+      hasStream: false,
+      phase: "reconnecting",
+    });
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(countPosts(requests)).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => {
+      expect(countPosts(requests)).toBe(2);
+    });
+  });
+
+  it("keeps an established session whose ICE returns from checking within the recovery grace", async () => {
+    const requests = mockPlayEndpoint();
+    const { controller, snapshots } = createController();
+
+    await controller.load("alice");
+    lastPeer().updateStates(ICE_CONNECTED);
+    lastPeer().updateStates(ICE_CHECKING);
+    await vi.advanceTimersByTimeAsync(1_000);
+    lastPeer().updateStates(ICE_CONNECTED);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(countPosts(requests)).toBe(1);
+    expect(snapshots.at(-1)?.playbackState.phase).toBe("connected");
   });
 
   it("replaces the session once inbound media stops flowing", async () => {

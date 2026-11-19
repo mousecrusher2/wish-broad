@@ -372,7 +372,7 @@ export class WHEPPlaybackController {
 
   private updateRecoveringPlaybackState(
     resourceUserId: string,
-    connectionStatus: "disconnected" | "failed",
+    connectionStatus: "connecting" | "disconnected" | "failed",
   ): void {
     this.updatePlaybackState({
       connectionStatus,

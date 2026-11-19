@@ -88,7 +88,7 @@ describe("reconnect-policy", () => {
         signalingState: "stable",
         status: "connecting",
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldRecoverEstablishedSession({
         connectionState: "disconnected",
