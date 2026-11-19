@@ -1,4 +1,8 @@
-import { fetchWithTimeout, trimResponseBody } from "./http";
+import {
+  type FetchedResponse,
+  fetchWithTimeout,
+  trimResponseBody,
+} from "./http";
 import type { Bindings } from "../types";
 
 type NotificationsEnv = Pick<Bindings, "NOTIFICATIONS_DISCORD_WEBHOOK_URL">;
@@ -66,7 +70,7 @@ export class DiscordWebhookError extends Error {
   /** 同じリクエストを後で再送した場合に成功する可能性があるかどうか。 */
   isRetryable(): boolean {
     if (this.kind !== "http_error") {
-      // Discord の応答前にリクエストが失敗またはタイムアウトした。
+      // Discord の応答の本文を読み切る前にリクエストが失敗またはタイムアウトした。
       return true;
     }
 
@@ -123,12 +127,12 @@ function parseMessageId(rawMessageId: unknown): bigint | null {
 }
 
 /**
- * @throws {DiscordWebhookError} Discord の応答前にリクエストが失敗またはタイムアウトした場合。
+ * @throws {DiscordWebhookError} Discord の応答の本文を読み切る前にリクエストが失敗またはタイムアウトした場合。
  */
 async function fetchDiscordWebhook(
   endpoint: string,
   init: RequestInit,
-): Promise<Response> {
+): Promise<FetchedResponse> {
   return fetchWithTimeout(
     endpoint,
     init,
@@ -172,7 +176,7 @@ export async function sendLiveStartedNotification(
     method: "POST",
   });
 
-  const responseText = await response.text();
+  const responseText = response.bodyText;
   if (!response.ok) {
     throw new DiscordWebhookError("Discord webhook request failed", {
       endpoint,
@@ -254,7 +258,7 @@ export async function deleteLiveStartedNotification(
   throw new DiscordWebhookError("Discord webhook request failed", {
     endpoint,
     kind: "http_error",
-    responseBodyText: trimResponseBody(await response.text()),
+    responseBodyText: trimResponseBody(response.bodyText),
     status: response.status,
     statusText: response.statusText,
   });

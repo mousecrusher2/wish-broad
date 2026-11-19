@@ -1,7 +1,11 @@
 import { Bindings } from "../types";
 import * as v from "valibot";
 import { createRandomHex } from "../lib/hex";
-import { fetchWithTimeout, trimResponseBody } from "./http";
+import {
+  type FetchedResponse,
+  fetchWithTimeout,
+  trimResponseBody,
+} from "./http";
 
 type DiscordEnv = Pick<Bindings, "DISCORD_CLIENT_ID" | "DISCORD_CLIENT_SECRET">;
 
@@ -145,12 +149,12 @@ function createDiscordBasicAuthHeader(env: DiscordEnv): string {
 }
 
 /**
- * @throws {DiscordApiError} Discord の応答前にリクエストが失敗またはタイムアウトした場合。
+ * @throws {DiscordApiError} Discord の応答の本文を読み切る前にリクエストが失敗またはタイムアウトした場合。
  */
 async function fetchDiscordWithTimeout(
   endpoint: string,
   init: RequestInit,
-): Promise<Response> {
+): Promise<FetchedResponse> {
   return fetchWithTimeout(
     endpoint,
     init,
@@ -181,7 +185,7 @@ async function fetchDiscordJson<TInput, TOutput>(
   mapParsed: (parsed: TInput) => TOutput,
 ): Promise<TOutput> {
   const response = await fetchDiscordWithTimeout(endpoint, init);
-  const responseText = await response.text();
+  const responseText = response.bodyText;
   let responseJson: unknown = undefined;
   try {
     responseJson = JSON.parse(responseText);
@@ -380,7 +384,7 @@ export async function revokeAccessToken(
     return;
   }
 
-  const responseText = await response.text();
+  const responseText = response.bodyText;
   let responseJson: unknown = undefined;
   try {
     responseJson = JSON.parse(responseText);

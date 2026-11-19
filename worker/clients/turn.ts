@@ -1,5 +1,9 @@
 import * as v from "valibot";
-import { fetchWithTimeout, readResponseBody } from "./http";
+import {
+  type FetchedResponse,
+  fetchWithTimeout,
+  parseResponseBody,
+} from "./http";
 import type { Bindings } from "../types";
 
 type TurnEnv = Pick<Bindings, "TURN_KEY_API_TOKEN" | "TURN_KEY_ID">;
@@ -121,12 +125,12 @@ function filterIceServerUrls(iceServer: RawIceServer): TurnIceServer | null {
 }
 
 /**
- * @throws {TurnApiError} Cloudflare の応答前にリクエストが失敗またはタイムアウトした場合。
+ * @throws {TurnApiError} Cloudflare の応答の本文を読み切る前にリクエストが失敗またはタイムアウトした場合。
  */
 async function fetchTurnCredentials(
   endpoint: string,
   init: RequestInit,
-): Promise<Response> {
+): Promise<FetchedResponse> {
   return fetchWithTimeout(
     endpoint,
     init,
@@ -149,12 +153,12 @@ async function fetchTurnCredentials(
  * @throws {TurnApiError} Cloudflare が HTTP エラーを返したか、期待する JSON ではない
  * ボディを返した場合。
  */
-async function parseTurnCredentialsResponse(
+function parseTurnCredentialsResponse(
   endpoint: string,
-  response: Response,
-): Promise<TurnCredentialsResponse> {
+  response: FetchedResponse,
+): TurnCredentialsResponse {
   if (!response.ok) {
-    const responseBody = await readResponseBody(response);
+    const responseBody = parseResponseBody(response.bodyText);
     throw new TurnApiError("TURN credential request failed", {
       endpoint,
       kind: "http_error",
@@ -165,7 +169,7 @@ async function parseTurnCredentialsResponse(
 
   let responseBody: unknown;
   try {
-    responseBody = await response.json();
+    responseBody = JSON.parse(response.bodyText);
   } catch (error: unknown) {
     throw new TurnApiError("TURN credential response was not valid JSON", {
       endpoint,
@@ -216,7 +220,7 @@ export async function generateTurnIceServers(
     },
     method: "POST",
   });
-  const credentials = await parseTurnCredentialsResponse(endpoint, response);
+  const credentials = parseTurnCredentialsResponse(endpoint, response);
 
   const iceServers = credentials.iceServers
     .map(filterIceServerUrls)

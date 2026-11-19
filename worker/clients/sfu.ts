@@ -1,6 +1,10 @@
 import { Bindings } from "../types";
 import * as v from "valibot";
-import { fetchWithTimeout, readResponseBody } from "./http";
+import {
+  type FetchedResponse,
+  fetchWithTimeout,
+  parseResponseBody,
+} from "./http";
 
 type SessionDescription = {
   sdp: string;
@@ -170,11 +174,11 @@ function classifyHttpFailure(status: number): {
   }
 }
 
-async function createHttpError(
-  response: Response,
+function createHttpError(
+  response: FetchedResponse,
   endpoint: string,
-): Promise<SfuApiError> {
-  const responseBody = await readResponseBody(response);
+): SfuApiError {
+  const responseBody = parseResponseBody(response.bodyText);
   const { kind, message } = classifyHttpFailure(response.status);
   return new SfuApiError(message, {
     endpoint,
@@ -316,12 +320,12 @@ function getErrorMessage(error: unknown): string {
 }
 
 /**
- * @throws {SfuApiError} SFU の応答前にリクエストが失敗またはタイムアウトした場合。
+ * @throws {SfuApiError} SFU の応答の本文を読み切る前にリクエストが失敗またはタイムアウトした場合。
  */
 async function fetchSfu(
   endpoint: string,
   init: RequestInit,
-): Promise<Response> {
+): Promise<FetchedResponse> {
   return fetchWithTimeout(
     endpoint,
     init,
@@ -357,12 +361,12 @@ async function requestSfuJson<TOutput>(
 ): Promise<TOutput> {
   const response = await fetchSfu(endpoint, init);
   if (!response.ok) {
-    throw await createHttpError(response, endpoint);
+    throw createHttpError(response, endpoint);
   }
 
   let responseBody: unknown;
   try {
-    responseBody = await response.json();
+    responseBody = JSON.parse(response.bodyText);
   } catch (error: unknown) {
     throw new SfuApiError("Invalid SFU response JSON", {
       endpoint,
@@ -540,7 +544,7 @@ export async function renegotiateSession(
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    throw await createHttpError(response, endpoint);
+    throw createHttpError(response, endpoint);
   }
 }
 
@@ -603,7 +607,7 @@ export async function isSessionActive(
     return true;
   }
 
-  const error = await createHttpError(response, endpoint);
+  const error = createHttpError(response, endpoint);
   if (error.kind === "session_not_found" || error.kind === "session_gone") {
     return false;
   }

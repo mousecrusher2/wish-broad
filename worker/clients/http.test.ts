@@ -2,7 +2,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   type FetchFailureKind,
   fetchWithTimeout,
-  readResponseBody,
+  parseResponseBody,
   trimResponseBody,
 } from "./http";
 
@@ -38,9 +38,12 @@ afterEach(() => {
 });
 
 describe("fetchWithTimeout", () => {
-  it("returns the response and passes the request through with a signal", async () => {
-    const response = new Response("ok");
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(response);
+  it("returns the status and the whole body and passes the request through with a signal", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response("ok", { status: 201, statusText: "Created" }),
+      );
 
     await expect(
       fetchWithTimeout(
@@ -49,7 +52,12 @@ describe("fetchWithTimeout", () => {
         1_000,
         createTestError,
       ),
-    ).resolves.toBe(response);
+    ).resolves.toEqual({
+      bodyText: "ok",
+      ok: true,
+      status: 201,
+      statusText: "Created",
+    });
 
     const [input, init] = fetchSpy.mock.calls[0] ?? [];
     expect(input).toBe("https://example.com/api");
@@ -90,9 +98,50 @@ describe("fetchWithTimeout", () => {
     expect((await pending).kind).toBe("request_timeout");
   });
 
-  it("clears the deadline once the response arrives", async () => {
+  it("times out a response whose body never finishes", async () => {
     vi.useFakeTimers();
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null));
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("partial"));
+          },
+        }),
+      ),
+    );
+
+    const pending = catchTestError(
+      fetchWithTimeout("https://example.com", {}, 5_000, createTestError),
+    );
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect((await pending).kind).toBe("request_timeout");
+  });
+
+  it("reports a body that fails while being read as request_failed", async () => {
+    const failure = new TypeError("connection reset");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(failure);
+          },
+        }),
+      ),
+    );
+
+    const error = await catchTestError(
+      fetchWithTimeout("https://example.com", {}, 1_000, createTestError),
+    );
+
+    expect(error.kind).toBe("request_failed");
+  });
+
+  it("clears the deadline once the body has been read", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("done"));
 
     await fetchWithTimeout("https://example.com", {}, 5_000, createTestError);
 
@@ -100,25 +149,21 @@ describe("fetchWithTimeout", () => {
   });
 });
 
-describe("readResponseBody", () => {
-  it("parses a JSON body", async () => {
-    await expect(
-      readResponseBody(new Response(JSON.stringify({ errorCode: "bad" }))),
-    ).resolves.toEqual({ errorCode: "bad" });
+describe("parseResponseBody", () => {
+  it("parses a JSON body", () => {
+    expect(parseResponseBody(JSON.stringify({ errorCode: "bad" }))).toEqual({
+      errorCode: "bad",
+    });
   });
 
-  it("keeps a non-JSON body as text", async () => {
-    await expect(
-      readResponseBody(new Response("Malformed SDP offer")),
-    ).resolves.toBe("Malformed SDP offer");
+  it("keeps a non-JSON body as text", () => {
+    expect(parseResponseBody("Malformed SDP offer")).toBe(
+      "Malformed SDP offer",
+    );
   });
 
-  it("returns null for an empty or unreadable body", async () => {
-    const consumed = new Response("already read");
-    await consumed.text();
-
-    await expect(readResponseBody(new Response(null))).resolves.toBeNull();
-    await expect(readResponseBody(consumed)).resolves.toBeNull();
+  it("returns null for an empty body", () => {
+    expect(parseResponseBody("")).toBeNull();
   });
 });
 

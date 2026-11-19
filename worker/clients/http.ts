@@ -7,27 +7,61 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
+/** 本文まで読み切った応答。 */
+export type FetchedResponse = {
+  /** 本文のテキスト。本文がなければ空文字列。 */
+  bodyText: string;
+  ok: boolean;
+  status: number;
+  statusText: string;
+};
+
+async function fetchAndReadBody(
+  endpoint: string,
+  init: RequestInit,
+  signal: AbortSignal,
+): Promise<FetchedResponse> {
+  const response = await fetch(endpoint, { ...init, signal });
+  return {
+    bodyText: await response.text(),
+    ok: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+  };
+}
+
 /**
- * 応答のないまま `timeoutMs` ミリ秒が経過したら中断する条件付きで `endpoint` へ fetch する。
+ * `endpoint` へ fetch して本文まで読み切る。本文を読み切らないまま `timeoutMs` ミリ秒が
+ * 経過したら中断する。
  *
- * @throws {Error} 応答到着前にリクエストが失敗またはタイムアウトした場合、`createError` が構築したエラー。
+ * @throws {Error} 本文を読み切る前にリクエストが失敗またはタイムアウトした場合、`createError` が構築したエラー。
  */
 export async function fetchWithTimeout(
   endpoint: string,
   init: RequestInit,
   timeoutMs: number,
   createError: (kind: FetchFailureKind, cause: unknown) => Error,
-): Promise<Response> {
+): Promise<FetchedResponse> {
   const abortController = new AbortController();
   const timeoutId = setTimeout(() => {
     abortController.abort();
   }, timeoutMs);
+  // 中断が本文の読み取りまで止めるかは実行環境に任せず、中断した時点で必ず抜ける。
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abortController.signal.addEventListener(
+      "abort",
+      () => {
+        reject(new DOMException("The request timed out", "AbortError"));
+      },
+      { once: true },
+    );
+  });
 
   try {
-    return await fetch(endpoint, {
-      ...init,
-      signal: abortController.signal,
-    });
+    return await Promise.race([
+      fetchAndReadBody(endpoint, init, abortController.signal),
+      aborted,
+    ]);
   } catch (error: unknown) {
     // 呼び出し元からは独自の signal を渡さないため、abort はタイムアウト発火を意味する。
     throw createError(
@@ -39,27 +73,17 @@ export async function fetchWithTimeout(
   }
 }
 
-/**
- * レスポンスボディを 1 度だけ読み取り、JSON であればパース済み JSON、それ以外は生テキスト、
- * 空または読み取れない場合は null を返す。先に `json()` で読むとボディが消費されてしまい、
- * 非 JSON ボディをテキストとして読み直せなくなるためこの方式をとっている。
- */
-export async function readResponseBody(response: Response): Promise<unknown> {
-  let text: string;
-  try {
-    text = await response.text();
-  } catch {
-    return null;
-  }
-  if (text.length === 0) {
+/** 本文が JSON であればパース済み JSON、それ以外は生テキスト、空なら null を返す。 */
+export function parseResponseBody(bodyText: string): unknown {
+  if (bodyText.length === 0) {
     return null;
   }
 
   try {
-    const parsed: unknown = JSON.parse(text);
+    const parsed: unknown = JSON.parse(bodyText);
     return parsed;
   } catch {
-    return text;
+    return bodyText;
   }
 }
 

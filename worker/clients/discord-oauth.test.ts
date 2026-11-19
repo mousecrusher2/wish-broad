@@ -129,6 +129,34 @@ describe("worker discord helpers", () => {
     });
   });
 
+  it("throws a Discord API error when the response body fails while being read", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(new TypeError("connection reset"));
+          },
+        }),
+      ),
+    );
+
+    const error = await catchDiscordError(
+      exchangeCodeForToken(
+        {
+          DISCORD_CLIENT_ID: "client-id",
+          DISCORD_CLIENT_SECRET: "client-secret",
+        },
+        "auth-code",
+        "https://example.com/login",
+      ),
+    );
+
+    expect(error).toMatchObject({
+      endpoint: "https://discord.com/api/v10/oauth2/token",
+      kind: "request_failed",
+    });
+  });
+
   it("creates an opaque 256-bit OAuth state", () => {
     const state = createOAuthState();
 
