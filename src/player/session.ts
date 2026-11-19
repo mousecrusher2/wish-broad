@@ -88,7 +88,18 @@ function isIceGatheringFinished(pc: RTCPeerConnection): boolean {
   return pc.signalingState === "closed" || pc.connectionState === "closed";
 }
 
-/** @throws {WHEPSessionError} 収集の完了前に `signal` が中断された場合。 */
+/**
+ * ICE 収集の完了を待つ上限（docs/architecture.md「WHEPクライアントの設計判断」）。過ぎたら
+ * それまでに集まった候補で進める。
+ */
+const WHEP_ICE_GATHERING_TIMEOUT_MS = 10_000;
+
+/**
+ * ICE 収集の完了を待つ。`WHEP_ICE_GATHERING_TIMEOUT_MS` を過ぎた場合も、それまでに集まった
+ * 候補が `pc.localDescription` に入っているため、警告を残して解決する。
+ *
+ * @throws {WHEPSessionError} 収集の完了前に `signal` が中断された場合。
+ */
 async function waitForIceGatheringComplete(
   pc: RTCPeerConnection,
   signal: AbortSignal,
@@ -112,7 +123,16 @@ async function waitForIceGatheringComplete(
         resolve();
       }
     };
+    const onTimeout = () => {
+      cleanup();
+      console.warn(
+        `ICE gathering did not complete within ${String(WHEP_ICE_GATHERING_TIMEOUT_MS)} ms; continuing with the candidates gathered so far`,
+      );
+      resolve();
+    };
+    const timeoutId = setTimeout(onTimeout, WHEP_ICE_GATHERING_TIMEOUT_MS);
     const cleanup = () => {
+      clearTimeout(timeoutId);
       pc.removeEventListener("icegatheringstatechange", onStateChange);
       pc.removeEventListener("connectionstatechange", onStateChange);
       pc.removeEventListener("signalingstatechange", onStateChange);

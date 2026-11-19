@@ -253,6 +253,7 @@ describe("WHEPSession", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -326,14 +327,14 @@ describe("WHEPSession", () => {
   });
 
   it("waits for ICE gathering to complete before posting the offer", async () => {
+    vi.useFakeTimers();
     const fetchSpy = mockFetch().mockResolvedValue(sdpResponse(201));
     const { pc, session } = createSession();
     pc.iceGatheringState = "gathering";
 
     const pending = session.start(new AbortController().signal);
-    await vi.waitFor(() => {
-      expect(pc.setLocalDescription).toHaveBeenCalled();
-    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(pc.setLocalDescription).toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
 
     pc.updateStates(
@@ -343,6 +344,30 @@ describe("WHEPSession", () => {
 
     await expect(pending).resolves.toBeUndefined();
     expect(fetchSpy).toHaveBeenCalledOnce();
+    // 上限前に完了したら、打ち切りのタイマーは残らない。
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it("posts the candidates gathered so far when ICE gathering does not complete within 10 seconds", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = mockFetch().mockResolvedValue(sdpResponse(201));
+    const { pc, session } = createSession();
+    pc.iceGatheringState = "gathering";
+
+    const pending = session.start(new AbortController().signal);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(pc.setLocalDescription).toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toBeUndefined();
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    // 収集中でも、それまでに集まった候補は localDescription に入っている。
+    expect(fetchSpy.mock.calls[0]?.[1]?.body).toBe("local-offer");
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining("ICE gathering did not complete within 10000 ms"),
+    );
   });
 
   it("answers a 406 counter-offer with a PATCH to the session URL", async () => {
