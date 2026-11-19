@@ -1,17 +1,6 @@
-import { bytesToHex } from "./hex";
+import { bytesToHex, hexToBytes } from "./hex";
 
 const textEncoder = new TextEncoder();
-
-/** @throws {Error} `hex` が偶数長の 16 進数文字列でない場合。 */
-function hexToBytes(hex: string): Uint8Array {
-  if (hex.length % 2 !== 0 || !/^[0-9a-f]+$/iu.test(hex)) {
-    throw new Error("Invalid token hash");
-  }
-
-  return Uint8Array.from({ length: hex.length / 2 }, (_, index) =>
-    Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16),
-  );
-}
 
 async function importPepperKey(pepper: string): Promise<CryptoKey> {
   return crypto.subtle.importKey(
@@ -62,7 +51,10 @@ export async function verifyTokenHash(
   expectedTokenHash: string,
 ): Promise<boolean> {
   const pepperKey = await importPepperKey(pepper);
-  const expectedHashBytes = hexToBytes(expectedTokenHash.toLowerCase());
+  const expectedHashBytes = hexToBytes(expectedTokenHash);
+  if (expectedHashBytes === null) {
+    throw new Error("Invalid token hash");
+  }
 
   return crypto.subtle.verify(
     "HMAC",

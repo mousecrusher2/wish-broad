@@ -3,8 +3,9 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { SfuApiError } from "../clients/sfu";
+import { signPlaySession } from "../lib/play-session-signature";
 import { getLiveState, LiveState } from "../state/live-state";
 import {
   createAuthCookie,
@@ -45,6 +46,35 @@ async function requestPlayOffer(
       method: "POST",
     }),
     executionContext,
+  );
+}
+
+/** `viewerUserId` が作った再生セッション `sessionId` の、署名付きの URL。 */
+async function signedSessionUrl(
+  sessionId = "viewer-session",
+  viewerUserId = "viewer-1",
+): Promise<string> {
+  const signature = await signPlaySession(
+    env.PLAY_SESSION_SIGNING_KEY,
+    sessionId,
+    viewerUserId,
+  );
+  return `http://localhost/play/streamer-1/${sessionId}?sig=${signature}`;
+}
+
+async function requestPlayAnswer(
+  sessionUrl: string,
+  viewerUserId = "viewer-1",
+): Promise<Response> {
+  return fetchApp(
+    new Request(sessionUrl, {
+      body: "viewer-answer",
+      headers: {
+        Cookie: await createAuthCookie({ userId: viewerUserId }),
+        "Content-Type": "application/sdp",
+      },
+      method: "PATCH",
+    }),
   );
 }
 
@@ -455,9 +485,7 @@ describe("play routes", () => {
     expect(response.headers.get("Wish-Live-Track-Count")).toBe("1");
     expect(response.headers.get("access-control-expose-headers")).toBeNull();
     expect(response.headers.get("accept-patch")).toBeNull();
-    expect(response.headers.get("location")).toBe(
-      "http://localhost/play/streamer-1/viewer-session",
-    );
+    expect(response.headers.get("location")).toBe(await signedSessionUrl());
   });
 
   it("returns a WHEP counter-offer with 406", async () => {
@@ -474,9 +502,7 @@ describe("play routes", () => {
     expect(response.status).toBe(406);
     expect(await response.text()).toBe("viewer-counter-offer-sdp");
     expect(response.headers.get("Wish-Live-Track-Count")).toBe("1");
-    expect(response.headers.get("location")).toBe(
-      "http://localhost/play/streamer-1/viewer-session",
-    );
+    expect(response.headers.get("location")).toBe(await signedSessionUrl());
     expect(response.headers.get("x-session-description-type")).toBeNull();
   });
 
@@ -528,7 +554,7 @@ describe("play routes", () => {
 
   it("returns 400 for an empty renegotiation SDP answer", async () => {
     const response = await fetchApp(
-      new Request("http://localhost/play/streamer-1/viewer-session", {
+      new Request(await signedSessionUrl(), {
         body: "",
         headers: {
           Cookie: await createAuthCookie(),
@@ -545,7 +571,7 @@ describe("play routes", () => {
 
   it("rejects WHEP answers when Content-Type is not application/sdp", async () => {
     const response = await fetchApp(
-      new Request("http://localhost/play/streamer-1/viewer-session", {
+      new Request(await signedSessionUrl(), {
         body: "viewer-answer",
         headers: {
           Cookie: await createAuthCookie(),
@@ -571,32 +597,14 @@ describe("play routes", () => {
       }),
     );
 
-    const response = await fetchApp(
-      new Request("http://localhost/play/streamer-1/viewer-session", {
-        body: "viewer-answer",
-        headers: {
-          Cookie: await createAuthCookie(),
-          "Content-Type": "application/sdp",
-        },
-        method: "PATCH",
-      }),
-    );
+    const response = await requestPlayAnswer(await signedSessionUrl());
 
     expect(response.status).toBe(422);
     expect(await response.text()).toBe("Malformed SDP answer");
   });
 
   it("returns 204 after successful WHEP renegotiation", async () => {
-    const response = await fetchApp(
-      new Request("http://localhost/play/streamer-1/viewer-session", {
-        body: "viewer-answer",
-        headers: {
-          Cookie: await createAuthCookie(),
-          "Content-Type": "application/sdp",
-        },
-        method: "PATCH",
-      }),
-    );
+    const response = await requestPlayAnswer(await signedSessionUrl());
 
     expect(response.status).toBe(204);
     expect(sfuMocks.renegotiateSession).toHaveBeenCalledWith(
@@ -606,6 +614,75 @@ describe("play routes", () => {
     );
   });
 
+  it("accepts the answer sent to the Location of its own counter-offer", async () => {
+    await seedLive({ sessionId: "live-session", userId: "streamer-1" });
+    sfuMocks.createPlaybackSession.mockResolvedValue({
+      sdpAnswer: "viewer-counter-offer-sdp",
+      sessionId: "viewer-session",
+      sdpType: "offer",
+      tracks: createTracks("viewer-session"),
+    });
+    const offerResponse = await requestPlayOffer();
+    const sessionLocation = offerResponse.headers.get("location");
+    assert.isNotNull(sessionLocation);
+
+    const response = await requestPlayAnswer(sessionLocation);
+
+    expect(response.status).toBe(204);
+    expect(sfuMocks.renegotiateSession).toHaveBeenCalledWith(
+      env,
+      "viewer-session",
+      "viewer-answer",
+    );
+  });
+
+  it.each([
+    {
+      name: "another viewer",
+      sessionUrl: () => signedSessionUrl("viewer-session", "viewer-1"),
+      viewerUserId: "viewer-2",
+    },
+    {
+      name: "a signature for another session",
+      sessionUrl: async () =>
+        (await signedSessionUrl("other-session")).replace(
+          "/other-session?",
+          "/viewer-session?",
+        ),
+      viewerUserId: "viewer-1",
+    },
+    {
+      name: "no signature",
+      sessionUrl: async () => "http://localhost/play/streamer-1/viewer-session",
+      viewerUserId: "viewer-1",
+    },
+    {
+      name: "a malformed signature",
+      sessionUrl: async () =>
+        "http://localhost/play/streamer-1/viewer-session?sig=not-hex",
+      viewerUserId: "viewer-1",
+    },
+    {
+      // Worker が発行していない ID（配信者のインジェストセッションなど）には署名がない。
+      name: "an unsigned ingest session ID",
+      sessionUrl: async () =>
+        "http://localhost/play/streamer-1/live-session?sig=" + "0".repeat(64),
+      viewerUserId: "viewer-1",
+    },
+  ])(
+    "returns 404 for a WHEP answer with $name",
+    async ({ sessionUrl, viewerUserId }) => {
+      const response = await requestPlayAnswer(
+        await sessionUrl(),
+        viewerUserId,
+      );
+
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe("WHEP session not found");
+      expect(sfuMocks.renegotiateSession).not.toHaveBeenCalled();
+    },
+  );
+
   it("logs non-SFU WHEP answer errors and returns 502", async () => {
     sfuMocks.renegotiateSession.mockRejectedValue(
       new SfuApiError("unexpected renegotiation error", {
@@ -614,16 +691,7 @@ describe("play routes", () => {
       }),
     );
 
-    const response = await fetchApp(
-      new Request("http://localhost/play/streamer-1/viewer-session", {
-        body: "viewer-answer",
-        headers: {
-          Cookie: await createAuthCookie(),
-          "Content-Type": "application/sdp",
-        },
-        method: "PATCH",
-      }),
-    );
+    const response = await requestPlayAnswer(await signedSessionUrl());
 
     expect(response.status).toBe(502);
     expect(await response.text()).toBe("Failed to submit WHEP answer");

@@ -27,6 +27,7 @@ export default defineConfig({
                 LOG_LEVEL: "info",
                 NOTIFICATIONS_DISCORD_WEBHOOK_URL:
                   "https://discord.com/api/webhooks/123/token",
+                PLAY_SESSION_SIGNING_KEY: "test-play-session-signing-key",
                 TURN_KEY_API_TOKEN: "turn-key-api-token",
                 TURN_KEY_ID: "turn-key-id",
               },

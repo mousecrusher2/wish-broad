@@ -5,6 +5,10 @@ import {
   LIVE_RECONNECTING_RETRY_AFTER_SECONDS,
   LIVE_TRACK_COUNT_HEADER,
 } from "../../shared/protocol";
+import {
+  signPlaySession,
+  verifyPlaySessionSignature,
+} from "../lib/play-session-signature";
 import { startPlayback, submitPlaybackAnswer } from "../live/playback";
 import { appJwtAuth } from "../middleware/app-jwt";
 import { createApp } from "./create-app";
@@ -12,15 +16,21 @@ import { readSdpBody } from "./sdp";
 
 export const playRoutes = createApp();
 
+/** 再生セッション URL のうち、セッションを作った視聴者への署名を載せるクエリパラメーター。 */
+const SESSION_SIGNATURE_PARAM = "sig";
+
 function createPlaySessionLocation(
   requestUrl: string,
   userId: string,
   sessionId: string,
+  signature: string,
 ): string {
-  return new URL(
+  const sessionUrl = new URL(
     `/play/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}`,
     requestUrl,
-  ).toString();
+  );
+  sessionUrl.searchParams.set(SESSION_SIGNATURE_PARAM, signature);
+  return sessionUrl.toString();
 }
 
 /**
@@ -48,6 +58,7 @@ playRoutes.get("/:userId", async (c) => {
 // WHEP 再生の開始。
 playRoutes.post("/:userId", async (c) => {
   const { userId } = c.req.param();
+  const viewerUserId = c.get("jwtPayload").userId;
   const sdpOffer = await readSdpBody(c, "offer");
   if (sdpOffer instanceof Response) {
     return sdpOffer;
@@ -57,12 +68,17 @@ playRoutes.post("/:userId", async (c) => {
     c.env,
     c.executionCtx,
     userId,
-    c.get("jwtPayload").userId,
+    viewerUserId,
     sdpOffer,
   );
   switch (result.kind) {
     case "started": {
       const { session } = result;
+      const signature = await signPlaySession(
+        c.env.PLAY_SESSION_SIGNING_KEY,
+        session.sessionId,
+        viewerUserId,
+      );
       return c.body(
         session.sdpAnswer,
         session.sdpType === "offer" ? 406 : 201,
@@ -74,6 +90,7 @@ playRoutes.post("/:userId", async (c) => {
             c.req.url,
             userId,
             session.sessionId,
+            signature,
           ),
         },
       );
@@ -107,6 +124,17 @@ playRoutes
     const { sessionId } = c.req.param();
     if (!isSfuSessionId(sessionId)) {
       return c.text("Invalid WHEP session ID", 400);
+    }
+    // このセッションを作った視聴者からの要求かを、Location に付けた署名で確かめる
+    // （docs/architecture.md「再生のライフサイクル」）。
+    const isSessionOwner = await verifyPlaySessionSignature(
+      c.env.PLAY_SESSION_SIGNING_KEY,
+      sessionId,
+      c.get("jwtPayload").userId,
+      c.req.query(SESSION_SIGNATURE_PARAM) ?? "",
+    );
+    if (!isSessionOwner) {
+      return c.text("WHEP session not found", 404);
     }
 
     const sdpAnswer = await readSdpBody(c, "answer");

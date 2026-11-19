@@ -371,8 +371,15 @@ describe("WHEPSession", () => {
   });
 
   it("answers a 406 counter-offer with a PATCH to the session URL", async () => {
+    // Worker は Location のクエリにセッションの署名を載せるため、クエリごと PATCH する。
     const fetchSpy = mockFetch()
-      .mockResolvedValueOnce(sdpResponse(406, {}, "remote-offer"))
+      .mockResolvedValueOnce(
+        sdpResponse(
+          406,
+          { Location: "/play/alice/session-1?sig=abc123" },
+          "remote-offer",
+        ),
+      )
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     const { pc, session } = createSession();
 
@@ -389,7 +396,7 @@ describe("WHEPSession", () => {
     );
     expect(fetchCalls(fetchSpy)).toEqual([
       { method: "POST", url: `${ORIGIN}/play/alice` },
-      { method: "PATCH", url: SESSION_URL },
+      { method: "PATCH", url: `${SESSION_URL}?sig=abc123` },
     ]);
     expect(fetchSpy.mock.calls[1]?.[1]?.body).toBe("local-answer");
   });
