@@ -20,6 +20,8 @@ const swrOptions = {
   shouldRetryOnError: false,
 };
 
+const swrSuspenseOptions = { ...swrOptions, suspense: true } as const;
+
 type StableLiveTokenState =
   { status: "none" } | { status: "available"; token: string | null };
 
@@ -39,11 +41,8 @@ type CurrentUserState =
 type Settled<T> =
   { status: "ready"; data: T } | { status: "error"; error: Error };
 
-type DataState<T> = { status: "loading" } | Settled<T>;
-
-type BootstrapAuthState =
-  | { status: "loading" }
-  | { status: "authenticated" }
+type AuthState =
+  | { status: "authenticated"; user: User }
   | { status: "unauthenticated" }
   | { status: "error"; error: string };
 
@@ -89,47 +88,21 @@ void preload(currentUserKey, loadCurrentUser);
 void preload(liveStreamsKey, loadLiveStreams);
 void preload(liveTokenStateKey, loadLiveTokenState);
 
-function toDataState<T>(settled: Settled<T> | undefined): DataState<T> {
-  return settled ?? { status: "loading" };
+function isUnauthorized(settled: Settled<unknown> | undefined): boolean {
+  return (
+    settled?.status === "error" && settled.error instanceof UnauthorizedError
+  );
 }
 
-function hasUnauthorizedError(states: DataState<unknown>[]): boolean {
-  return states.some((state) => {
-    return state.status === "error" && state.error instanceof UnauthorizedError;
-  });
-}
-
-function hasReadyData(states: DataState<unknown>[]): boolean {
-  return states.some((state) => state.status === "ready");
-}
-
-function resolveBootstrapAuthState(
-  states: DataState<unknown>[],
-): BootstrapAuthState {
-  if (hasUnauthorizedError(states)) {
-    return { status: "unauthenticated" };
-  }
-
-  if (hasReadyData(states)) {
-    return { status: "authenticated" };
-  }
-
-  const errors = states.filter((state) => state.status === "error");
-  if (errors.length === states.length) {
-    return {
-      error: errors[0]?.error.message ?? "Authentication state is unavailable",
-      status: "error",
-    };
-  }
-
-  return { status: "loading" };
-}
-
-export function useBootstrapAuthState(): BootstrapAuthState {
-  const { data: currentUser } = useSWR<Settled<User>>(
+/**
+ * `/api/me` の結果から認証状態を返す。結果が出るまでサスペンドする。配信一覧とトークン状態の
+ * 取得が認証切れで失敗した場合も未認証とする。
+ */
+export function useSuspenseAuthState(): AuthState {
+  const { data: currentUser } = useSWR(
     currentUserKey,
     loadCurrentUser,
-    swrOptions,
+    swrSuspenseOptions,
   );
   const { data: liveStreams } = useSWR<Settled<LiveSummary[]>>(
     liveStreamsKey,
@@ -142,11 +115,19 @@ export function useBootstrapAuthState(): BootstrapAuthState {
     swrOptions,
   );
 
-  return resolveBootstrapAuthState([
-    toDataState(currentUser),
-    toDataState(liveStreams),
-    toDataState(liveTokenState),
-  ]);
+  if (
+    [currentUser, liveStreams, liveTokenState].some((settled) =>
+      isUnauthorized(settled),
+    )
+  ) {
+    return { status: "unauthenticated" };
+  }
+
+  if (currentUser.status === "error") {
+    return { status: "error", error: currentUser.error.message };
+  }
+
+  return { status: "authenticated", user: currentUser.data };
 }
 
 export function useCurrentUser(): CurrentUserState {

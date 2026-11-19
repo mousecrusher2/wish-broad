@@ -1,4 +1,5 @@
-import { useBootstrapAuthState } from "./api/hooks";
+import { Suspense } from "react";
+import { useSuspenseAuthState } from "./api/hooks";
 import { CenteredCard } from "./components/CenteredCard";
 import { LoginPrompt } from "./pages/LoginPrompt";
 import { WHEPPlayerPage } from "./pages/WHEPPlayerPage";
@@ -35,14 +36,10 @@ function AuthErrorScreen({ message }: Readonly<{ message: string }>) {
 }
 
 function AppBootstrap() {
-  const authState = useBootstrapAuthState();
-
-  if (authState.status === "loading") {
-    return <AuthLoadingScreen />;
-  }
+  const authState = useSuspenseAuthState();
 
   if (authState.status === "authenticated") {
-    return <WHEPPlayerPage />;
+    return <WHEPPlayerPage user={authState.user} />;
   }
 
   if (authState.status === "error") {
@@ -55,7 +52,9 @@ function AppBootstrap() {
 function App() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.16),transparent_30%),linear-gradient(180deg,#020617_0%,#0f172a_55%,#020617_100%)] text-slate-100">
-      <AppBootstrap />
+      <Suspense fallback={<AuthLoadingScreen />}>
+        <AppBootstrap />
+      </Suspense>
     </div>
   );
 }

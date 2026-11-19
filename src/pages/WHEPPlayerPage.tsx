@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { User } from "../../shared/protocol";
 import { OBSStreamingInfo } from "../features/obs-settings/OBSStreamingInfo";
 import { StreamSelection } from "../features/player/StreamSelection";
 import { WHEPPlayer } from "../features/player/WHEPPlayer";
@@ -6,11 +7,7 @@ import {
   createDefaultSnapshot,
   type WHEPPlaybackControllerSnapshot,
 } from "../player/controller";
-import {
-  revalidateLiveStreams,
-  useCurrentUser,
-  useLiveStreams,
-} from "../api/hooks";
+import { revalidateLiveStreams, useLiveStreams } from "../api/hooks";
 import { buttonClasses, surfaceClasses } from "../components/styles";
 
 type PlayerSelection = {
@@ -18,30 +15,11 @@ type PlayerSelection = {
   loadSequence: number;
 } | null;
 
-function CurrentUserGreeting() {
-  const currentUserState = useCurrentUser();
-
-  if (currentUserState.status === "loading") {
-    return (
-      <p className="truncate text-sm text-cyan-50/80">
-        ユーザー情報を確認中...
-      </p>
-    );
-  }
-
-  if (currentUserState.status === "error") {
-    return (
-      <p className="text-sm text-amber-200">ユーザー情報を取得できません</p>
-    );
-  }
-
+function CurrentUserGreeting({ user }: Readonly<{ user: User }>) {
   return (
     <p className="truncate text-sm text-cyan-50/90">
       ようこそ、
-      <span className="font-semibold text-white">
-        {currentUserState.user.displayName}
-      </span>{" "}
-      さん
+      <span className="font-semibold text-white">{user.displayName}</span> さん
     </p>
   );
 }
@@ -87,7 +65,7 @@ function StreamSelectionPanel({
   );
 }
 
-function WHEPPlayerPageContent() {
+function WHEPPlayerPageContent({ user }: Readonly<{ user: User }>) {
   const [resource, setResource] = useState("");
   const [playerSelection, setPlayerSelection] = useState<PlayerSelection>(null);
   const [isObsSettingsOpen, setIsObsSettingsOpen] = useState(false);
@@ -135,7 +113,7 @@ function WHEPPlayerPageContent() {
           </h1>
           <nav className="flex flex-wrap items-center gap-3">
             <div className="min-h-5 w-full min-w-0 md:w-auto md:max-w-64">
-              <CurrentUserGreeting />
+              <CurrentUserGreeting user={user} />
             </div>
             <button
               type="button"
@@ -190,6 +168,6 @@ function WHEPPlayerPageContent() {
   );
 }
 
-export function WHEPPlayerPage() {
-  return <WHEPPlayerPageContent />;
+export function WHEPPlayerPage({ user }: Readonly<{ user: User }>) {
+  return <WHEPPlayerPageContent user={user} />;
 }
