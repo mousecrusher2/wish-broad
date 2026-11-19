@@ -250,16 +250,17 @@ describe("WHEPPlaybackController", () => {
         lastPeer().updateStates(ICE_FAILED);
       }
       await vi.waitFor(() => {
-        expect(requests).toHaveLength(2);
+        expect(snapshots.at(-1)?.playbackState.phase).toBe("error");
       });
 
       expect(snapshots.at(-1)).toMatchObject({
         isLoading: false,
         playbackState: { phase: "error", resourceUserId: "alice" },
       });
+      // 失敗したセッションはローカルで閉じるだけで、Worker には DELETE を送らない。
+      expect(lastPeer().signalingState).toBe("closed");
       expect(requests).toEqual([
         { method: "POST", url: `${ORIGIN}/play/alice` },
-        { method: "DELETE", url: `${ORIGIN}/play/alice/session-1?mid=0` },
       ]);
     },
   );
@@ -301,10 +302,7 @@ describe("WHEPPlaybackController", () => {
       expect(countPosts(requests)).toBe(3);
     });
 
-    expect(requests).toContainEqual({
-      method: "DELETE",
-      url: `${ORIGIN}/play/alice/session-2?mid=0`,
-    });
+    expect(requests.map((request) => request.method)).not.toContain("DELETE");
     expect(snapshots.at(-1)?.playbackState.phase).toBe("reconnecting");
   });
 
@@ -313,8 +311,9 @@ describe("WHEPPlaybackController", () => {
     const { controller, snapshots } = createController();
 
     await controller.load("alice");
-    lastPeer().readInboundBytes = () => 100;
-    lastPeer().updateStates(ICE_CONNECTED);
+    const first = lastPeer();
+    first.readInboundBytes = () => 100;
+    first.updateStates(ICE_CONNECTED);
     // 1 秒後の読み取りでレシーバーが揃い、その後 bytesReceived が 3 秒間増えない。
     await vi.advanceTimersByTimeAsync(3_999);
     expect(countPosts(requests)).toBe(1);
@@ -323,10 +322,8 @@ describe("WHEPPlaybackController", () => {
     await vi.waitFor(() => {
       expect(countPosts(requests)).toBe(2);
     });
-    expect(requests).toContainEqual({
-      method: "DELETE",
-      url: `${ORIGIN}/play/alice/session-1?mid=0`,
-    });
+    expect(first.signalingState).toBe("closed");
+    expect(requests.map((request) => request.method)).not.toContain("DELETE");
     expect(snapshots.map((snapshot) => snapshot.playbackState.phase)).toContain(
       "reconnecting",
     );

@@ -14,7 +14,7 @@
 - `src/player/`: React に依存しない WHEP 再生処理
   - `controller.ts`: 再接続とリカバリーを含む再生全体の制御
   - `session.ts`: 1 回分の PeerConnection のセッション管理
-  - `signaling.ts`: Worker の `/play` との POST・PATCH・DELETE と応答の解析
+  - `signaling.ts`: Worker の `/play` との POST・PATCH と応答の解析
   - `stall-monitor.ts`: `bytesReceived` による再生停止の判定
   - `reconnect-policy.ts`: 再接続の時間と、失敗の分類
   - `playback-state.ts`: 画面に渡す再生状態の型
@@ -29,7 +29,7 @@
 - `worker/routes/`: パスごとのルート（`auth.ts`、`api.ts`、`ingest.ts`、`play.ts`）。リクエストの検証と、`worker/live/` の結果から HTTP 応答への変換だけを行います。`create-app.ts` はサブアプリの生成、`sdp.ts` は SDP 本文の読み取りです。
 - `worker/middleware/`: Hono ミドルウェア（`app-jwt.ts`: 視聴者の JWT Cookie 認証、`hashed-bearer-auth.ts`: OBS の Bearer トークン認証）
 - `worker/live/`: 配信のライフサイクルで Worker が行う処理。HTTP に依存せず、判別共用体の結果を返します。
-  - `worker/live/ingest.ts`、`worker/live/playback.ts`: インジェストと再生の開始・終了
+  - `worker/live/ingest.ts`、`worker/live/playback.ts`: インジェストの開始・終了と再生の開始
   - `worker/live/session.ts`: 配信行が保持するインジェストセッションの生死の判定と、`DELETE` なしで失われたセッションの扱い
   - `worker/live/notifications.ts`: 開始通知の送信と削除
   - `worker/live/tracks.ts`: SFU のトラックを `waitUntil` 内で閉じる処理

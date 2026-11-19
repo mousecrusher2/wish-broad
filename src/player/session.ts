@@ -1,9 +1,4 @@
-import {
-  deleteWhepSession,
-  patchWhepAnswer,
-  postWhepOffer,
-  WHEPSessionError,
-} from "./signaling";
+import { patchWhepAnswer, postWhepOffer, WHEPSessionError } from "./signaling";
 import { fetchTurnIceServers } from "./turn-credentials";
 
 export type WHEPConnectionStatus =
@@ -39,12 +34,6 @@ type WHEPSessionRuntimeState =
   | { hasStream: false; status: "connecting" }
   | { hasStream: boolean; status: "connected" }
   | { hasStream: false; status: "failed" };
-
-type WHEPSessionLifecycle =
-  | { kind: "active" }
-  | { kind: "releasingLocalResources" }
-  | { cleanupPromise: Promise<void>; kind: "closingServerSession" }
-  | { kind: "disposed" };
 
 /** セッションが使うのは再生ソースの差し替えと再生開始だけで、HTMLVideoElement の他の機能は不要。 */
 type WHEPVideoElement = Pick<HTMLVideoElement, "srcObject" | "play">;
@@ -159,13 +148,11 @@ export class WHEPSession {
   >();
   private readonly resourceUserId: string;
   private readonly videoElement: WHEPVideoElement;
+  private disposed = false;
   private expectedRemoteTrackCount = 0;
-  private lifecycle: WHEPSessionLifecycle = { kind: "active" };
   private maxRemoteTrackCount = 0;
   private runtimeState: WHEPSessionRuntimeState =
     createRuntimeState("disconnected");
-  /** POST /play 成功後に Worker が返した WHEP セッション URL。 */
-  private serverSessionUrl: URL | null = null;
 
   /** @throws {Error} `resourceUserId` が空白だけの場合。 */
   constructor({
@@ -194,7 +181,7 @@ export class WHEPSession {
   }
 
   private isActive(): boolean {
-    return this.lifecycle.kind === "active";
+    return !this.disposed;
   }
 
   private setStatus(nextStatus: WHEPConnectionStatus): void {
@@ -529,12 +516,6 @@ export class WHEPSession {
     this.setStatus("disconnected");
   }
 
-  private async deleteServerSession(): Promise<void> {
-    if (this.serverSessionUrl !== null) {
-      await deleteWhepSession(this.serverSessionUrl);
-    }
-  }
-
   /**
    * このセッションの再生ネゴシエーションを行う。
    *
@@ -577,8 +558,7 @@ export class WHEPSession {
         throw new Error("Failed to create local SDP offer");
       }
 
-      // 破棄時はこの POST を中断する。作成済みの SFU 再生セッションには DELETE を送らないが、
-      // 誰も接続しないまま SFU が片付ける。
+      // 破棄時はこの POST を中断する。
       const sessionResponse = await postWhepOffer(
         this.resourceUserId,
         localOfferSdp,
@@ -586,7 +566,6 @@ export class WHEPSession {
       );
       this.expectedRemoteTrackCount =
         sessionResponse.expectedRemoteTrackCount ?? 0;
-      this.serverSessionUrl = sessionResponse.sessionUrl;
 
       if (!this.isActive()) {
         return;
@@ -631,44 +610,28 @@ export class WHEPSession {
       }
     };
 
-    await runStart().catch(async (error: unknown) => {
+    await runStart().catch((error: unknown) => {
       if (signal.aborted || !this.isActive()) {
         return;
       }
 
-      await this.dispose({ notifyServer: true });
+      this.dispose();
       this.setStatus("failed");
       throw error;
     });
   }
 
-  async dispose(options?: { notifyServer?: boolean }): Promise<void> {
-    const notifyServer = options?.notifyServer ?? true;
-
-    if (this.lifecycle.kind === "closingServerSession") {
-      await this.lifecycle.cleanupPromise;
-      return;
-    }
-    if (
-      this.lifecycle.kind === "disposed" ||
-      this.lifecycle.kind === "releasingLocalResources"
-    ) {
+  /**
+   * PeerConnection とリモートメディアを解放する。Worker には何も送らず、SFU の再生セッションは
+   * SFU の回収に任せる（docs/architecture.md「再生のライフサイクル」）。
+   */
+  dispose(): void {
+    if (this.disposed) {
       return;
     }
 
-    this.lifecycle = { kind: "releasingLocalResources" };
+    this.disposed = true;
     this.abortController.abort();
     this.releaseLocalResources();
-
-    const cleanupPromise = notifyServer
-      ? this.deleteServerSession()
-      : Promise.resolve();
-    this.lifecycle = { cleanupPromise, kind: "closingServerSession" };
-
-    try {
-      await cleanupPromise;
-    } finally {
-      this.lifecycle = { kind: "disposed" };
-    }
   }
 }

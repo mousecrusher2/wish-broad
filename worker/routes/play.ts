@@ -5,11 +5,7 @@ import {
   LIVE_RECONNECTING_RETRY_AFTER_SECONDS,
   LIVE_TRACK_COUNT_HEADER,
 } from "../../shared/protocol";
-import {
-  closePlaybackSession,
-  startPlayback,
-  submitPlaybackAnswer,
-} from "../live/playback";
+import { startPlayback, submitPlaybackAnswer } from "../live/playback";
 import { appJwtAuth } from "../middleware/app-jwt";
 import { createApp } from "./create-app";
 import { readSdpBody } from "./sdp";
@@ -20,27 +16,11 @@ function createPlaySessionLocation(
   requestUrl: string,
   userId: string,
   sessionId: string,
-  mids: readonly string[],
 ): string {
-  const sessionUrl = new URL(
+  return new URL(
     `/play/${encodeURIComponent(userId)}/${encodeURIComponent(sessionId)}`,
     requestUrl,
-  );
-
-  for (const mid of mids) {
-    sessionUrl.searchParams.append("mid", mid);
-  }
-
-  return sessionUrl.toString();
-}
-
-function getRequestedTrackMids(requestUrl: string): string[] {
-  const mids = new URL(requestUrl).searchParams.getAll("mid");
-  const normalizedMids = mids.flatMap((mid) => {
-    const trimmedMid = mid.trim();
-    return trimmedMid ? [trimmedMid] : [];
-  });
-  return [...new Set(normalizedMids)];
+  ).toString();
 }
 
 /**
@@ -94,7 +74,6 @@ playRoutes.post("/:userId", async (c) => {
             c.req.url,
             userId,
             session.sessionId,
-            session.tracks.map((track) => track.mid),
           ),
         },
       );
@@ -112,23 +91,15 @@ playRoutes.post("/:userId", async (c) => {
   }
 });
 
-// WHEP 再生セッションのクリーンアップおよびカウンターオファーへのアンサー送信。
+// WHEP 再生セッションへのカウンターオファーのアンサー送信。
 playRoutes.get("/:userId/:sessionId", async () => {
   return new Response(null, { status: 204 });
 });
 
 playRoutes
+  // 現在のフロントエンドは送らない。以前のフロントエンドが送る DELETE に成功を返すだけで、
+  // SFU には何もしない（docs/architecture.md「再生のライフサイクル」）。
   .delete("/:userId/:sessionId", async (c) => {
-    const { sessionId } = c.req.param();
-    if (!isSfuSessionId(sessionId)) {
-      return c.text("Invalid WHEP session ID", 400);
-    }
-    const mids = getRequestedTrackMids(c.req.url);
-    if (mids.length === 0) {
-      return c.text("WHEP session track mids are required", 400);
-    }
-
-    closePlaybackSession(c.env, c.executionCtx, sessionId, mids);
     return c.body(null, 200);
   })
   // この PATCH はトリクル ICE ではなく、406 カウンターオファーへのアンサーを送信する。

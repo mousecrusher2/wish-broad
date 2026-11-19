@@ -7,12 +7,7 @@ import {
   it,
   vi,
 } from "vitest";
-import {
-  deleteWhepSession,
-  patchWhepAnswer,
-  postWhepOffer,
-  WHEPSessionError,
-} from "./signaling";
+import { patchWhepAnswer, postWhepOffer, WHEPSessionError } from "./signaling";
 
 const ORIGIN = "http://localhost";
 const SESSION_URL = new URL(`${ORIGIN}/play/alice/session-1?mid=0`);
@@ -168,30 +163,5 @@ describe("WHEP signaling", () => {
       message: "bad answer",
       stage: "patch",
     });
-  });
-
-  it("only warns when the session DELETE fails", async () => {
-    const networkError = new TypeError("network down");
-    vi.spyOn(globalThis, "fetch")
-      .mockRejectedValueOnce(networkError)
-      .mockResolvedValueOnce(new Response("", { status: 502 }));
-
-    await expect(deleteWhepSession(SESSION_URL)).resolves.toBeUndefined();
-    await expect(deleteWhepSession(SESSION_URL)).resolves.toBeUndefined();
-
-    expect(console.warn).toHaveBeenNthCalledWith(
-      1,
-      "Failed to close WHEP session:",
-      networkError,
-    );
-    expect(console.warn).toHaveBeenNthCalledWith(
-      2,
-      "Failed to close WHEP session:",
-      expect.objectContaining({
-        kind: "server_request_error",
-        message: "Unexpected WHEP delete response: 502",
-        stage: "delete",
-      }),
-    );
   });
 });

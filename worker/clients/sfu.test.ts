@@ -403,9 +403,8 @@ describe("SFU API", () => {
     errors.forEach((error, index) => {
       const testCase = cases[index];
       assert.isDefined(testCase, "Missing expected SFU HTTP case");
-      const [status, kind] = testCase;
+      const [, kind] = testCase;
       expect(error.kind).toBe(kind);
-      expect(error.isSessionNotFound()).toBe(status === 404);
       expect(error.responseBody).toBe("failure");
     });
   });

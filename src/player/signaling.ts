@@ -1,7 +1,7 @@
-// Worker の /play エンドポイントとの WHEP シグナリング（POST・PATCH・DELETE）と、その応答の解析。
+// Worker の /play エンドポイントとの WHEP シグナリング（POST・PATCH）と、その応答の解析。
 import { LIVE_TRACK_COUNT_HEADER } from "../../shared/protocol";
 
-type WHEPSessionRequestStage = "post" | "patch" | "delete" | "local";
+type WHEPSessionRequestStage = "post" | "patch" | "local";
 
 type WHEPSessionErrorKind =
   | "resource_not_found"
@@ -235,25 +235,5 @@ export async function patchWhepAnswer(
       `Unexpected WHEP answer response: ${String(response.status)}`,
       "patch",
     );
-  }
-}
-
-/** WHEP セッションを DELETE する。ベストエフォートのため、失敗は警告に残すだけでスローしない。 */
-export async function deleteWhepSession(sessionUrl: URL): Promise<void> {
-  let response: Response;
-  try {
-    response = await fetch(sessionUrl, { method: "DELETE" });
-  } catch (error: unknown) {
-    console.warn("Failed to close WHEP session:", error);
-    return;
-  }
-
-  if (!response.ok) {
-    const responseError = await createResponseError(
-      response,
-      `Unexpected WHEP delete response: ${String(response.status)}`,
-      "delete",
-    );
-    console.warn("Failed to close WHEP session:", responseError);
   }
 }

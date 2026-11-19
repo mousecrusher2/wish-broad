@@ -223,28 +223,6 @@ describe("play routes", () => {
     );
   });
 
-  it("waits for OBS when the SFU loses the session between its check and play start", async () => {
-    await seedLive({ sessionId: "live-session", userId: "streamer-1" });
-    sfuMocks.createPlaybackSession.mockRejectedValue(
-      new SfuApiError("SFU request failed: session not found", {
-        endpoint: "/tracks/new",
-        kind: "session_not_found",
-        statusText: "Not Found",
-      }),
-    );
-
-    const response = await requestPlayOffer();
-
-    // セッションが直前まで生存していたため、OBS はたった今失われたと判定される。
-    expect(response.status).toBe(409);
-    expect(response.headers.get("retry-after")).toBe("2");
-    await expect(getLive("streamer-1")).resolves.toMatchObject({
-      graceExpiresAt: NOW + 30_000,
-      sessionId: "live-session",
-    });
-    await expect(getLiveStateAlarm()).resolves.toBe(NOW + 30_000);
-  });
-
   it("starts a short grace period when a play request finds a session lost just now", async () => {
     await seedLive({
       sessionId: "live-session",
@@ -478,7 +456,7 @@ describe("play routes", () => {
     expect(response.headers.get("access-control-expose-headers")).toBeNull();
     expect(response.headers.get("accept-patch")).toBeNull();
     expect(response.headers.get("location")).toBe(
-      "http://localhost/play/streamer-1/viewer-session?mid=0",
+      "http://localhost/play/streamer-1/viewer-session",
     );
   });
 
@@ -497,70 +475,39 @@ describe("play routes", () => {
     expect(await response.text()).toBe("viewer-counter-offer-sdp");
     expect(response.headers.get("Wish-Live-Track-Count")).toBe("1");
     expect(response.headers.get("location")).toBe(
-      "http://localhost/play/streamer-1/viewer-session?mid=0",
+      "http://localhost/play/streamer-1/viewer-session",
     );
     expect(response.headers.get("x-session-description-type")).toBeNull();
   });
 
-  it("closes WHEP playback tracks on DELETE", async () => {
-    const executionContext = createExecutionContext();
+  it.each(["", "?mid=0"])(
+    "accepts a WHEP playback DELETE%s without touching the SFU",
+    async (query) => {
+      const executionContext = createExecutionContext();
 
-    const response = await fetchApp(
-      new Request("http://localhost/play/streamer-1/viewer-session?mid=0", {
-        headers: {
-          Cookie: await createAuthCookie(),
-          Origin: "http://localhost",
-        },
-        method: "DELETE",
-      }),
-      executionContext,
-    );
+      const response = await fetchApp(
+        new Request(`http://localhost/play/streamer-1/viewer-session${query}`, {
+          headers: {
+            Cookie: await createAuthCookie(),
+            Origin: "http://localhost",
+          },
+          method: "DELETE",
+        }),
+        executionContext,
+      );
 
-    expect(response.status).toBe(200);
+      expect(response.status).toBe(200);
+      await waitOnExecutionContext(executionContext);
+      expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
+    },
+  );
 
-    await waitOnExecutionContext(executionContext);
-
-    expect(sfuMocks.closeTracks).toHaveBeenCalledWith(env, "viewer-session", [
-      "0",
-    ]);
-  });
-
-  it("rejects WHEP playback DELETE without track mids", async () => {
-    const executionContext = createExecutionContext();
-
-    const response = await fetchApp(
-      new Request("http://localhost/play/streamer-1/viewer-session", {
-        headers: {
-          Cookie: await createAuthCookie(),
-          Origin: "http://localhost",
-        },
-        method: "DELETE",
-      }),
-      executionContext,
-    );
-
-    expect(response.status).toBe(400);
-    expect(await response.text()).toBe("WHEP session track mids are required");
-    await waitOnExecutionContext(executionContext);
-    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
-  });
-
-  it("rejects WHEP session requests whose session id is not URL-safe", async () => {
+  it("rejects WHEP answers whose session id is not URL-safe", async () => {
     const executionContext = createExecutionContext();
     // Hono はパラメーター内の %2F や %3F をデコードするため、検証がないと
     // SFUAPI の URL が別のパスへ書き換えられてしまう。
     const sessionUrl = "http://localhost/play/streamer-1/..%2F..%2Fother%3F";
 
-    const deleteResponse = await fetchApp(
-      new Request(`${sessionUrl}?mid=0`, {
-        headers: {
-          Cookie: await createAuthCookie(),
-          Origin: "http://localhost",
-        },
-        method: "DELETE",
-      }),
-      executionContext,
-    );
     const patchResponse = await fetchApp(
       new Request(sessionUrl, {
         body: "viewer-answer",
@@ -573,73 +520,10 @@ describe("play routes", () => {
       executionContext,
     );
 
-    expect(deleteResponse.status).toBe(400);
-    expect(await deleteResponse.text()).toBe("Invalid WHEP session ID");
     expect(patchResponse.status).toBe(400);
     expect(await patchResponse.text()).toBe("Invalid WHEP session ID");
     await waitOnExecutionContext(executionContext);
-    expect(sfuMocks.closeTracks).not.toHaveBeenCalled();
     expect(sfuMocks.renegotiateSession).not.toHaveBeenCalled();
-  });
-
-  it("trims and deduplicates requested WHEP track mids", async () => {
-    const executionContext = createExecutionContext();
-
-    const response = await fetchApp(
-      new Request(
-        "http://localhost/play/streamer-1/viewer-session?mid=%20&mid=0&mid=0&mid=1%20",
-        {
-          headers: {
-            Cookie: await createAuthCookie(),
-            Origin: "http://localhost",
-          },
-          method: "DELETE",
-        },
-      ),
-      executionContext,
-    );
-
-    expect(response.status).toBe(200);
-    await waitOnExecutionContext(executionContext);
-    expect(sfuMocks.closeTracks).toHaveBeenCalledWith(env, "viewer-session", [
-      "0",
-      "1",
-    ]);
-  });
-
-  it("returns success and logs when WHEP close reports track errors", async () => {
-    sfuMocks.closeTracks.mockResolvedValue({
-      tracks: [{ errorCode: "failed_to_close", mid: "0" }],
-    });
-    const executionContext = createExecutionContext();
-
-    const response = await fetchApp(
-      new Request("http://localhost/play/streamer-1/viewer-session?mid=0", {
-        headers: {
-          Cookie: await createAuthCookie(),
-          Origin: "http://localhost",
-        },
-        method: "DELETE",
-      }),
-      executionContext,
-    );
-
-    expect(response.status).toBe(200);
-
-    await waitOnExecutionContext(executionContext);
-
-    expect(spies.consoleWarn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "track_close.sfu_errors",
-        level: "warn",
-        message:
-          "SFU reported WHEP session close errors for session viewer-session:",
-        response: {
-          tracks: [{ errorCode: "failed_to_close", mid: "0" }],
-        },
-        sessionId: "viewer-session",
-      }),
-    );
   });
 
   it("returns 400 for an empty renegotiation SDP answer", async () => {

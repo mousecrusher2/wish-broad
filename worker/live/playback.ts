@@ -1,4 +1,4 @@
-// 視聴者の WHEP 再生セッションの開始、カウンターオファーへのアンサー送信、終了。
+// 視聴者の WHEP 再生セッションの開始と、カウンターオファーへのアンサー送信。
 // 各分岐の根拠は docs/architecture.md の「再生のライフサイクル」を参照。
 import {
   createPlaybackSession,
@@ -15,7 +15,6 @@ import {
   type LiveSessionStatus,
   startLostSessionGrace,
 } from "./session";
-import { closeTracksInBackground } from "./tracks";
 
 /**
  * 再生開始の結果。
@@ -104,12 +103,6 @@ export async function startPlayback(
     if (!(error instanceof SfuApiError)) {
       throw error;
     }
-    if (error.isSessionNotFound()) {
-      // 上で確認した時点ではインジェストセッションは生存していたため、
-      // SFU がたった今ガベージコレクションしたとみなせる。
-      await startLostSessionGrace(env, live);
-      return { kind: "reconnecting" };
-    }
     logError(env, "play.negotiation_failed", {
       ...createErrorLogFields(error),
       userId,
@@ -153,17 +146,4 @@ export async function submitPlaybackAnswer(
   }
 
   return { kind: "accepted" };
-}
-
-/** 視聴者の再生セッションのうち `mids` のトラックを waitUntil 内で閉じる。 */
-export function closePlaybackSession(
-  env: Bindings,
-  ctx: Pick<ExecutionContext, "waitUntil">,
-  sessionId: string,
-  mids: readonly string[],
-): void {
-  closeTracksInBackground(env, ctx, sessionId, mids, {
-    error: `SFU reported WHEP session close errors for session ${sessionId}:`,
-    failure: `Failed to close WHEP session ${sessionId}:`,
-  });
 }

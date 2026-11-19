@@ -435,10 +435,8 @@ describe("WHEPSession", () => {
     },
   );
 
-  it("deletes the registered session when the WHEP answer cannot be applied", async () => {
-    const fetchSpy = mockFetch()
-      .mockResolvedValueOnce(sdpResponse(201))
-      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+  it("fails without contacting the Worker again when the WHEP answer cannot be applied", async () => {
+    const fetchSpy = mockFetch().mockResolvedValueOnce(sdpResponse(201));
     const { pc, session } = createSession();
     pc.setRemoteDescription.mockRejectedValue(new Error("bad answer"));
 
@@ -448,15 +446,13 @@ describe("WHEPSession", () => {
     expect(session.getSnapshot().status).toBe("failed");
     expect(fetchCalls(fetchSpy)).toEqual([
       { method: "POST", url: `${ORIGIN}/play/alice` },
-      { method: "DELETE", url: SESSION_URL },
     ]);
   });
 
-  it("deletes the registered session when the counter-offer answer is rejected", async () => {
+  it("fails after the counter-offer answer is rejected", async () => {
     const fetchSpy = mockFetch()
       .mockResolvedValueOnce(sdpResponse(406))
-      .mockResolvedValueOnce(new Response("bad answer", { status: 400 }))
-      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+      .mockResolvedValueOnce(new Response("bad answer", { status: 400 }));
     const { session } = createSession();
 
     await expect(
@@ -468,7 +464,6 @@ describe("WHEPSession", () => {
     expect(fetchCalls(fetchSpy)).toEqual([
       { method: "POST", url: `${ORIGIN}/play/alice` },
       { method: "PATCH", url: SESSION_URL },
-      { method: "DELETE", url: SESSION_URL },
     ]);
   });
 
@@ -570,17 +565,16 @@ describe("WHEPSession", () => {
     expect(streams).toEqual([true]);
   });
 
-  it("releases local media and deletes the server session once on dispose", async () => {
-    const fetchSpy = mockFetch()
-      .mockResolvedValueOnce(sdpResponse(201))
-      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+  it("releases local media once on dispose without contacting the Worker", async () => {
+    const fetchSpy = mockFetch().mockResolvedValueOnce(sdpResponse(201));
     const { pc, session, statuses, videoElement } = createSession();
     await session.start(new AbortController().signal);
     const track = new FakeTrack("video");
     pc.connect();
     pc.emitTrack(track);
 
-    await Promise.all([session.dispose(), session.dispose()]);
+    session.dispose();
+    session.dispose();
 
     expect(pc.close).toHaveBeenCalledOnce();
     expect(track.stop).toHaveBeenCalledOnce();
@@ -588,41 +582,13 @@ describe("WHEPSession", () => {
     expect(statuses.at(-1)).toBe("disconnected");
     expect(fetchCalls(fetchSpy)).toEqual([
       { method: "POST", url: `${ORIGIN}/play/alice` },
-      { method: "DELETE", url: SESSION_URL },
     ]);
-  });
-
-  it("skips the server DELETE when asked not to notify the server", async () => {
-    const fetchSpy = mockFetch().mockResolvedValueOnce(sdpResponse(201));
-    const { session } = createSession();
-    await session.start(new AbortController().signal);
-
-    await session.dispose({ notifyServer: false });
-
-    expect(fetchCalls(fetchSpy)).toEqual([
-      { method: "POST", url: `${ORIGIN}/play/alice` },
-    ]);
-  });
-
-  it("finishes dispose with a warning when the server DELETE fails", async () => {
-    mockFetch()
-      .mockResolvedValueOnce(sdpResponse(201))
-      .mockRejectedValueOnce(new TypeError("offline"));
-    const { session } = createSession();
-    await session.start(new AbortController().signal);
-
-    await expect(session.dispose()).resolves.toBeUndefined();
-
-    expect(console.warn).toHaveBeenCalledWith(
-      "Failed to close WHEP session:",
-      expect.any(TypeError),
-    );
   });
 
   it("ignores start and connection events after dispose", async () => {
     const fetchSpy = mockFetch();
     const { pc, session, statuses } = createSession();
-    await session.dispose({ notifyServer: false });
+    session.dispose();
 
     await expect(
       session.start(new AbortController().signal),

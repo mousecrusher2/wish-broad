@@ -250,7 +250,7 @@ export class WHEPPlaybackController {
     const session = this.session;
     this.session = null;
     if (session) {
-      void session.dispose({ notifyServer: true });
+      session.dispose();
     }
   }
 

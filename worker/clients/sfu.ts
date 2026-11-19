@@ -110,10 +110,6 @@ export class SfuApiError extends Error {
     this.statusText = options.statusText;
   }
 
-  isSessionNotFound(): boolean {
-    return this.kind === "session_not_found";
-  }
-
   /** クライアントへそのまま返すべき失敗でなければ null を返す。 */
   toNegotiationClientError(
     fallbackText: string,
