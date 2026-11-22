@@ -1,5 +1,6 @@
 import {
   type FetchedResponse,
+  FetchError,
   fetchWithTimeout,
   trimResponseBody,
 } from "./http";
@@ -133,18 +134,23 @@ async function fetchDiscordWebhook(
   endpoint: string,
   init: RequestInit,
 ): Promise<FetchedResponse> {
-  return fetchWithTimeout(
-    endpoint,
-    init,
-    DISCORD_WEBHOOK_TIMEOUT_MS,
-    (kind, error) =>
-      new DiscordWebhookError(
-        kind === "request_timeout"
-          ? "Discord webhook request timed out"
-          : "Discord webhook request failed",
-        { endpoint, kind, responseBodyText: getErrorMessage(error) },
-      ),
-  );
+  try {
+    return await fetchWithTimeout(endpoint, init, DISCORD_WEBHOOK_TIMEOUT_MS);
+  } catch (error: unknown) {
+    if (!(error instanceof FetchError)) {
+      throw error;
+    }
+    throw new DiscordWebhookError(
+      error.kind === "request_timeout"
+        ? "Discord webhook request timed out"
+        : "Discord webhook request failed",
+      {
+        endpoint,
+        kind: error.kind,
+        responseBodyText: getErrorMessage(error.cause),
+      },
+    );
+  }
 }
 
 /**

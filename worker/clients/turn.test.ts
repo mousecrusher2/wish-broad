@@ -168,27 +168,6 @@ describe("worker turn credentials", () => {
     expect(error.kind).toBe("empty_ice_servers");
   });
 
-  it("throws a timeout error when the TURN request is aborted", async () => {
-    vi.spyOn(globalThis, "fetch").mockRejectedValue(
-      new DOMException("The operation was aborted", "AbortError"),
-    );
-
-    const error = await catchTurnError(
-      generateTurnIceServers(
-        {
-          TURN_KEY_API_TOKEN: "turn-key-api-token",
-          TURN_KEY_ID: "turn-key-id",
-        },
-        "viewer-1",
-      ),
-    );
-
-    expect(error.kind).toBe("request_timeout");
-    expect(error.endpoint).toBe(
-      "https://rtc.live.cloudflare.com/v1/turn/keys/turn-key-id/credentials/generate-ice-servers",
-    );
-  });
-
   it("omits empty server arrays and reports the empty usable-server error", async () => {
     expect((await expectNoUsableIceServers({ iceServers: [] })).kind).toBe(
       "empty_ice_servers",
@@ -296,6 +275,9 @@ describe("worker turn credentials", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(error.kind).toBe("request_timeout");
+    expect(error.endpoint).toBe(
+      "https://rtc.live.cloudflare.com/v1/turn/keys/key/credentials/generate-ice-servers",
+    );
     vi.useRealTimers();
   });
 

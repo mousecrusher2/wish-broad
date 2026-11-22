@@ -107,28 +107,6 @@ describe("worker discord helpers", () => {
     });
   });
 
-  it("throws a timeout error when the Discord request is aborted", async () => {
-    vi.spyOn(globalThis, "fetch").mockRejectedValue(
-      new DOMException("The operation was aborted", "AbortError"),
-    );
-
-    const error = await catchDiscordError(
-      exchangeCodeForToken(
-        {
-          DISCORD_CLIENT_ID: "client-id",
-          DISCORD_CLIENT_SECRET: "client-secret",
-        },
-        "auth-code",
-        "https://example.com/login",
-      ),
-    );
-
-    expect(error).toMatchObject({
-      endpoint: "https://discord.com/api/v10/oauth2/token",
-      kind: "request_timeout",
-    });
-  });
-
   it("throws a Discord API error when the response body fails while being read", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -393,7 +371,10 @@ describe("worker discord helpers", () => {
     const pending = catchDiscordError(getGuildMember("token", "guild"));
     await vi.advanceTimersByTimeAsync(10_000);
     const error = await pending;
-    expect(error.kind).toBe("request_timeout");
+    expect(error).toMatchObject({
+      endpoint: "https://discord.com/api/v10/users/@me/guilds/guild/member",
+      kind: "request_timeout",
+    });
     vi.useRealTimers();
   });
 

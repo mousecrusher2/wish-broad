@@ -78,6 +78,8 @@ ingestRoutes.post("/:userId", async (c) => {
       return c.text(result.text, result.status);
     case "negotiation_failed":
       return c.text("Internal Server Error", 500);
+    case "deadline_exceeded":
+      return c.text("Timed out while starting the ingest session", 504);
   }
 });
 

@@ -27,13 +27,15 @@ import type { LiveRecord } from "./types";
  *   先に配信を確保した。
  * - `session_check_failed`: SFU が保存済みセッションの状態を返せなかった。
  * - `negotiation_rejected`: SFU がオファーを拒否した。その応答をそのまま OBS に返す。
+ * - `deadline_exceeded`: SFU とのネゴシエーションは済んだが、締め切りを過ぎたため配信を始めなかった。
  */
 export type StartIngestResult =
   | { kind: "started" | "resumed"; session: IngestSession }
   | { kind: "already_active" }
   | { kind: "session_check_failed" }
   | ({ kind: "negotiation_rejected" } & SfuNegotiationClientError)
-  | { kind: "negotiation_failed" };
+  | { kind: "negotiation_failed" }
+  | { kind: "deadline_exceeded" };
 
 /**
  * インジェスト終了の結果。
@@ -49,6 +51,12 @@ export type EndIngestResult =
   | "invalid_stored_tracks"
   | "grace_not_started";
 
+/**
+ * インジェスト開始の締め切り。過ぎたら SFU への呼び出しを打ち切り、配信行を書き込まずに失敗する。
+ * 値の根拠は docs/architecture.md の「インジェストのライフサイクル」を参照。
+ */
+const INGEST_DEADLINE_MS = 6_000;
+
 type IngestTarget =
   | { kind: "new" }
   | { kind: "resume"; live: LiveRecord }
@@ -59,6 +67,7 @@ async function resolveIngestTarget(
   env: Bindings,
   ctx: Pick<ExecutionContext, "waitUntil">,
   existingLive: LiveRecord | null,
+  deadline: AbortSignal,
 ): Promise<IngestTarget> {
   if (existingLive === null) {
     return { kind: "new" };
@@ -66,7 +75,7 @@ async function resolveIngestTarget(
 
   let sessionStatus: LiveSessionStatus;
   try {
-    sessionStatus = await checkLiveSession(env, ctx, existingLive);
+    sessionStatus = await checkLiveSession(env, ctx, existingLive, deadline);
   } catch (error: unknown) {
     if (!(error instanceof SfuApiError)) {
       throw error;
@@ -109,11 +118,39 @@ export async function startIngest(
   sdpOffer: string,
   notifySiteUrl: string | null,
 ): Promise<StartIngestResult> {
+  const deadline = new AbortController();
+  const deadlineTimeoutId = setTimeout(() => {
+    deadline.abort();
+  }, INGEST_DEADLINE_MS);
+  try {
+    return await startIngestWithinDeadline(
+      deadline.signal,
+      env,
+      ctx,
+      userId,
+      sdpOffer,
+      notifySiteUrl,
+    );
+  } finally {
+    clearTimeout(deadlineTimeoutId);
+  }
+}
+
+/** `startIngest` の本体。`deadline` が中断されたら SFU への呼び出しを打ち切り、配信行を書き込まない。 */
+async function startIngestWithinDeadline(
+  deadline: AbortSignal,
+  env: Bindings,
+  ctx: Pick<ExecutionContext, "waitUntil">,
+  userId: string,
+  sdpOffer: string,
+  notifySiteUrl: string | null,
+): Promise<StartIngestResult> {
   const liveState = getLiveState(env);
   const target = await resolveIngestTarget(
     env,
     ctx,
     await liveState.getLive(userId),
+    deadline,
   );
   if (target.kind === "reject") {
     return target.result;
@@ -121,7 +158,7 @@ export async function startIngest(
 
   let session: IngestSession;
   try {
-    session = await createIngestSession(env, sdpOffer);
+    session = await createIngestSession(env, sdpOffer, deadline);
   } catch (error: unknown) {
     if (!(error instanceof SfuApiError)) {
       throw error;
@@ -138,6 +175,16 @@ export async function startIngest(
       userId,
     });
     return { kind: "negotiation_failed" };
+  }
+
+  if (deadline.aborted) {
+    // OBS が応答を待つのをやめた後に配信を始めないよう、配信行を書き込む前に確かめる。
+    // この SFU セッションは誰も使わず、SFU が自動で片付ける。
+    logWarn(env, "ingest.deadline_exceeded", {
+      sessionId: session.sessionId,
+      userId,
+    });
+    return { kind: "deadline_exceeded" };
   }
 
   if (

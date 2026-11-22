@@ -136,28 +136,6 @@ describe("worker live start notifications", () => {
     ).toBe(false);
   });
 
-  it("throws a timeout error when the webhook request is aborted", async () => {
-    vi.spyOn(globalThis, "fetch").mockRejectedValue(
-      new DOMException("The operation was aborted", "AbortError"),
-    );
-
-    const error = await catchWebhookError(
-      sendLiveStartedNotification(
-        {
-          NOTIFICATIONS_DISCORD_WEBHOOK_URL:
-            "https://discord.com/api/webhooks/123/token",
-        },
-        "user-1",
-        "https://example.com/",
-      ),
-    );
-
-    expect(error).toMatchObject({
-      endpoint: "https://discord.com/api/webhooks/123/[redacted]?wait=true",
-      kind: "request_timeout",
-    });
-  });
-
   it("never exposes the webhook token in errors or their log fields", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response("rate limited", { status: 429 }))
@@ -342,7 +320,10 @@ describe("worker live start notifications", () => {
     );
     await vi.advanceTimersByTimeAsync(10_000);
     const error = await pending;
-    expect(error.kind).toBe("request_timeout");
+    expect(error).toMatchObject({
+      endpoint: "https://discord.com/api/webhooks/1/[redacted]?wait=true",
+      kind: "request_timeout",
+    });
     vi.useRealTimers();
   });
 });

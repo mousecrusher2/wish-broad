@@ -441,18 +441,14 @@ describe("SFU API", () => {
     });
   });
 
-  it("maps timeout errors and preserves negotiation-compatible client errors", async () => {
-    vi.spyOn(globalThis, "fetch").mockRejectedValue(
-      new DOMException("timed out", "AbortError"),
-    );
-    const timeout = await catchSfuError(
-      renegotiateSession(env, "session-1", "answer"),
-    );
-    expect(timeout.kind).toBe("request_timeout");
-    expect(timeout.toNegotiationClientError("fallback")).toEqual({
-      status: 504,
-      text: "timed out",
-    });
+  it("maps timeout errors and preserves negotiation-compatible client errors", () => {
+    expect(
+      new SfuApiError("SFU request timed out", {
+        endpoint: "",
+        kind: "request_timeout",
+        responseBody: "timed out",
+      }).toNegotiationClientError("fallback"),
+    ).toEqual({ status: 504, text: "timed out" });
     expect(
       new SfuApiError("bad", {
         endpoint: "",
@@ -589,5 +585,28 @@ describe("SFU API", () => {
     await vi.advanceTimersByTimeAsync(8_000);
     expect((await pending).kind).toBe("request_timeout");
     vi.useRealTimers();
+  });
+
+  it("ties every SFU call of an ingest start to the given deadline", async () => {
+    const requestSignals: (AbortSignal | null | undefined)[] = [];
+    const responses = [new Response("{}"), sessionResponse(), trackResponse()];
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      requestSignals.push(init?.signal);
+      const response = responses.shift();
+      assert.isDefined(response, "Unexpected SFU request");
+      return Promise.resolve(response);
+    });
+    const deadline = new AbortController();
+
+    await isSessionActive(env, "session-1", deadline.signal);
+    await createIngestSession(env, "offer", deadline.signal);
+    deadline.abort();
+
+    // 各リクエストの signal は締め切りに従うため、締め切りが中断されるとすべて中断される。
+    expect(requestSignals.map((signal) => signal?.aborted)).toEqual([
+      true,
+      true,
+      true,
+    ]);
   });
 });

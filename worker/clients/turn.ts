@@ -1,6 +1,7 @@
 import * as v from "valibot";
 import {
   type FetchedResponse,
+  FetchError,
   fetchWithTimeout,
   parseResponseBody,
 } from "./http";
@@ -131,22 +132,26 @@ async function fetchTurnCredentials(
   endpoint: string,
   init: RequestInit,
 ): Promise<FetchedResponse> {
-  return fetchWithTimeout(
-    endpoint,
-    init,
-    TURN_FETCH_TIMEOUT_MS,
-    (kind, error) =>
-      new TurnApiError(
-        kind === "request_timeout"
-          ? "TURN credential request timed out"
-          : "TURN credential request failed",
-        {
-          endpoint,
-          kind,
-          responseBody: error instanceof Error ? error.message : String(error),
-        },
-      ),
-  );
+  try {
+    return await fetchWithTimeout(endpoint, init, TURN_FETCH_TIMEOUT_MS);
+  } catch (error: unknown) {
+    if (!(error instanceof FetchError)) {
+      throw error;
+    }
+    throw new TurnApiError(
+      error.kind === "request_timeout"
+        ? "TURN credential request timed out"
+        : "TURN credential request failed",
+      {
+        endpoint,
+        kind: error.kind,
+        responseBody:
+          error.cause instanceof Error
+            ? error.cause.message
+            : String(error.cause),
+      },
+    );
+  }
 }
 
 /**

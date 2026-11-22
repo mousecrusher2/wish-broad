@@ -25,8 +25,9 @@ import {
 // いるため、ここではクライアントとの境界で差し替える。
 const sfuMocks = vi.hoisted(() => ({
   closeTracks: vi.fn<() => Promise<unknown>>(),
-  createIngestSession: vi.fn<() => Promise<unknown>>(),
-  isSessionActive: vi.fn<() => Promise<boolean>>(),
+  createIngestSession:
+    vi.fn<typeof import("../clients/sfu").createIngestSession>(),
+  isSessionActive: vi.fn<typeof import("../clients/sfu").isSessionActive>(),
 }));
 
 const notificationsMocks = vi.hoisted(() => ({
@@ -49,6 +50,14 @@ const INGEST_SESSION = {
   sessionId: "new-session",
   tracks: createTracks("new-session"),
 };
+
+/** SFU とのネゴシエーションの間に、偽の時計を `elapsedMs` ミリ秒進める。 */
+function finishNegotiationAfter(elapsedMs: number): void {
+  sfuMocks.createIngestSession.mockImplementation(async () => {
+    vi.advanceTimersByTime(elapsedMs);
+    return INGEST_SESSION;
+  });
+}
 
 async function requestIngestOffer(
   executionContext = createExecutionContext(),
@@ -148,8 +157,19 @@ describe("ingest routes", () => {
     expect(response.headers.get("content-type")).toBe("application/sdp");
     expect(response.headers.get("etag")).toBe('"new-session"');
     expect(await response.text()).toBe("answer-sdp");
-    expect(sfuMocks.isSessionActive).toHaveBeenCalledWith(env, "stale-session");
-    expect(sfuMocks.createIngestSession).toHaveBeenCalledWith(env, "offer-sdp");
+    // 生存確認とネゴシエーションは同じ締め切りに従う。
+    const deadline = sfuMocks.isSessionActive.mock.calls[0]?.[2];
+    expect(deadline).toBeInstanceOf(AbortSignal);
+    expect(sfuMocks.isSessionActive).toHaveBeenCalledWith(
+      env,
+      "stale-session",
+      deadline,
+    );
+    expect(sfuMocks.createIngestSession).toHaveBeenCalledWith(
+      env,
+      "offer-sdp",
+      deadline,
+    );
     const live = await getLive();
     expect(live).toMatchObject({
       graceExpiresAt: null,
@@ -447,7 +467,11 @@ describe("ingest routes", () => {
     );
 
     expect(response.status).toBe(201);
-    expect(sfuMocks.createIngestSession).toHaveBeenCalledWith(env, "offer-sdp");
+    expect(sfuMocks.createIngestSession).toHaveBeenCalledWith(
+      env,
+      "offer-sdp",
+      expect.any(AbortSignal),
+    );
   });
 
   it.each(["false", "0"])(
@@ -717,6 +741,81 @@ describe("ingest routes", () => {
       );
     },
   );
+
+  describe("with the six-second ingest deadline", () => {
+    beforeEach(() => {
+      // setSystemTime で固定した時計を、締め切りのタイマーと一緒に進む偽の時計に置き換える。
+      vi.useRealTimers();
+      vi.useFakeTimers({
+        now: NOW,
+        toFake: ["Date", "setTimeout", "clearTimeout"],
+      });
+    });
+
+    it("starts a broadcast whose negotiation finishes just before the deadline", async () => {
+      finishNegotiationAfter(5_999);
+      const executionContext = createExecutionContext();
+
+      const response = await requestIngestOffer(executionContext);
+
+      expect(response.status).toBe(201);
+      await expect(getLive()).resolves.toMatchObject({
+        sessionId: "new-session",
+      });
+      // 応答した後に締め切りのタイマーを残さない。
+      expect(vi.getTimerCount()).toBe(0);
+      await waitOnExecutionContext(executionContext);
+    });
+
+    it("does not start a broadcast when the negotiation finishes at the deadline", async () => {
+      finishNegotiationAfter(6_000);
+      const executionContext = createExecutionContext();
+
+      const response = await requestIngestOffer(executionContext);
+
+      expect(response.status).toBe(504);
+      expect(await response.text()).toBe(
+        "Timed out while starting the ingest session",
+      );
+      // SFU に渡した締め切りも中断されている。
+      expect(sfuMocks.createIngestSession.mock.calls[0]?.[2]?.aborted).toBe(
+        true,
+      );
+      await expect(getLive()).resolves.toBeNull();
+      await waitOnExecutionContext(executionContext);
+      expect(
+        notificationsMocks.sendLiveStartedNotification,
+      ).not.toHaveBeenCalled();
+      expect(spies.consoleWarn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "ingest.deadline_exceeded",
+          sessionId: "new-session",
+          userId: "user-1",
+        }),
+      );
+    });
+
+    it("does not resume a broadcast in its grace period after the deadline", async () => {
+      const broadcastId = await seedLive({
+        graceMs: 60_000,
+        notificationMessageId: "5",
+        sessionId: "previous-session",
+      });
+      finishNegotiationAfter(6_000);
+
+      const response = await requestIngestOffer();
+
+      expect(response.status).toBe(504);
+      // 配信は猶予期間のまま残り、次の再接続を待つ。
+      await expect(getLive()).resolves.toMatchObject({
+        broadcastId,
+        graceExpiresAt: NOW + 60_000,
+        sessionId: "previous-session",
+      });
+      await expect(getStoredNotificationMessageId()).resolves.toBe("5");
+      await expect(getLiveStateAlarm()).resolves.toBe(NOW + 60_000);
+    });
+  });
 
   it("does not schedule a notification when persisting the live row fails", async () => {
     vi.spyOn(LiveState.prototype, "insertLive").mockRejectedValue(

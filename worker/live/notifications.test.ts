@@ -74,9 +74,21 @@ describe("start notification deletes", () => {
   );
 
   it("gives up when the retry also times out", async () => {
-    fetchSpy.mockRejectedValue(new DOMException("aborted", "AbortError"));
+    vi.useFakeTimers();
+    fetchSpy.mockImplementation(
+      (_input, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        }),
+    );
 
-    await deleteStartNotifications(env, [JOB]);
+    const pending = deleteStartNotifications(env, [JOB]);
+    // 1 回目と再試行が、それぞれ 10 秒のタイムアウトで打ち切られる。
+    await vi.advanceTimersByTimeAsync(20_000);
+    await pending;
+    vi.useRealTimers();
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenNthCalledWith(

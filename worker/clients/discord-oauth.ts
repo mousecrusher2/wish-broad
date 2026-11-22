@@ -3,6 +3,7 @@ import * as v from "valibot";
 import { createRandomHex } from "../lib/hex";
 import {
   type FetchedResponse,
+  FetchError,
   fetchWithTimeout,
   trimResponseBody,
 } from "./http";
@@ -155,23 +156,23 @@ async function fetchDiscordWithTimeout(
   endpoint: string,
   init: RequestInit,
 ): Promise<FetchedResponse> {
-  return fetchWithTimeout(
-    endpoint,
-    init,
-    DISCORD_FETCH_TIMEOUT_MS,
-    (kind, error) => {
-      if (kind === "request_timeout") {
-        return new DiscordApiError("Discord request timed out", {
-          endpoint,
-          kind,
-        });
-      }
-      return new DiscordApiError(
-        error instanceof Error ? error.message : String(error),
-        { endpoint, kind },
-      );
-    },
-  );
+  try {
+    return await fetchWithTimeout(endpoint, init, DISCORD_FETCH_TIMEOUT_MS);
+  } catch (error: unknown) {
+    if (!(error instanceof FetchError)) {
+      throw error;
+    }
+    if (error.kind === "request_timeout") {
+      throw new DiscordApiError("Discord request timed out", {
+        endpoint,
+        kind: error.kind,
+      });
+    }
+    throw new DiscordApiError(
+      error.cause instanceof Error ? error.cause.message : String(error.cause),
+      { endpoint, kind: error.kind },
+    );
+  }
 }
 
 /**

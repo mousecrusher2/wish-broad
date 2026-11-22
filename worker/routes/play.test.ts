@@ -476,7 +476,12 @@ describe("play routes", () => {
         userId: "viewer-1",
       }),
     );
-    expect(sfuMocks.isSessionActive).toHaveBeenCalledWith(env, "live-session");
+    // 再生の生存確認には、インジェストのような締め切りを渡さない。
+    expect(sfuMocks.isSessionActive).toHaveBeenCalledWith(
+      env,
+      "live-session",
+      undefined,
+    );
     expect(sfuMocks.createPlaybackSession).toHaveBeenCalledWith(
       env,
       liveTracks,

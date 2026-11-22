@@ -1,10 +1,22 @@
-// Worker の外部 API ラッパー間で共有される fetch ヘルパー。各ラッパーは引き続き
-// 独自の Error サブクラスをスローし、ここには重複する共通処理のみを切り出している。
+// Worker の外部 API ラッパー間で共有される fetch ヘルパー。各ラッパーは `FetchError` を
+// 独自の Error サブクラスに変換してスローし、ここには重複する共通処理のみを切り出している。
 
-export type FetchFailureKind = "request_failed" | "request_timeout";
+type FetchErrorKind = "request_failed" | "request_timeout";
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
+/** 応答の本文を読み切る前に、リクエストが失敗またはタイムアウトした。 */
+export class FetchError extends Error {
+  readonly kind: FetchErrorKind;
+
+  constructor(kind: FetchErrorKind, cause: unknown) {
+    super(
+      kind === "request_timeout"
+        ? "The request timed out"
+        : "The request failed",
+      { cause },
+    );
+    this.name = "FetchError";
+    this.kind = kind;
+  }
 }
 
 /** 本文まで読み切った応答。 */
@@ -16,56 +28,45 @@ export type FetchedResponse = {
   statusText: string;
 };
 
-async function fetchAndReadBody(
-  endpoint: string,
-  init: RequestInit,
-  signal: AbortSignal,
-): Promise<FetchedResponse> {
-  const response = await fetch(endpoint, { ...init, signal });
-  return {
-    bodyText: await response.text(),
-    ok: response.ok,
-    status: response.status,
-    statusText: response.statusText,
-  };
-}
-
 /**
- * `endpoint` へ fetch して本文まで読み切る。本文を読み切らないまま `timeoutMs` ミリ秒が
- * 経過したら中断する。
+ * `endpoint` へ fetch して本文まで読み切る。`timeoutMs` ミリ秒が経過するか、`deadline` が
+ * 中断されたら fetch を中断する。中断で本文の読み取りまで止まるかは実行環境に任せる。
  *
- * @throws {Error} 本文を読み切る前にリクエストが失敗またはタイムアウトした場合、`createError` が構築したエラー。
+ * @throws {FetchError} 本文を読み切る前にリクエストが失敗またはタイムアウトした場合。
+ * `deadline` がすでに中断されていれば、リクエストを送らずに `request_timeout` で失敗する。
  */
 export async function fetchWithTimeout(
   endpoint: string,
   init: RequestInit,
   timeoutMs: number,
-  createError: (kind: FetchFailureKind, cause: unknown) => Error,
+  deadline?: AbortSignal,
 ): Promise<FetchedResponse> {
-  const abortController = new AbortController();
+  if (deadline?.aborted) {
+    throw new FetchError("request_timeout", deadline.reason);
+  }
+
+  const timeoutController = new AbortController();
   const timeoutId = setTimeout(() => {
-    abortController.abort();
+    timeoutController.abort();
   }, timeoutMs);
-  // 中断が本文の読み取りまで止めるかは実行環境に任せず、中断した時点で必ず抜ける。
-  const aborted = new Promise<never>((_resolve, reject) => {
-    abortController.signal.addEventListener(
-      "abort",
-      () => {
-        reject(new DOMException("The request timed out", "AbortError"));
-      },
-      { once: true },
-    );
-  });
+  const signal =
+    deadline === undefined
+      ? timeoutController.signal
+      : AbortSignal.any([deadline, timeoutController.signal]);
 
   try {
-    return await Promise.race([
-      fetchAndReadBody(endpoint, init, abortController.signal),
-      aborted,
-    ]);
+    const response = await fetch(endpoint, { ...init, signal });
+    return {
+      bodyText: await response.text(),
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+    };
   } catch (error: unknown) {
-    // 呼び出し元からは独自の signal を渡さないため、abort はタイムアウト発火を意味する。
-    throw createError(
-      isAbortError(error) ? "request_timeout" : "request_failed",
+    // signal を中断するのはタイムアウトと `deadline` だけで、どちらも時間切れとして扱う。
+    // エラーの名前は中断した側が付けた理由で変わるため、signal の状態で判定する。
+    throw new FetchError(
+      signal.aborted ? "request_timeout" : "request_failed",
       error,
     );
   } finally {

@@ -1,34 +1,17 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
-  type FetchFailureKind,
+  FetchError,
   fetchWithTimeout,
   parseResponseBody,
   trimResponseBody,
 } from "./http";
 
-class TestFetchError extends Error {
-  readonly failure: unknown;
-  readonly kind: FetchFailureKind;
-
-  constructor(kind: FetchFailureKind, failure: unknown) {
-    super(kind);
-    this.kind = kind;
-    this.failure = failure;
-  }
-}
-
-function createTestError(kind: FetchFailureKind, failure: unknown): Error {
-  return new TestFetchError(kind, failure);
-}
-
-async function catchTestError(
-  promise: Promise<unknown>,
-): Promise<TestFetchError> {
+async function catchFetchError(promise: Promise<unknown>): Promise<FetchError> {
   const error = await promise.then(
     () => undefined,
     (rejection: unknown) => rejection,
   );
-  assert.instanceOf(error, TestFetchError);
+  assert.instanceOf(error, FetchError);
   return error;
 }
 
@@ -46,12 +29,7 @@ describe("fetchWithTimeout", () => {
       );
 
     await expect(
-      fetchWithTimeout(
-        "https://example.com/api",
-        { method: "POST" },
-        1_000,
-        createTestError,
-      ),
+      fetchWithTimeout("https://example.com/api", { method: "POST" }, 1_000),
     ).resolves.toEqual({
       bodyText: "ok",
       ok: true,
@@ -69,15 +47,15 @@ describe("fetchWithTimeout", () => {
     const failure = new TypeError("network down");
     vi.spyOn(globalThis, "fetch").mockRejectedValue(failure);
 
-    const error = await catchTestError(
-      fetchWithTimeout("https://example.com", {}, 1_000, createTestError),
+    const error = await catchFetchError(
+      fetchWithTimeout("https://example.com", {}, 1_000),
     );
 
     expect(error.kind).toBe("request_failed");
-    expect(error.failure).toBe(failure);
+    expect(error.cause).toBe(failure);
   });
 
-  it("aborts the request at its deadline and reports request_timeout", async () => {
+  it("aborts the request at its timeout and reports request_timeout", async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, "fetch").mockImplementation(
       (_input, init) =>
@@ -88,8 +66,8 @@ describe("fetchWithTimeout", () => {
         }),
     );
 
-    const pending = catchTestError(
-      fetchWithTimeout("https://example.com", {}, 5_000, createTestError),
+    const pending = catchFetchError(
+      fetchWithTimeout("https://example.com", {}, 5_000),
     );
     await vi.advanceTimersByTimeAsync(4_999);
     expect(vi.getTimerCount()).toBe(1);
@@ -98,20 +76,26 @@ describe("fetchWithTimeout", () => {
     expect((await pending).kind).toBe("request_timeout");
   });
 
-  it("times out a response whose body never finishes", async () => {
+  it("reports a body read stopped by the timeout as request_timeout", async () => {
     vi.useFakeTimers();
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode("partial"));
-          },
-        }),
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("partial"));
+              // 実行環境が中断で本文の読み取りを止めた場合を再現する。
+              init?.signal?.addEventListener("abort", () => {
+                controller.error(new DOMException("aborted", "AbortError"));
+              });
+            },
+          }),
+        ),
       ),
     );
 
-    const pending = catchTestError(
-      fetchWithTimeout("https://example.com", {}, 5_000, createTestError),
+    const pending = catchFetchError(
+      fetchWithTimeout("https://example.com", {}, 5_000),
     );
     await vi.advanceTimersByTimeAsync(4_999);
     expect(vi.getTimerCount()).toBe(1);
@@ -132,19 +116,79 @@ describe("fetchWithTimeout", () => {
       ),
     );
 
-    const error = await catchTestError(
-      fetchWithTimeout("https://example.com", {}, 1_000, createTestError),
+    const error = await catchFetchError(
+      fetchWithTimeout("https://example.com", {}, 1_000),
     );
 
     expect(error.kind).toBe("request_failed");
   });
 
-  it("clears the deadline once the body has been read", async () => {
+  it("clears the timeout once the body has been read", async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("done"));
 
-    await fetchWithTimeout("https://example.com", {}, 5_000, createTestError);
+    await fetchWithTimeout("https://example.com", {}, 5_000);
 
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("aborts the request when its deadline is aborted before the timeout", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_input, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        }),
+    );
+    const deadline = new AbortController();
+
+    const pending = catchFetchError(
+      fetchWithTimeout("https://example.com", {}, 5_000, deadline.signal),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    deadline.abort();
+
+    expect((await pending).kind).toBe("request_timeout");
+    expect(fetchSpy.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps the timeout when the deadline is later", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_input, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        }),
+    );
+
+    const pending = catchFetchError(
+      fetchWithTimeout(
+        "https://example.com",
+        {},
+        5_000,
+        new AbortController().signal,
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect((await pending).kind).toBe("request_timeout");
+  });
+
+  it("does not send the request once its deadline has been aborted", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const error = await catchFetchError(
+      fetchWithTimeout("https://example.com", {}, 5_000, AbortSignal.abort()),
+    );
+
+    expect(error.kind).toBe("request_timeout");
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
 });

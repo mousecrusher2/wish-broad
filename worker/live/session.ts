@@ -70,13 +70,15 @@ function recordLiveSessionSeenActive(
 /**
  * 配信行が保持するインジェストセッションの状態を判定する。猶予期間中でなければ SFU に
  * 問い合わせ、アクティブだった場合はその確認を waitUntil 内で LiveState に記録する。
+ * SFU への問い合わせは `deadline` が中断された時点で打ち切る。
  *
- * @throws {SfuApiError} SFU がセッションの状態を返せなかった場合。
+ * @throws {SfuApiError} SFU がセッションの状態を返せなかった場合（`deadline` による打ち切りを含む）。
  */
 export async function checkLiveSession(
   env: Bindings,
   ctx: Pick<ExecutionContext, "waitUntil">,
   live: LiveRecord,
+  deadline?: AbortSignal,
 ): Promise<LiveSessionStatus> {
   // 猶予期間が過ぎた配信は LiveState によってすでに終了されているため、猶予期限が
   // 保存されていれば必ずまだ猶予期間内である。
@@ -85,7 +87,7 @@ export async function checkLiveSession(
   }
 
   const now = Date.now();
-  if (await isSessionActive(env, live.sessionId)) {
+  if (await isSessionActive(env, live.sessionId, deadline)) {
     recordLiveSessionSeenActive(env, ctx, live, now);
     return "active";
   }

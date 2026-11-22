@@ -2,6 +2,7 @@ import { Bindings } from "../types";
 import * as v from "valibot";
 import {
   type FetchedResponse,
+  FetchError,
   fetchWithTimeout,
   parseResponseBody,
 } from "./http";
@@ -320,24 +321,36 @@ function getErrorMessage(error: unknown): string {
 }
 
 /**
- * @throws {SfuApiError} SFU の応答の本文を読み切る前にリクエストが失敗またはタイムアウトした場合。
+ * @throws {SfuApiError} SFU の応答の本文を読み切る前にリクエストが失敗またはタイムアウトしたか、
+ * `deadline` が中断された場合。
  */
 async function fetchSfu(
   endpoint: string,
   init: RequestInit,
+  deadline?: AbortSignal,
 ): Promise<FetchedResponse> {
-  return fetchWithTimeout(
-    endpoint,
-    init,
-    SFU_FETCH_TIMEOUT_MS,
-    (kind, error) =>
-      new SfuApiError(
-        kind === "request_timeout"
-          ? "SFU request timed out"
-          : "SFU request failed",
-        { endpoint, kind, responseBody: getErrorMessage(error) },
-      ),
-  );
+  try {
+    return await fetchWithTimeout(
+      endpoint,
+      init,
+      SFU_FETCH_TIMEOUT_MS,
+      deadline,
+    );
+  } catch (error: unknown) {
+    if (!(error instanceof FetchError)) {
+      throw error;
+    }
+    throw new SfuApiError(
+      error.kind === "request_timeout"
+        ? "SFU request timed out"
+        : "SFU request failed",
+      {
+        endpoint,
+        kind: error.kind,
+        responseBody: getErrorMessage(error.cause),
+      },
+    );
+  }
 }
 
 function normalizeTrackLocator(track: TrackLocator): TrackLocatorRequest {
@@ -358,8 +371,9 @@ async function requestSfuJson<TOutput>(
   endpoint: string,
   init: RequestInit,
   schema: v.GenericSchema<unknown, TOutput>,
+  deadline?: AbortSignal,
 ): Promise<TOutput> {
-  const response = await fetchSfu(endpoint, init);
+  const response = await fetchSfu(endpoint, init, deadline);
   if (!response.ok) {
     throw createHttpError(response, endpoint);
   }
@@ -423,7 +437,10 @@ function assertNoTrackNegotiationErrors(
  *
  * @throws {SfuApiError} SFU がセッションを作成できなかった場合。
  */
-async function createSession(env: SfuEnv): Promise<NewSessionResponse> {
+async function createSession(
+  env: SfuEnv,
+  deadline?: AbortSignal,
+): Promise<NewSessionResponse> {
   const endpoint = `https://rtc.live.cloudflare.com/v1/apps/${env.CALLS_APP_ID}/sessions/new`;
   return requestSfuJson(
     endpoint,
@@ -432,6 +449,7 @@ async function createSession(env: SfuEnv): Promise<NewSessionResponse> {
       headers: getHeaders(env),
     },
     getNewSessionResponseSchema(),
+    deadline,
   );
 }
 
@@ -448,6 +466,7 @@ async function createIngestTracks(
   env: SfuEnv,
   sessionId: string,
   sdpOffer: string,
+  deadline?: AbortSignal,
 ): Promise<NewTracksResponse> {
   const body = {
     sessionDescription: {
@@ -469,6 +488,7 @@ async function createIngestTracks(
       body: JSON.stringify(body),
     },
     getNewTracksResponseSchema(),
+    deadline,
   );
   assertNoTrackNegotiationErrors(endpoint, response);
   return response;
@@ -589,20 +609,26 @@ export async function closeTracks(
  * 配信行の個別整合のため、1 つの SFU セッションをプローブする。
  *
  * 404/410 のみを「非アクティブ」とみなし、一時的な SFU 障害を配信行が古いことの
- * 証拠としては扱わない。
+ * 証拠としては扱わない。`deadline` が中断されると、その時点で打ち切る。
  *
  * @returns SFU がそのセッションを not found または gone と報告した場合にのみ `false`。
- * @throws {SfuApiError} リクエストに失敗したか、SFU がそれ以外の HTTP エラーを返した場合。
+ * @throws {SfuApiError} リクエストに失敗したか（`deadline` による打ち切りを含む）、
+ * SFU がそれ以外の HTTP エラーを返した場合。
  */
 export async function isSessionActive(
   env: SfuEnv,
   sessionId: string,
+  deadline?: AbortSignal,
 ): Promise<boolean> {
   const endpoint = `https://rtc.live.cloudflare.com/v1/apps/${env.CALLS_APP_ID}/sessions/${sessionId}`;
-  const response = await fetchSfu(endpoint, {
-    method: "GET",
-    headers: getHeaders(env),
-  });
+  const response = await fetchSfu(
+    endpoint,
+    {
+      method: "GET",
+      headers: getHeaders(env),
+    },
+    deadline,
+  );
   if (response.ok) {
     return true;
   }
@@ -616,16 +642,23 @@ export async function isSessionActive(
 
 /**
  * インジェストセッションを 1 つ開始し、SDP アンサーおよび永続化用トラックロケーターを返す。
+ * `deadline` が中断されると、その時点で打ち切り、以降の SFU 呼び出しも送らない。
  *
- * @throws {SfuApiError} SFU がセッションのネゴシエーションに失敗したか、
- * 使用できないインジェストレスポンスを返した場合。
+ * @throws {SfuApiError} SFU がセッションのネゴシエーションに失敗したか（`deadline` による
+ * 打ち切りを含む）、使用できないインジェストレスポンスを返した場合。
  */
 export async function createIngestSession(
   env: SfuEnv,
   sdpOffer: string,
+  deadline?: AbortSignal,
 ): Promise<IngestSession> {
-  const { sessionId } = await createSession(env);
-  const tracksResponse = await createIngestTracks(env, sessionId, sdpOffer);
+  const { sessionId } = await createSession(env, deadline);
+  const tracksResponse = await createIngestTracks(
+    env,
+    sessionId,
+    sdpOffer,
+    deadline,
+  );
   const ingestEndpoint = `https://rtc.live.cloudflare.com/v1/apps/${env.CALLS_APP_ID}/sessions/${sessionId}/tracks/new`;
   const responseTracks = tracksResponse.tracks;
   const sdpAnswer = tracksResponse.sessionDescription?.sdp;
