@@ -64,6 +64,7 @@
         "allowRegExp": false
       }
     ],
+    "typescript/return-await": ["error", "in-try-catch"],
     "typescript/strict-boolean-expressions": "off",
     "typescript/switch-exhaustiveness-check": "error",
     "unicorn/no-useless-undefined": "off",
